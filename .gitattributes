@@ -1,0 +1,5 @@
+* text=auto
+
+# Patch files must keep LF endings or git apply breaks
+*.diff binary
+*.patch binary

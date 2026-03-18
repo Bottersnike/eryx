@@ -39,15 +39,14 @@ jobs:
           sudo apt-get install -y \
             libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
             libxinerama-dev libxkbcommon-dev libwayland-dev \
+            libxss-dev libdecor-0-dev \
             libgl-dev libasound2-dev libpulse-dev
 
-      - name: Configure (Windows)
+      - name: Setup MSVC (Windows)
         if: runner.os == 'Windows'
-        shell: cmd
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ matrix.cmake-flags }}
+        uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Configure (Linux)
-        if: runner.os == 'Linux'
+      - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ matrix.cmake-flags }}
 
       - name: Build
