@@ -1,0 +1,33 @@
+[submodule "vendor/brotli"]
+	path = vendor/brotli
+	url = https://github.com/google/brotli
+[submodule "vendor/bzip2"]
+	path = vendor/bzip2
+	url = https://gitlab.com/bzip2/bzip2
+[submodule "vendor/freetype"]
+	path = vendor/freetype
+	url = https://github.com/freetype/freetype
+[submodule "vendor/libuv"]
+	path = vendor/libuv
+	url = https://github.com/libuv/libuv
+[submodule "vendor/miniaudio"]
+	path = vendor/miniaudio
+	url = https://github.com/mackron/miniaudio
+[submodule "vendor/minizip-ng"]
+	path = vendor/minizip-ng
+	url = https://github.com/zlib-ng/minizip-ng
+[submodule "vendor/zstd"]
+	path = vendor/zstd
+	url = https://github.com/facebook/zstd
+[submodule "vendor/SDL"]
+	path = vendor/SDL
+	url = https://github.com/libsdl-org/SDL
+[submodule "vendor/pugixml"]
+	path = vendor/pugixml
+	url = https://github.com/zeux/pugixml
+[submodule "vendor/zlib"]
+	path = vendor/zlib
+	url = https://github.com/madler/zlib
+[submodule "vendor/stb"]
+	path = vendor/stb
+	url = https://github.com/nothings/stb

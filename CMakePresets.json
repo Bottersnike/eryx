@@ -1,0 +1,68 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "displayName": "Default Config",
+            "description": "Default build configuration",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_STANDARD": "23"
+            }
+        },
+        {
+            "name": "release",
+            "displayName": "Release Config",
+            "description": "Release build configuration",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_STANDARD": "23"
+            }
+        },
+        {
+            "name": "embed",
+            "displayName": "Embedded Config",
+            "description": "All modules compiled into the executable",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build-embed",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_STANDARD": "23",
+                "ERYX_EMBED": "ON"
+            }
+        },
+        {
+            "name": "hybrid",
+            "displayName": "Hybrid Config",
+            "description": "All modules compiled into the executable",
+            "generator": "Ninja Multi-Config",
+            "binaryDir": "${sourceDir}/build-hybrid",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_CXX_STANDARD": "23",
+                "ERYX_HYBRID": "ON"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "default",
+            "configurePreset": "default",
+            "jobs": 32
+        },
+        {
+            "name": "release",
+            "configurePreset": "release",
+            "jobs": 32
+        },
+        {
+            "name": "embed",
+            "configurePreset": "embed",
+            "jobs": 32
+        }
+    ]
+}

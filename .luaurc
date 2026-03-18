@@ -1,0 +1,6 @@
+{
+    "languageMode": "strict",
+    "aliases": {
+        "eryx": "build/Debug/modules/"
+    }
+}

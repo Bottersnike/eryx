@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        mode: [standard, embed, hybrid]
+        include:
+          - mode: standard
+            cmake-flags: ""
+          - mode: embed
+            cmake-flags: "-DERYX_EMBED=ON"
+          - mode: hybrid
+            cmake-flags: "-DERYX_HYBRID=ON"
+
+    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.mode }} (${{ matrix.os == 'ubuntu-latest' && 'linux' || 'windows' }})
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v5
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev \
+            libxinerama-dev libxkbcommon-dev libwayland-dev \
+            libgl-dev libasound2-dev libpulse-dev
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ matrix.cmake-flags }}
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ matrix.cmake-flags }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: eryx-${{ matrix.mode }}-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'windows' }}
+          path: |
+            build/eryx${{ runner.os == 'Windows' && '.exe' || '' }}
+            build/EryxShared${{ runner.os == 'Windows' && '.dll' || '.so' }}
+            build/modules/
+          if-no-files-found: ignore

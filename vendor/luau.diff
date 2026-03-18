@@ -1,0 +1,48 @@
+diff --git a/CodeGen/include/Luau/CodeGen.h b/CodeGen/include/Luau/CodeGen.h
+index 9ed6c0d4..ebcde9a2 100644
+--- a/CodeGen/include/Luau/CodeGen.h
++++ b/CodeGen/include/Luau/CodeGen.h
+@@ -73,7 +73,7 @@ struct CompilationStats
+     uint32_t functionsBound = 0;
+ };
+
+-bool isSupported();
++LUACODEGEN_API bool isSupported();
+
+ class SharedCodeGenContext;
+
+@@ -105,7 +105,7 @@ void destroySharedCodeGenContext(const SharedCodeGenContext* codeGenContext) noe
+ // Initializes native code-gen on the provided Luau VM, using a VM-specific
+ // code-gen context and either the default allocator parameters or custom
+ // allocator parameters.
+-void create(lua_State* L);
++LUACODEGEN_API void create(lua_State* L);
+ void create(lua_State* L, AllocationCallback* allocationCallback, void* allocationCallbackContext);
+ void create(lua_State* L, size_t blockSize, size_t maxTotalSize, AllocationCallback* allocationCallback, void* allocationCallbackContext);
+
+diff --git a/VM/include/luaconf.h b/VM/include/luaconf.h
+index ed7adba6..c07ed520 100644
+--- a/VM/include/luaconf.h
++++ b/VM/include/luaconf.h
+@@ -53,13 +53,20 @@
+ #define LUALIB_API LUA_API
+
+ // Can be used to reconfigure visibility for internal APIs
++#ifndef LUAI_FUNC
+ #if defined(__GNUC__)
+ #define LUAI_FUNC __attribute__((visibility("hidden"))) extern
+-#define LUAI_DATA LUAI_FUNC
+ #else
+ #define LUAI_FUNC extern
++#endif
++#endif
++#ifndef LUAI_DATA
++#if defined(__GNUC__)
++#define LUAI_DATA LUAI_FUNC
++#else
+ #define LUAI_DATA extern
+ #endif
++#endif
+
+ // Can be used to reconfigure internal error handling to use longjmp instead of C++ EH
+ #ifndef LUA_USE_LONGJMP

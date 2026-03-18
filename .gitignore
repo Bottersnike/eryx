@@ -1,0 +1,29 @@
+# Build artifacts
+/build/
+/build-*/
+
+# Luau config (used for development)
+/.luaurc/
+
+# clangd
+/.cache/
+
+# Test projects that might become official examples down the line
+/docgen/
+/lsp/
+/sample/
+
+# Please don't use AI? Especially don't clutter source control with it :(
+.claude/
+.cursor/
+.windsurf/
+.continue/
+.aider/
+.openai/
+.ai/
+.llm/
+.llm-cache/
+AGENTS.md
+AI.md
+LLM_RULES.md
+CLAUDE.md
