@@ -6,8 +6,8 @@
 
 	Keys are represented as PEM strings (the standard `-----BEGIN RSA
 	PRIVATE KEY-----` / `-----BEGIN PUBLIC KEY-----` format). Use
-	[[private_to_der]] / [[public_to_der]] to convert to raw DER bytes,
-	or `@eryx/crypto/pem` to wrap/unwrap arbitrary DER blobs.
+	[[privateToDer]] / [[publicToDer]] to convert to raw DER bytes, or
+	`@eryx/crypto/pem` to wrap/unwrap arbitrary DER blobs.
 
 	```luau
 	local rsa = require("@eryx/crypto/rsa")
@@ -35,7 +35,7 @@ local rsa = {}
 	Generates a new RSA private key and returns it as a PEM string.
 
 	The key includes all parameters needed for both encryption and
-	signing. Extract the corresponding public key with [[get_public_pem]].
+	signing. Extract the corresponding public key with [[getPublicPem]].
 
 	```luau
 	local priv = rsa.generateKey(2048)
@@ -63,7 +63,7 @@ end
 	Encrypts `data` using RSA-PKCS#1 v1.5.
 
 	PKCS#1 v1.5 encryption is widely supported but has known weaknesses
-	(ROBOT attack, Bleichenbacher oracle). Prefer [[encrypt_oaep]] for
+	(ROBOT attack, Bleichenbacher oracle). Prefer [[encryptOaep]] for
 	new designs.
 
 	Maximum plaintext size: `key_bytes - 11`.

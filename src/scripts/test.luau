@@ -3,10 +3,10 @@ local fs = require("@eryx/fs")
 local test = require("@eryx/test")
 
 local parser = argparse.Parser.new("eryx test", "Run .test.luau test suites")
-parser:AddPositional("path", "string", nil, true, "File or directory to test")
+parser:addPositional("path", "string", nil, true, "File or directory to test")
 
-local args = parser:Parse()
-local path = fs.canonicalize(args.path)
+local args = parser:parse()
+local path = fs.path.canonicalize(args.path)
 
 if fs.isDirectory(path) then
 	test.runAll(path)

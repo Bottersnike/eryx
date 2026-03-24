@@ -1,0 +1,68 @@
+{% include "_layout.html" %}
+    <main class="main-content">
+        <div class="container article-content">
+            {% if not (_pageContext and _pageContext.name == "index") then %}
+            <nav class="breadcrumbs" aria-label="Breadcrumbs">
+                <a href="{{ global.siteRoot }}">Home</a>
+                {% for _, crumb in breadcrumbs do %}
+                <span class="breadcrumb-sep">/</span>
+                {% if crumb.link then %}
+                <a href="{{ crumb.link }}">{{ crumb.label | escape }}</a>
+                {% else %}
+                <span>{{ crumb.label | escape }}</span>
+                {% end %}
+                {% end %}
+                <span class="breadcrumb-sep">/</span>
+                <span class="breadcrumb-current">{{ article.title | escape }}</span>
+            </nav>
+            {% end %}
+
+            {% if article.hero then %}
+            <section class="md-hero" {% if article.hero.image then %}style="background-image:url({{ article.hero.image }})"{% end %}>
+                <div class="md-hero-inner">
+                    {% if article.hero.title then %}
+                    <h1>{{ article.hero.title | escape }}</h1>
+                    {% else %}
+                    <h1>{{ article.title | escape }}</h1>
+                    {% end %}
+                    {% if article.hero.description then %}
+                    <p class="md-hero-desc">{{ article.hero.description }}</p>
+                    {% end %}
+                    {% if article.hero.actions and article.hero.actions | length > 0 then %}
+                    <p class="md-hero-actions">
+                        {% for _, act in article.hero.actions do %}
+                        <a class="md-hero-action {% if act.type == "primary" then %}primary{% end %}" href="{{ act.link }}">{{ act.text | escape }}</a>
+                        {% end %}
+                    </p>
+                    {% end %}
+                </div>
+            </section>
+            {% else %}
+            <h1>{{ article.title | escape }}</h1>
+            {% if article.lastUpdated then %}
+            <div class="last-updated">Last updated: {{ article.lastUpdated }}</div>
+            {% end %}
+            {% end %}
+            {{ article.body | markdown }}
+
+            {% if prevArticle or nextArticle then %}
+            <nav class="article-nav">
+                {% if prevArticle then %}
+                <a class="article-nav-link article-nav-prev" href="{{ prevArticle.link }}">
+                    <span class="article-nav-label">&larr; Previous</span>
+                    <span class="article-nav-title">{{ prevArticle.title | escape }}</span>
+                </a>
+                {% else %}
+                <div></div>
+                {% end %}
+                {% if nextArticle then %}
+                <a class="article-nav-link article-nav-next" href="{{ nextArticle.link }}">
+                    <span class="article-nav-label">Next &rarr;</span>
+                    <span class="article-nav-title">{{ nextArticle.title | escape }}</span>
+                </a>
+                {% end %}
+            </nav>
+            {% end %}
+        </div>
+    </main>
+{% end %}

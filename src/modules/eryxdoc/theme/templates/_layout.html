@@ -1,0 +1,445 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>{{ pageTitle }}</title>
+        {% if pageMeta.description then %}
+        <meta name="description" content="{{ pageMeta.description | escape }}" />
+        <meta property="og:description" content="{{ pageMeta.description | escape }}" />
+        {% end %}
+        <meta property="og:title" content="{{ pageTitle | escape }}" />
+        <meta property="og:type" content="{% if pageMeta.type then %}{{ pageMeta.type }}{% else %}article {% end %}" />
+        {% if pageMeta.siteName then %}
+        <meta property="og:site_name" content="{{ pageMeta.siteName | escape }}" />
+        {% end %} {% if pageMeta.locale then %}
+        <meta property="og:locale" content="{{ pageMeta.locale }}" />
+        {% end %} {% if pageMeta.image then %}
+        <meta property="og:image" content="{{ pageMeta.image }}" />
+        {% if pageMeta.imageAlt then %}
+        <meta property="og:image:alt" content="{{ pageMeta.imageAlt | escape }}" />
+        {% end %} {% end %} {% if pageMeta.canonicalUrl then %}
+        <link rel="canonical" href="{{ pageMeta.canonicalUrl }}" />
+        <meta property="og:url" content="{{ pageMeta.canonicalUrl }}" />
+        {% end %} {% if global.favicon then %}
+        <link rel="icon" href="{{ global.favicon }}" />
+        {% end %}
+        <link rel="stylesheet" href="{{ global.stylePath }}" />
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:ital,opsz,wght@0,14..32,100..900;1,14..32,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap" rel="stylesheet">
+
+        {% if global.extraHead then %} {{ global.extraHead }} {% end %} {% slot head %}{% end %}
+    </head>
+    <body>
+        {% if global.announcement then %}
+        <div class="announcement-banner" id="announcement-banner">
+            <span class="announcement-text">{{ global.announcement }}</span>
+            <button class="announcement-dismiss" id="announcement-dismiss" aria-label="Dismiss">&times;</button>
+        </div>
+        {% end %}
+        {% include "_header.html" %}{% end %}
+        {% if not (_pageContext and _pageContext.name == "index") then %}
+        {% include "_sidebar.html" %}{% end %}
+        {% end %}
+        {% slot default %}{% end %}
+
+        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
+        <button class="back-to-top" id="back-to-top" aria-label="Back to top">&uarr;</button>
+
+        {% include "_footer.html" %}{% end %}
+
+        <script>
+            // Theme toggle
+            (function () {
+                var root = document.documentElement;
+                var btn = document.getElementById("theme-toggle");
+                var stored = localStorage.getItem("theme");
+                if (stored === "light") root.setAttribute("data-theme", "light");
+                function updateIcon() {
+                    btn.innerHTML = root.getAttribute("data-theme") === "light" ? "&#9790;" : "&#9728;";
+                }
+                updateIcon();
+                btn.addEventListener("click", function () {
+                    var next = root.getAttribute("data-theme") === "light" ? "" : "light";
+                    root.setAttribute("data-theme", next);
+                    if (next) localStorage.setItem("theme", next);
+                    else localStorage.removeItem("theme");
+                    updateIcon();
+                });
+            })();
+        </script>
+
+        <script>
+            // Sidebar toggle and ToC scrolling logic
+            (function () {
+                const btn = document.getElementById("sidebar-toggle");
+                const sb = document.getElementById("sidebar");
+                btn.addEventListener("click", function () {
+                    sb.classList.toggle("open");
+                });
+
+                const tocLinks = document.querySelectorAll('#page-toc a[href^="#"]');
+                if (tocLinks.length === 0) return;
+                const tocContainer = document.getElementById("toc-sidebar");
+                const targets = [];
+                tocLinks.forEach(function (a) {
+                    const id = a.getAttribute("href").slice(1);
+                    const el = document.getElementById(id);
+                    if (el) targets.push({ link: a, el: el });
+                });
+                function onScroll() {
+                    const scrollY = window.scrollY + 80;
+                    let active = null;
+                    const atBottom = window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 4;
+                    if (atBottom) {
+                        active = targets[targets.length - 1].link;
+                    } else {
+                        for (let i = 0; i < targets.length; i++) {
+                            if (targets[i].el.offsetTop <= scrollY) active = targets[i].link;
+                        }
+                    }
+                    tocLinks.forEach(function (a) {
+                        a.classList.remove("active");
+                    });
+                    if (active) {
+                        active.classList.add("active");
+                        active.scrollIntoView({ block: "nearest" });
+                    } else if (tocContainer) {
+                        tocContainer.scrollTop = 0;
+                    }
+                }
+                window.addEventListener("scroll", onScroll, { passive: true });
+                onScroll();
+            })();
+        </script>
+
+        <script>
+            // Sidebar position restoration
+            (function () {
+                const sb = document.getElementById("sidebar");
+                if (!sb) return;
+
+                // Restore scroll position
+                const ratio = sessionStorage.getItem("sidebar-scroll-ratio");
+                if (ratio) {
+                    sb.scrollTop = parseFloat(ratio) * sb.scrollHeight;
+                    const sel = document.querySelector(".sidebar-link.active");
+                    // if (sel) sel.scrollIntoView();
+                }
+
+                sb.addEventListener(
+                    "scroll",
+                    () => {
+                        sessionStorage.setItem("sidebar-scroll-ratio", sb.scrollTop / sb.scrollHeight);
+                    },
+                    { passive: true },
+                );
+
+                // Persist only top-level <details> (sidebar sections) open/closed state.
+                (function () {
+                    // Top-level details are direct children under .sidebar-inner
+                    const sections = Array.from(sb.querySelectorAll('.sidebar-inner > details'));
+                    if (sections.length === 0) return;
+
+                    function keyForIndex(i) {
+                        return 'eryxdoc:sidebar:section:' + i;
+                    }
+
+                    // Restore state
+                    sections.forEach(function (sec, i) {
+                        try {
+                            const v = sessionStorage.getItem(keyForIndex(i));
+                            if (v === '1') sec.open = true;
+                            else if (v === '0') sec.open = false;
+                        } catch (e) {}
+                    });
+
+                    // Listen for toggles on top-level sections only
+                    sections.forEach(function (sec, i) {
+                        sec.addEventListener('toggle', function () {
+                            try {
+                                sessionStorage.setItem(keyForIndex(i), sec.open ? '1' : '0');
+                            } catch (e) {}
+                        }, { passive: true });
+                    });
+                })();
+            })();
+        </script>
+
+        <script>
+            // Add anchor links to headings that have IDs
+            document.querySelectorAll("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]").forEach(function (h) {
+                var a = document.createElement("a");
+                a.className = "heading-anchor";
+                a.href = "#" + h.id;
+                a.setAttribute("aria-label", "Link to this heading");
+                a.textContent = "#";
+                h.appendChild(a);
+            });
+
+            // Announcement banner dismiss
+            (function () {
+                const banner = document.getElementById("announcement-banner");
+                const dismiss = document.getElementById("announcement-dismiss");
+                if (!banner || !dismiss) return;
+                const key = "eryxdoc-announcement-dismissed-" + banner.textContent.trim().substring(0, 40);
+                if (localStorage.getItem(key)) {
+                    banner.remove();
+                    return;
+                }
+                dismiss.addEventListener("click", function () {
+                    banner.remove();
+                    localStorage.setItem(key, "1");
+                });
+            })();
+
+            // Back to top button
+            (function () {
+                const btn = document.getElementById("back-to-top");
+                if (!btn) return;
+                window.addEventListener("scroll", function () {
+                    btn.classList.toggle("visible", window.scrollY > 400);
+                });
+                btn.addEventListener("click", function () {
+                    window.scrollTo({ top: 0, behavior: "smooth" });
+                });
+            })();
+
+            // Add copy button to code blocks
+            document.querySelectorAll("pre").forEach(function (pre) {
+                var btn = document.createElement("button");
+                btn.className = "code-copy-btn";
+                btn.textContent = "Copy";
+                btn.setAttribute("aria-label", "Copy code to clipboard");
+                btn.addEventListener("click", function () {
+                    var code = pre.querySelector("code");
+                    var text = (code || pre).textContent;
+                    navigator.clipboard.writeText(text).then(function () {
+                        btn.textContent = "Copied!";
+                        setTimeout(function () {
+                            btn.textContent = "Copy";
+                        }, 1500);
+                    });
+                });
+                pre.style.position = "relative";
+                pre.appendChild(btn);
+            });
+        </script>
+        <script>
+            // Client-side search
+            (function () {
+                var index = null;
+                var input = document.getElementById("search-input");
+                var results = document.getElementById("search-results");
+                var container = document.getElementById("search-container");
+                if (!input || !results) return;
+
+                // Fetch search index on first focus
+                input.addEventListener("focus", function () {
+                    if (index !== null) return;
+                    index = [];
+                    fetch("{{ global.siteRoot }}search.json")
+                        .then(function (r) {
+                            return r.json();
+                        })
+                        .then(function (data) {
+                            index = data;
+                        })
+                        .catch(function () {
+                            index = [];
+                        });
+                });
+
+                // Kind labels and icons
+                var kindLabel = { article: "Page", module: "Module", function: "Function", class: "Class", type: "Type" };
+
+                function highlight(text, terms) {
+                    if (!text) return "";
+                    var escaped = terms.map(function (t) {
+                        return t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+                    });
+                    var re = new RegExp("(" + escaped.join("|") + ")", "gi");
+                    return text.replace(re, "<mark>$1</mark>");
+                }
+
+                function search(query) {
+                    if (!index || !query) {
+                        results.innerHTML = "";
+                        results.classList.remove("visible");
+                        return;
+                    }
+                    var terms = query.toLowerCase().split(/\s+/).filter(Boolean);
+                    if (terms.length === 0) {
+                        results.innerHTML = "";
+                        results.classList.remove("visible");
+                        return;
+                    }
+
+                    // Word boundary check: is the match surrounded by non-word chars?
+                    function isWholeWord(text, term) {
+                        var re = new RegExp("(?:^|[\\s\\-_./:#@(),:;])(" + term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + ")(?=$|[\\s\\-_./:#@(),:;])", "i");
+                        return re.test(text);
+                    }
+
+                    var scored = [];
+                    for (var i = 0; i < index.length; i++) {
+                        var entry = index[i];
+                        var title = (entry.t || "").toLowerCase();
+                        var snippet = (entry.s || "").toLowerCase();
+                        var score = 0;
+                        var matched = true;
+                        for (var j = 0; j < terms.length; j++) {
+                            var term = terms[j];
+                            var inTitle = title.indexOf(term) !== -1;
+                            var inSnippet = snippet.indexOf(term) !== -1;
+                            if (!inTitle && !inSnippet) {
+                                matched = false;
+                                break;
+                            }
+                            // Whole-word matches score much higher than partial
+                            if (inTitle) {
+                                score += isWholeWord(title, term) ? 15 : 5;
+                            }
+                            if (title === term) score += 25;
+                            if (title.indexOf(term) === 0) score += 5;
+                            if (inSnippet) {
+                                score += isWholeWord(snippet, term) ? 4 : 1;
+                            }
+                        }
+                        if (matched) scored.push({ entry: entry, score: score });
+                    }
+
+                    scored.sort(function (a, b) {
+                        return b.score - a.score;
+                    });
+                    var top = scored.slice(0, 12);
+
+                    if (top.length === 0) {
+                        results.innerHTML = "<div class='search-empty'>No results found</div>";
+                        results.classList.add("visible");
+                        return;
+                    }
+
+                    var html = "";
+                    for (var k = 0; k < top.length; k++) {
+                        var e = top[k].entry;
+                        var label = kindLabel[e.k] || e.k;
+                        html += "<a class='search-result' href='" + e.p + "'>" + "<span class='search-result-kind'>" + label + "</span>" + "<span class='search-result-title'>" + highlight(e.t, terms) + "</span>";
+                        if (e.s) {
+                            html += "<span class='search-result-snippet'>" + highlight(e.s.substring(0, 120), terms) + "</span>";
+                        }
+                        html += "</a>";
+                    }
+                    if (scored.length > 12) {
+                        html += "<div class='search-empty'>" + (scored.length - 12) + " more results...</div>";
+                    }
+                    results.innerHTML = html;
+                    results.classList.add("visible");
+                }
+
+                var debounceTimer;
+                input.addEventListener("input", function () {
+                    clearTimeout(debounceTimer);
+                    debounceTimer = setTimeout(function () {
+                        search(input.value.trim());
+                    }, 150);
+                });
+
+                // Keyboard navigation
+                var selectedIdx = -1;
+                input.addEventListener("keydown", function (e) {
+                    var items = results.querySelectorAll(".search-result");
+                    if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        selectedIdx = Math.min(selectedIdx + 1, items.length - 1);
+                    } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        selectedIdx = Math.max(selectedIdx - 1, -1);
+                    } else if (e.key === "Enter" && selectedIdx >= 0 && items[selectedIdx]) {
+                        e.preventDefault();
+                        items[selectedIdx].click();
+                        return;
+                    } else if (e.key === "Escape") {
+                        input.blur();
+                        results.classList.remove("visible");
+                        selectedIdx = -1;
+                        return;
+                    } else {
+                        selectedIdx = -1;
+                    }
+                    items.forEach(function (el, i) {
+                        el.classList.toggle("selected", i === selectedIdx);
+                    });
+                });
+
+                // Close on outside click
+                document.addEventListener("click", function (e) {
+                    if (!container.contains(e.target)) {
+                        results.classList.remove("visible");
+                        selectedIdx = -1;
+                    }
+                });
+
+                // Ctrl+K / Cmd+K shortcut
+                document.addEventListener("keydown", function (e) {
+                    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+                        e.preventDefault();
+                        input.focus();
+                        input.select();
+                    }
+                });
+            })();
+        </script>
+        {% if global.versionName then %}
+        <script>
+            // Version picker
+            (function () {
+                var picker = document.getElementById("version-picker");
+                var btn = document.getElementById("version-btn");
+                var dropdown = document.getElementById("version-dropdown");
+                if (!picker || !btn || !dropdown) return;
+
+                var loaded = false;
+                btn.addEventListener("click", function () {
+                    var isOpen = dropdown.classList.contains("visible");
+                    if (isOpen) {
+                        dropdown.classList.remove("visible");
+                        return;
+                    }
+                    dropdown.classList.add("visible");
+                    if (loaded) return;
+                    loaded = true;
+
+                    // Walk up from siteRoot to find versions.json at the output root
+                    var siteRoot = "{{ global.siteRoot }}";
+                    var versionName = "{{ global.versionName }}";
+                    // versions.json is at the parent of the versioned siteRoot
+                    var base = siteRoot.replace(new RegExp(versionName + "/$"), "");
+                    fetch(base + "versions.json")
+                        .then(function (r) {
+                            return r.json();
+                        })
+                        .then(function (versions) {
+                            var html = "";
+                            for (var i = 0; i < versions.length; i++) {
+                                var v = versions[i];
+                                var href = base + v.name + "/";
+                                var cls = v.name === versionName ? "version-item active" : "version-item";
+                                html += "<a class='" + cls + "' href='" + href + "'>" + v.label + "</a>";
+                            }
+                            dropdown.innerHTML = html;
+                        })
+                        .catch(function () {
+                            dropdown.innerHTML = "<span class='version-item'>Failed to load versions</span>";
+                        });
+                });
+
+                document.addEventListener("click", function (e) {
+                    if (!picker.contains(e.target)) dropdown.classList.remove("visible");
+                });
+            })();
+        </script>
+        {% end %} {% if global.extraScripts then %} {{ global.extraScripts }} {% end %}
+    </body>
+</html>

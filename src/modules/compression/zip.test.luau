@@ -5,66 +5,66 @@ local suite = test.Suite.new("zip")
 
 local HELLO = buffer.fromstring("hello")
 
-suite:Test("isZip: accepts valid archive", function()
+suite:test("isZip: accepts valid archive", function()
 	local archive = zip.pack({ ["hello.txt"] = HELLO })
-	test.expect(zip.isZip(archive)):ToBeTrue()
+	test.expect(zip.isZip(archive)):toBeTrue()
 end)
 
-suite:Test("isZip: rejects non-zip data", function()
-	test.expect(zip.isZip(buffer.fromstring("not a zip"))):ToBeFalse()
+suite:test("isZip: rejects non-zip data", function()
+	test.expect(zip.isZip(buffer.fromstring("not a zip"))):toBeFalse()
 end)
 
-suite:Test("pack/unpack round-trip", function()
+suite:test("pack/unpack round-trip", function()
 	local files: { [string]: buffer } = {
 		["hello.txt"] = buffer.fromstring("hello"),
 		["world.txt"] = buffer.fromstring("world"),
 	}
 	local archive = zip.pack(files)
 	local unpacked = zip.unpack(archive)
-	test.expect(buffer.tostring(unpacked["hello.txt"])):ToBe("hello")
-	test.expect(buffer.tostring(unpacked["world.txt"])):ToBe("world")
+	test.expect(buffer.tostring(unpacked["hello.txt"])):toBe("hello")
+	test.expect(buffer.tostring(unpacked["world.txt"])):toBe("world")
 end)
 
-suite:Test("list: returns entry names", function()
+suite:test("list: returns entry names", function()
 	local archive = zip.pack({ ["a.txt"] = HELLO, ["b.txt"] = HELLO })
 	local entries = zip.list(archive)
-	test.expect(#entries):ToBe(2)
+	test.expect(#entries):toBe(2)
 	local names: { string } = {}
 	for _, e in entries do
 		table.insert(names, e.name)
 	end
 	table.sort(names)
-	test.expect(names[1]):ToBe("a.txt")
-	test.expect(names[2]):ToBe("b.txt")
+	test.expect(names[1]):toBe("a.txt")
+	test.expect(names[2]):toBe("b.txt")
 end)
 
-suite:Test("read: reads a specific entry", function()
+suite:test("read: reads a specific entry", function()
 	local archive = zip.pack({ ["greet.txt"] = buffer.fromstring("hi") })
 	local data = zip.read(archive, "greet.txt")
-	test.expect(data):ToNotBeNil()
-	test.expect(buffer.tostring(data :: buffer)):ToBe("hi")
+	test.expect(data):toNotBeNil()
+	test.expect(buffer.tostring(data :: buffer)):toBe("hi")
 end)
 
-suite:Test("read: returns nil for missing entry", function()
+suite:test("read: returns nil for missing entry", function()
 	local archive = zip.pack({ ["a.txt"] = HELLO })
-	test.expect(zip.read(archive, "missing.txt")):ToBeNil()
+	test.expect(zip.read(archive, "missing.txt")):toBeNil()
 end)
 
-suite:Test("pack with store method: entry method is METHOD_STORE", function()
+suite:test("pack with store method: entry method is METHOD_STORE", function()
 	local archive = zip.pack({ ["f.txt"] = HELLO }, { method = "store" })
 	local entries = zip.list(archive)
-	test.expect(entries[1].method):ToBe(zip.METHOD_STORE)
+	test.expect(entries[1].method):toBe(zip.METHOD_STORE)
 end)
 
-suite:Test("open: ZipReader:List and Read", function()
+suite:test("open: ZipReader:list and Read", function()
 	local archive = zip.pack({ ["doc.txt"] = buffer.fromstring("content") })
 	local reader = zip.open(archive)
-	local entries = reader:List()
-	test.expect(#entries):ToBe(1)
-	test.expect(entries[1].name):ToBe("doc.txt")
-	local data = reader:Read("doc.txt")
-	test.expect(buffer.tostring(data :: buffer)):ToBe("content")
-	reader:Close()
+	local entries = reader:list()
+	test.expect(#entries):toBe(1)
+	test.expect(entries[1].name):toBe("doc.txt")
+	local data = reader:read("doc.txt")
+	test.expect(buffer.tostring(data :: buffer)):toBe("content")
+	reader:close()
 end)
 
 return suite

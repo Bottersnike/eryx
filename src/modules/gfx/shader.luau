@@ -6,7 +6,7 @@
 	local s = shader.load("myshader", wgslSource, uniforms?)
 	```
 
-	The returned Shader object has methods like :Set(name, ...) and :error()
+	The returned Shader object has methods like :set(name, ...) and :error()
 	provided by the native metatable.
 ]=]
 

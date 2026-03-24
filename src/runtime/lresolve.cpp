@@ -2,11 +2,11 @@
 
 #include <filesystem>
 
+#include "../vfs.hpp"
+#include "embedded_modules.h"
 #include "lconfig.hpp"
 #include "lexception.hpp"
 #include "lua.h"
-#include "../vfs.hpp"
-#include "embedded_modules.h"
 
 namespace fs = std::filesystem;
 
@@ -206,10 +206,11 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
         auto it = cfg->aliases.find(alias);
 
         if (it != cfg->aliases.end()) {
-            // Explicit config alias — always wins
-            resolvedPath = fs::weakly_canonical(fs::path(it->second.qualified) / fs::path(modulePath));
+            // Explicit config alias - always wins
+            resolvedPath =
+                fs::weakly_canonical(fs::path(it->second.qualified) / fs::path(modulePath));
         }
-        // @self from a VFS module — try VFS first, fall through to filesystem
+        // @self from a VFS module - try VFS first, fall through to filesystem
         else if (ctx.isVFS && alias == "self") {
             std::string key;
             if (modulePath.empty())
@@ -226,7 +227,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
                 key + "/init.lua",
             };
             for (auto& c : vfsCandidates) {
-                if (c.ends_with(".config.luau")) continue;
+                if (c == ".config.luau") continue;
                 if (!vfs_read_file(c).empty()) {
                     locatedModules.push_back(
                         LocatedModule{ .path = c, .type = LocatedModule::TYPE_VFS });
@@ -236,7 +237,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             // Fall through to filesystem @self resolution
             resolvedPath = fs::weakly_canonical(ctx.root / fs::path(key));
         }
-        // @eryx — try embedded modules first, then fall back to filesystem
+        // @eryx - try embedded modules first, then fall back to filesystem
         else if (alias == "eryx") {
             auto module = eryx_resolve_embedded(modulePath);
             if (module) {
@@ -244,9 +245,10 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
                 return locatedModules;
             }
             // Fall back to [exe dir]/modules
-            resolvedPath = fs::weakly_canonical(getExecutableDir() / "modules" / fs::path(modulePath));
+            resolvedPath =
+                fs::weakly_canonical(getExecutableDir() / "modules" / fs::path(modulePath));
         }
-        // @self from an embedded module — try embedded first, fall through to filesystem
+        // @self from an embedded module - try embedded first, fall through to filesystem
         else if (ctx.isEmbedded && alias == "self") {
             std::string key;
             if (modulePath.empty())
@@ -262,8 +264,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             }
             // Fall through to filesystem @self resolution
             resolvedPath = fs::weakly_canonical(ctx.selfDir / fs::path(modulePath));
-        }
-        else if (alias == "self") {
+        } else if (alias == "self") {
             resolvedPath = fs::weakly_canonical(ctx.selfDir / fs::path(modulePath));
         } else {
             luaL_error(L, "Require %s used undefined alias '@%s'", path.c_str(), alias.c_str());
@@ -284,7 +285,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
                 base + "/init.lua",
             };
             for (auto& c : vfsCandidates) {
-                if (c.ends_with(".config.luau")) continue;
+                if (c == ".config.luau") continue;
                 if (!vfs_read_file(c).empty()) {
                     locatedModules.push_back(
                         LocatedModule{ .path = c, .type = LocatedModule::TYPE_VFS });
@@ -292,7 +293,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             }
             if (!locatedModules.empty()) return locatedModules;
 
-            // VFS lookup failed — if not isolated, try filesystem from exe dir
+            // VFS lookup failed - if not isolated, try filesystem from exe dir
             // for paths that resolve at or above the VFS root level.
             // Paths that stay inside a VFS subdirectory do not fall through.
             if (!vfs_is_isolated()) {
@@ -325,7 +326,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
         }
     }
 
-    // VFS overlay — check virtual filesystem before the real one
+    // VFS overlay - check virtual filesystem before the real one
     if (vfs_open()) {
         // Convert resolvedPath to a VFS-relative path (forward slashes, relative to root)
         std::string vfsBase = fs::relative(resolvedPath, ctx.root).generic_string();
@@ -338,7 +339,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
         };
 
         for (auto& c : vfsCandidates) {
-            if (c.ends_with(".config.luau")) continue;
+            if (c == ".config.luau") continue;
 
             if (!vfs_read_file(c).empty()) {
                 locatedModules.push_back(
@@ -359,7 +360,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
 
     for (int i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
         // .config.luau files cannot be required!
-        if (candidates[i].string().ends_with(".config.luau")) {
+        if (candidates[i].string() == ".config.luau") {
             continue;
         }
 

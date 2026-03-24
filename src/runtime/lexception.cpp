@@ -27,6 +27,10 @@ int exception_tostring(lua_State* L) {
 int exception_gc(lua_State* L) {
     LuaException* exception = (LuaException*)luaL_checkudata(L, 1, EXCEPTION_METATABLE);
     if (exception) {
+        if (exception->dataRef != LUA_NOREF) {
+            lua_unref(L, exception->dataRef);
+            exception->dataRef = LUA_NOREF;
+        }
         exception->~LuaException();
     }
     return 0;
@@ -42,6 +46,14 @@ int exception_index(lua_State* L) {
     }
     if (strcmp(key, "type") == 0) {
         lua_pushstring(L, exception->type);
+        return 1;
+    }
+    if (strcmp(key, "data") == 0) {
+        if (exception->dataRef != LUA_NOREF) {
+            lua_getref(L, exception->dataRef);
+        } else {
+            lua_pushnil(L);
+        }
         return 1;
     }
     if (strcmp(key, "traceback") == 0) {
@@ -116,7 +128,7 @@ static std::string getLineFromSource(const char* src, int line) {
 std::string getSourceLine(const char* source, int line) {
     if (!source || line <= 0) return std::string("Cooked!");  // not a source-backed chunk
 
-    // @@vfs/ — read from the virtual filesystem
+    // @@vfs/ - read from the virtual filesystem
     if (strncmp(source, CHUNK_PREFIX_VFS, CHUNK_PREFIX_VFS_LEN) == 0) {
         std::string vfsPath = source + CHUNK_PREFIX_VFS_LEN;
         auto data = vfs_read_file(vfsPath);
@@ -124,7 +136,7 @@ std::string getSourceLine(const char* source, int line) {
         return getLineFromSource(reinterpret_cast<const char*>(data.data()), line);
     }
 
-    // @@eryx/ — read from embedded script modules
+    // @@eryx/ - read from embedded script modules
     if (strncmp(source, CHUNK_PREFIX_ERYX, CHUNK_PREFIX_ERYX_LEN) == 0) {
         const char* key = source + CHUNK_PREFIX_ERYX_LEN;
         auto* scripts = eryx_get_embedded_script_modules();
@@ -138,7 +150,7 @@ std::string getSourceLine(const char* source, int line) {
         return std::string("(source unavailable: ") + key + ")";
     }
 
-    // @path — read from the real filesystem
+    // @path - read from the real filesystem
     if (source[0] != '@') return std::string("Cooked!");
 
     std::string path = source + 1;
@@ -210,28 +222,67 @@ void eryx_exception_push_keyboard_interrupt(lua_State* L) {
 void eryx_coerce_to_exception(lua_State* L) {
     if (eryx_get_exception(L, -1)) return;
 
-    const char* raw = lua_tostring(L, -1);
-    std::string msg = raw ? raw : "<non-string error>";
+    // Need stack space for getfield, pushvalue, ref, and push_exception
+    lua_checkstack(L, 4);
 
-    // Strip the "file:line: " prefix Luau prepends to runtime error strings
-    size_t colon2 = msg.find(": ");
-    if (colon2 != std::string::npos && colon2 > 0) {
-        size_t colon1 = msg.rfind(':', colon2 - 1);
-        if (colon1 != std::string::npos) {
-            std::string lineStr = msg.substr(colon1 + 1, colon2 - colon1 - 1);
-            bool isNum = !lineStr.empty();
-            for (char c : lineStr) {
-                if (!std::isdigit((unsigned char)c)) {
-                    isNum = false;
-                    break;
+    std::string msg;
+    bool isTable = lua_istable(L, -1);
+    bool isString = lua_isstring(L, -1);
+
+    if (isTable) {
+        // Table errors: extract "message" field if present.
+        // This supports structured error tables like { message = "...", line = 5, ... }
+        lua_getfield(L, -1, "message");
+        const char* tableMsg = lua_tostring(L, -1);
+        if (tableMsg) {
+            msg = tableMsg;
+        } else {
+            msg = "<non-string error>";
+        }
+        lua_pop(L, 1);  // pop the message field
+    } else if (isString) {
+        const char* raw = lua_tostring(L, -1);
+        msg = raw ? raw : "<non-string error>";
+    } else {
+        msg = "<non-string error>";
+    }
+
+    // For string errors, strip the "file:line: " prefix that Luau prepends
+    // (it's redundant with the traceback). For table errors, the message was
+    // extracted from .message and has no Luau prefix, so leave it alone.
+    if (isString) {
+        size_t colon2 = msg.find(": ");
+        if (colon2 != std::string::npos && colon2 > 0) {
+            size_t colon1 = msg.rfind(':', colon2 - 1);
+            if (colon1 != std::string::npos) {
+                std::string lineStr = msg.substr(colon1 + 1, colon2 - colon1 - 1);
+                bool isNum = !lineStr.empty();
+                for (char c : lineStr) {
+                    if (!std::isdigit((unsigned char)c)) {
+                        isNum = false;
+                        break;
+                    }
                 }
+                if (isNum) msg = msg.substr(colon2 + 2);
             }
-            if (isNum) msg = msg.substr(colon2 + 2);
         }
     }
 
-    lua_pop(L, 1);
-    eryx_exception_push_exception(L, ETYPE_RUNTIME, msg.c_str(), nullptr);
+    // Store a registry ref to the original error value.
+    // lua_ref pops the value, so we push a copy first.
+    lua_pushvalue(L, -1);
+    int dataRef = lua_ref(L, -1);  // pops the copy
+
+    lua_pop(L, 1);  // pop the original
+
+    const char* etype = isTable ? ETYPE_THROWN : ETYPE_RUNTIME;
+    eryx_exception_push_exception(L, etype, msg.c_str(), nullptr);
+
+    // Attach the original error data to the Exception
+    LuaException* exception = eryx_get_exception(L, -1);
+    if (exception) {
+        exception->dataRef = dataRef;
+    }
 }
 
 LuaException* eryx_get_exception(lua_State* L, int idx) {

@@ -48,7 +48,7 @@ end
 	Reads one line from stdin, stripping the trailing newline.
 	Returns `nil` on EOF.
 ]=]
-function stdio.readln(): string?
+function stdio.readline(): string?
 	return nil :: any
 end
 
@@ -85,4 +85,4 @@ function stdio.isatty(): TtyInfo
 	return nil :: any
 end
 
-return stdio
+return table.freeze(stdio)

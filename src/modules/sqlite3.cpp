@@ -44,6 +44,10 @@ static LuaStatement* check_stmt(lua_State* L, int idx) {
     return (LuaStatement*)luaL_checkudata(L, idx, MT_STATEMENT);
 }
 
+// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
+static void db_dtor(void* ud);
+static void stmt_dtor(void* ud);
+
 static void check_db_open(lua_State* L, LuaDatabase* ud) {
     if (!ud->db) luaL_error(L, "attempt to use a closed database");
 }
@@ -146,7 +150,7 @@ static void push_row(lua_State* L, sqlite3_stmt* stmt) {
 static int sql_open(lua_State* L) {
     const char* path = luaL_checkstring(L, 1);
 
-    LuaDatabase* ud = (LuaDatabase*)lua_newuserdata(L, sizeof(LuaDatabase));
+    LuaDatabase* ud = (LuaDatabase*)lua_newuserdatadtor(L, sizeof(LuaDatabase), db_dtor);
     ud->db = nullptr;
 
     int rc = sqlite3_open(path, &ud->db);
@@ -174,13 +178,13 @@ static int sql_version(lua_State* L) {
 
 // ── Database methods ──────────────────────────────────────────────────────────
 
-static int db_gc(lua_State* L) {
-    LuaDatabase* ud = check_db(L, 1);
-    if (ud->db) {
-        sqlite3_close_v2(ud->db);
-        ud->db = nullptr;
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void db_dtor(void* ud) {
+    LuaDatabase* d = (LuaDatabase*)ud;
+    if (d->db) {
+        sqlite3_close_v2(d->db);
+        d->db = nullptr;
     }
-    return 0;
 }
 
 static int db_tostring(lua_State* L) {
@@ -215,23 +219,35 @@ static int db_isopen(lua_State* L) {
     return 1;
 }
 
-// db:exec(sql) — execute one or more SQL statements, no results
+// db:exec(sql) - execute one or more SQL statements, no results
 static int db_exec(lua_State* L) {
     LuaDatabase* ud = check_db(L, 1);
     check_db_open(L, ud);
     const char* sql = luaL_checkstring(L, 2);
-
-    char* errmsg = nullptr;
-    int rc = sqlite3_exec(ud->db, sql, nullptr, nullptr, &errmsg);
+    sqlite3_stmt* stmt;
+    int rc = sqlite3_prepare_v2(ud->db, sql, -1, &stmt, nullptr);
     if (rc != SQLITE_OK) {
-        std::string err = errmsg ? errmsg : "unknown error";
-        sqlite3_free(errmsg);
-        luaL_error(L, "sqlite3 exec error: %s", err.c_str());
+        luaL_error(L, "sqlite3 prepare error: %s", sqlite3_errmsg(ud->db));
     }
+
+    // Bind parameters from arg 3 onwards
+    bind_args(L, stmt, 3);
+
+    // Execute statement(s), ignore any result rows
+    while ((rc = sqlite3_step(stmt)) == SQLITE_ROW) {
+        // consume rows but do nothing
+    }
+
+    sqlite3_finalize(stmt);
+
+    if (rc != SQLITE_DONE) {
+        luaL_error(L, "sqlite3 step error: %s", sqlite3_errmsg(ud->db));
+    }
+
     return 0;
 }
 
-// db:query(sql, ...params) — execute and return all rows
+// db:query(sql, ...params) - execute and return all rows
 static int db_query(lua_State* L) {
     LuaDatabase* ud = check_db(L, 1);
     check_db_open(L, ud);
@@ -274,7 +290,7 @@ static int db_prepare(lua_State* L) {
         luaL_error(L, "sqlite3 prepare error: %s", sqlite3_errmsg(ud->db));
     }
 
-    LuaStatement* sud = (LuaStatement*)lua_newuserdata(L, sizeof(LuaStatement));
+    LuaStatement* sud = (LuaStatement*)lua_newuserdatadtor(L, sizeof(LuaStatement), stmt_dtor);
     sud->stmt = stmt;
     sud->db = ud->db;
 
@@ -307,13 +323,13 @@ static int db_index(lua_State* L) {
 
 // ── Statement methods ─────────────────────────────────────────────────────────
 
-static int stmt_gc(lua_State* L) {
-    LuaStatement* ud = check_stmt(L, 1);
-    if (ud->stmt) {
-        sqlite3_finalize(ud->stmt);
-        ud->stmt = nullptr;
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void stmt_dtor(void* ud) {
+    LuaStatement* s = (LuaStatement*)ud;
+    if (s->stmt) {
+        sqlite3_finalize(s->stmt);
+        s->stmt = nullptr;
     }
-    return 0;
 }
 
 static int stmt_tostring(lua_State* L) {
@@ -429,23 +445,23 @@ LUAU_MODULE_EXPORT int luauopen_sqlite3(lua_State* L) {
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, db_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, db_gc, "gc");
-    lua_setfield(L, -2, "__gc");
 
-    lua_pushcfunction(L, db_exec, "Exec");
-    lua_setfield(L, -2, "Exec");
-    lua_pushcfunction(L, db_query, "Query");
-    lua_setfield(L, -2, "Query");
-    lua_pushcfunction(L, db_prepare, "Prepare");
-    lua_setfield(L, -2, "Prepare");
-    lua_pushcfunction(L, db_close, "Close");
-    lua_setfield(L, -2, "Close");
-    lua_pushcfunction(L, db_isopen, "IsOpen");
-    lua_setfield(L, -2, "IsOpen");
-    lua_pushcfunction(L, db_lastinsertid, "LastInsertId");
-    lua_setfield(L, -2, "LastInsertId");
-    lua_pushcfunction(L, db_changes, "Changes");
-    lua_setfield(L, -2, "Changes");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
+
+    lua_pushcfunction(L, db_exec, "exec");
+    lua_setfield(L, -2, "exec");
+    lua_pushcfunction(L, db_query, "query");
+    lua_setfield(L, -2, "query");
+    lua_pushcfunction(L, db_prepare, "prepare");
+    lua_setfield(L, -2, "prepare");
+    lua_pushcfunction(L, db_close, "close");
+    lua_setfield(L, -2, "close");
+    lua_pushcfunction(L, db_isopen, "isOpen");
+    lua_setfield(L, -2, "isOpen");
+    lua_pushcfunction(L, db_lastinsertid, "lastInsertId");
+    lua_setfield(L, -2, "lastInsertId");
+    lua_pushcfunction(L, db_changes, "changes");
+    lua_setfield(L, -2, "changes");
     lua_pop(L, 1);
 
     // -- SqliteStatement metatable --
@@ -454,19 +470,19 @@ LUAU_MODULE_EXPORT int luauopen_sqlite3(lua_State* L) {
     lua_setfield(L, -2, "__index");
     lua_pushcfunction(L, stmt_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, stmt_gc, "gc");
-    lua_setfield(L, -2, "__gc");
 
-    lua_pushcfunction(L, stmt_bind, "Bind");
-    lua_setfield(L, -2, "Bind");
-    lua_pushcfunction(L, stmt_step, "Step");
-    lua_setfield(L, -2, "Step");
-    lua_pushcfunction(L, stmt_reset, "Reset");
-    lua_setfield(L, -2, "Reset");
-    lua_pushcfunction(L, stmt_all, "All");
-    lua_setfield(L, -2, "All");
-    lua_pushcfunction(L, stmt_run, "Run");
-    lua_setfield(L, -2, "Run");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
+
+    lua_pushcfunction(L, stmt_bind, "bind");
+    lua_setfield(L, -2, "bind");
+    lua_pushcfunction(L, stmt_step, "step");
+    lua_setfield(L, -2, "step");
+    lua_pushcfunction(L, stmt_reset, "reset");
+    lua_setfield(L, -2, "reset");
+    lua_pushcfunction(L, stmt_all, "all");
+    lua_setfield(L, -2, "all");
+    lua_pushcfunction(L, stmt_run, "run");
+    lua_setfield(L, -2, "run");
     lua_pop(L, 1);
 
     // -- Module table --
@@ -475,5 +491,7 @@ LUAU_MODULE_EXPORT int luauopen_sqlite3(lua_State* L) {
     lua_setfield(L, -2, "open");
     lua_pushcfunction(L, sql_version, "version");
     lua_setfield(L, -2, "version");
+
+    lua_setreadonly(L, -1, true);
     return 1;
 }

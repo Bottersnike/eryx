@@ -7,20 +7,20 @@ Wraps the SQLite3 C library to provide full SQL database access from Luau.
 ```luau
 local sqlite3 = require("@eryx/sqlite3")
 local db = sqlite3.open(":memory:")
-db:Exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
-db:Exec("INSERT INTO users VALUES (1, 'Alice', 30)")
+db:exec("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
+db:exec("INSERT INTO users VALUES (1, 'Alice', 30)")
 
-local rows = db:Query("SELECT * FROM users WHERE age > ?", 25)
+local rows = db:query("SELECT * FROM users WHERE age > ?", 25)
 for _, row in rows do
     print(row.name, row.age)
 end
 
 -- Prepared statements for repeated queries
-local stmt = db:Prepare("INSERT INTO users VALUES (?, ?, ?)")
-stmt:Run(2, "Bob", 25)
-stmt:Run(3, "Charlie", 35)
+local stmt = db:prepare("INSERT INTO users VALUES (?, ?, ?)")
+stmt:run(2, "Bob", 25)
+stmt:run(3, "Charlie", 35)
 
-db:Close()
+db:close()
 ```
 ]=]
 
@@ -41,22 +41,22 @@ export type Statement = setmetatable<
 	{
 		--- Resets the statement and binds new parameters (positional).
 		--- Returns the statement for chaining.
-		Bind: (self: Statement, ...any) -> Statement,
+		bind: (self: Statement, ...any) -> Statement,
 
 		--- Fetches the next result row, or `nil` when no more rows remain.
-		Step: (self: Statement) -> Row?,
+		step: (self: Statement) -> Row?,
 
 		--- Resets the statement so it can be stepped again from the
 		--- beginning (without changing bindings).
-		Reset: (self: Statement) -> Statement,
+		reset: (self: Statement) -> Statement,
 
 		--- Convenience: resets, binds parameters, and returns all result
 		--- rows as an array of [[Row]] tables.
-		All: (self: Statement, ...any) -> { Row },
+		all: (self: Statement, ...any) -> { Row },
 
 		--- Convenience: resets, binds parameters, and executes the
 		--- statement discarding any results.  Use for INSERT/UPDATE/DELETE.
-		Run: (self: Statement, ...any) -> (),
+		bun: (self: Statement, ...any) -> (),
 	},
 	{
 		__tostring: (self: Statement) -> string,
@@ -78,28 +78,28 @@ export type Database = setmetatable<
 		(DDL, INSERT, UPDATE, DELETE, etc.).  Multiple statements
 		separated by `;` are supported.
 		]=]
-		Exec: (self: Database, sql: string) -> (),
+		exec: (self: Database, sql: string, ...any) -> (),
 
 		--[=[
 		Executes a SQL query with optional positional parameters and
 		returns all result rows as an array of [[Row]] tables.
 		]=]
-		Query: (self: Database, sql: string, ...any) -> { Row },
+		query: (self: Database, sql: string, ...any) -> { Row },
 
 		--- Compiles a SQL string into a reusable prepared [[Statement]].
-		Prepare: (self: Database, sql: string) -> Statement,
+		prepare: (self: Database, sql: string) -> Statement,
 
 		--- Explicitly closes the database connection.  Safe to call multiple times.
-		Close: (self: Database) -> (),
+		close: (self: Database) -> (),
 
 		--- Returns `true` if the database connection is still open.
-		IsOpen: (self: Database) -> boolean,
+		isOpen: (self: Database) -> boolean,
 
 		--- Returns the rowid of the last successful INSERT.
-		LastInsertId: (self: Database) -> number,
+		lastInsertId: (self: Database) -> number,
 
 		--- Returns the number of rows changed by the last INSERT, UPDATE, or DELETE statement.
-		Changes: (self: Database) -> number,
+		changes: (self: Database) -> number,
 	},
 	{
 		__tostring: (self: Database) -> string,
@@ -122,4 +122,4 @@ function sqlite3.version(): string
 	return nil :: any
 end
 
-return sqlite3
+return table.freeze(sqlite3)

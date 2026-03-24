@@ -224,6 +224,8 @@ int eryx_lua_print(lua_State* L) {
         }
     }
 
+    lua_pop(L, 1);
+
     printf("\n");
     return 0;
 }

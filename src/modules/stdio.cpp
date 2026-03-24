@@ -94,8 +94,8 @@ static int stdio_read(lua_State* L) {
     return 1;
 }
 
-// stdio.readln() -> string?
-static int stdio_readln(lua_State* L) {
+// stdio.readline() -> string?
+static int stdio_readline(lua_State* L) {
     std::string line;
     int c;
     while ((c = fgetc(stdin)) != EOF) {
@@ -202,8 +202,8 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     // Sync
     lua_pushcfunction(L, stdio_read, "read");
     lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, stdio_readln, "readln");
-    lua_setfield(L, -2, "readln");
+    lua_pushcfunction(L, stdio_readline, "readline");
+    lua_setfield(L, -2, "readline");
     lua_pushcfunction(L, stdio_write, "write");
     lua_setfield(L, -2, "write");
     lua_pushcfunction(L, stdio_writeerr, "writeerr");
@@ -221,5 +221,6 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_pushcfunction(L, stdio_isatty, "isatty");
     lua_setfield(L, -2, "isatty");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

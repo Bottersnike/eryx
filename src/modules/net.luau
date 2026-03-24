@@ -2,28 +2,28 @@
 	TCP networking module providing blocking and non-blocking clients, and a
 	blocking TCP server. Built on top of the low-level `@eryx/_socket` module.
 
-	## Quick start — client
+	## Quick start - client
 
 	```luau
 	local net = require("@eryx/net")
 
 	local client = net.TcpClient.new("127.0.0.1", 8080)
-	client:Write("Hello, server!")
-	local response = client:Read(1024)
+	client:write("Hello, server!")
+	local response = client:read(1024)
 	print(buffer.tostring(response))
-	client:Close()
+	client:close()
 	```
 
-	## Quick start — server
+	## Quick start - server
 
 	```luau
 	local net = require("@eryx/net")
 
 	local server = net.TcpServer.new("0.0.0.0", 8080)
-	server.onClient:Connect(function(client)
-		local data = client:Read(1024)
-		client:Write("Echo: " .. buffer.tostring(data))
-		client:Close()
+	server.onClient:connect(function(client)
+		local data = client:read(1024)
+		client:write("Echo: " .. buffer.tostring(data))
+		client:close()
 	end)
 	```
 ]=]
@@ -63,11 +63,11 @@ function TcpClient.new(host: string, port: number): TcpClient
 	local this = {}
 
 	this.socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-	this.socket:Connect(host, port)
+	this.socket:connect(host, port)
 	this.host = host
 	this.port = port
 
-	this.socket:SetBlocking(true)
+	this.socket:setBlocking(true)
 
 	return setmetatable(this, TcpClient)
 end
@@ -88,7 +88,7 @@ function TcpClient._fromConnectedSocket(socket: _socket.Socket, host: string, po
 	this.host = host
 	this.port = port
 
-	this.socket:SetBlocking(true)
+	this.socket:setBlocking(true)
 
 	return setmetatable(this, TcpClient)
 end
@@ -99,15 +99,15 @@ end
 	@param data string | buffer -- The data to send. Strings are converted to buffers automatically.
 
 	```luau
-	client:Write("GET / HTTP/1.0\r\n\r\n")
-	client:Write(buffer.fromstring("binary data"))
+	client:write("GET / HTTP/1.0\r\n\r\n")
+	client:write(buffer.fromstring("binary data"))
 	```
 ]=]
-function TcpClient.Write(self: TcpClient, data: string | buffer)
+function TcpClient.write(self: TcpClient, data: string | buffer)
 	if typeof(data) == "string" then
-		self.socket:SendAll(buffer.fromstring(data))
+		self.socket:sendAll(buffer.fromstring(data))
 	else
-		self.socket:SendAll(data)
+		self.socket:sendAll(data)
 	end
 end
 
@@ -120,12 +120,12 @@ end
 	@error Throws if the server closed the connection.
 
 	```luau
-	local data = client:Read(4096)
+	local data = client:read(4096)
 	print(buffer.tostring(data))
 	```
 ]=]
-function TcpClient.Read(self: TcpClient, bytes: number): buffer
-	local ret: buffer? = self.socket:Recv(bytes)
+function TcpClient.read(self: TcpClient, bytes: number): buffer
+	local ret: buffer? = self.socket:recv(bytes)
 	assert(ret) -- We're in blocking mode
 	if buffer.len(ret) == 0 then
 		error("Server closed connection")
@@ -134,12 +134,12 @@ function TcpClient.Read(self: TcpClient, bytes: number): buffer
 end
 
 --- Closes the connection and releases the underlying socket.
-function TcpClient.Close(self: TcpClient): ()
-	self.socket:Close()
+function TcpClient.close(self: TcpClient): ()
+	self.socket:close()
 end
 
 --[=[
-	A non-blocking TCP client. Read and write operations return immediately —
+	A non-blocking TCP client. Read and write operations return immediately -
 	`Read` returns `nil` if no data is available, and `Write` returns `false`
 	if the data could not be sent. Useful for polling-style I/O or integration
 	with event loops.
@@ -168,11 +168,11 @@ function TcpClientNonBlocking.new(host: string, port: number): TcpClientNonBlock
 	local this = {}
 
 	this.socket = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-	this.socket:Connect(host, port)
+	this.socket:connect(host, port)
 	this.host = host
 	this.port = port
 
-	this.socket:SetBlocking(false)
+	this.socket:setBlocking(false)
 
 	return setmetatable(this, TcpClientNonBlocking)
 end
@@ -197,7 +197,7 @@ function TcpClientNonBlocking._fromConnectedSocket(
 	this.host = host
 	this.port = port
 
-	this.socket:SetBlocking(false)
+	this.socket:setBlocking(false)
 
 	return setmetatable(this, TcpClientNonBlocking)
 end
@@ -208,7 +208,7 @@ end
 	@param data string | buffer -- The data to send. Strings are converted to buffers automatically.
 	@return boolean -- `true` if all data was sent, `false` if the socket would block.
 ]=]
-function TcpClientNonBlocking.Write(self: TcpClientNonBlocking, data: string | buffer): boolean
+function TcpClientNonBlocking.write(self: TcpClientNonBlocking, data: string | buffer): boolean
 	if typeof(data) == "string" then
 		return self.socket:sendall(buffer.fromstring(data))
 	else
@@ -224,13 +224,13 @@ end
 	@error Throws if the server closed the connection.
 
 	```luau
-	local data = client:Read(1024)
+	local data = client:read(1024)
 	if data then
 		print("Got:", buffer.tostring(data))
 	end
 	```
 ]=]
-function TcpClientNonBlocking.Read(self: TcpClientNonBlocking, bytes: number): buffer?
+function TcpClientNonBlocking.read(self: TcpClientNonBlocking, bytes: number): buffer?
 	local ret = self.socket:recv(bytes)
 	if not ret then
 		return nil
@@ -244,7 +244,7 @@ end
 --[=[
 	Closes the connection and releases the underlying socket.
 ]=]
-function TcpClientNonBlocking.Close(self: TcpClientNonBlocking): ()
+function TcpClientNonBlocking.close(self: TcpClientNonBlocking): ()
 	self.socket:close()
 end
 
@@ -259,14 +259,14 @@ end
 	```luau
 	local server = TcpServer.new("0.0.0.0", 8080)
 
-	server.onClient:Connect(function(client)
-		local request = client:Read(4096)
-		client:Write("HTTP/1.0 200 OK\r\n\r\nHello!")
-		client:Close()
+	server.onClient:connect(function(client)
+		local request = client:read(4096)
+		client:write("HTTP/1.0 200 OK\r\n\r\nHello!")
+		client:close()
 	end)
 
 	-- Later, to shut down:
-	server:StopListening()
+	server:stopListening()
 	```
 ]=]
 local TcpServer = {}
@@ -301,15 +301,15 @@ function TcpServer.new(host: string, port: number, backlog: number?): TcpServer
 	this.host = host
 	this.port = port
 
-	this.socket:SetBlocking(true)
-	this.socket:Bind(host, port)
-	this.socket:Listen(backlog)
+	this.socket:setBlocking(true)
+	this.socket:bind(host, port)
+	this.socket:listen(backlog)
 
 	this._listening = true
 
 	task.spawn(function()
 		while this._listening do
-			local ok, client, clientHost, clientPort = pcall(this.socket.Accept :: any, this.socket)
+			local ok, client, clientHost, clientPort = pcall(this.socket.accept :: any, this.socket)
 			if not ok then
 				-- Odds are our error is because we stopped listening
 				if not this._listening then
@@ -327,9 +327,9 @@ function TcpServer.new(host: string, port: number, backlog: number?): TcpServer
 			-- We're always blocking
 			assert(client and clientHost and clientPort)
 
-			if not this.onClient:Fire(TcpClient._fromConnectedSocket(client, clientHost, clientPort)) then
+			if not this.onClient:fire(TcpClient._fromConnectedSocket(client, clientHost, clientPort)) then
 				-- If there wasn't anyone to handle this connection, close it straight away!
-				(client :: _socket.Socket):Close()
+				(client :: _socket.Socket):close()
 			end
 		end
 	end)
@@ -339,13 +339,13 @@ end
 
 --- Stops the server from accepting new connections. Closes the listening
 --- socket, which causes the background accept loop to exit cleanly.
-function TcpServer.StopListening(self: TcpServer)
+function TcpServer.stopListening(self: TcpServer)
 	self._listening = false
-	self.socket:Close()
+	self.socket:close()
 end
 
 net.TcpClient = TcpClient
 net.TcpClientNonBlocking = TcpClientNonBlocking
 net.TcpServer = TcpServer
 
-return net
+return table.freeze(net)

@@ -17,17 +17,17 @@
 	**Client - persistent connection:**
 	```luau
 	local conn = http.HttpConnection.new("example.com", 80)
-	conn:Request("GET", "/")
-	local resp = conn:GetResponse()
-	conn:Close()
+	conn:request("GET", "/")
+	local resp = conn:getResponse()
+	conn:close()
 	```
 
 	**Server:**
 	```luau
 	local server = http.createServer(function(req, res)
-	    res:Send(200, "Hello, world!")
+	    res:send(200, "Hello, world!")
 	end, { port = 8080 })
-	server:Listen(function(host, port)
+	server:listen(function(host, port)
 	    print("Listening on " .. host .. ":" .. tostring(port))
 	end)
 	```
@@ -37,7 +37,7 @@
 	local ssl  = require("@eryx/_ssl")
 	local ctx  = ssl.create_server_context("cert.pem", "key.pem")
 	local server = http.createServer(handler, { port = 443, sslCtx = ctx })
-	server:Listen()
+	server:listen()
 	```
 ]=]
 
@@ -125,7 +125,7 @@ end
 -- ───────────────────────────────────────────────────────────────────────────
 
 --[=[
-	A completed HTTP response returned by [[HttpConnection.GetResponse]]
+	A completed HTTP response returned by [[HttpConnection.getResponse]]
 	and the convenience request functions.
 ]=]
 export type HttpResponse = {
@@ -148,10 +148,10 @@ export type HttpResponse = {
 
 	```luau
 	local conn = http.HttpConnection.new("example.com", 443, nil, "https")
-	conn:Request("GET", "/")
-	local resp = conn:GetResponse()
+	conn:request("GET", "/")
+	local resp = conn:getResponse()
 	print(resp.status, resp.body)
-	conn:Close()
+	conn:close()
 	```
 ]=]
 local HttpConnection = {}
@@ -173,7 +173,7 @@ export type HttpConnection = typeof(setmetatable({} :: HttpConnectionFields, Htt
 	Creates a new [[HttpConnection]] to the given host.
 
 	The connection is not established until the first request is sent
-	(or [[HttpConnection.Connect]] is called explicitly).
+	(or [[HttpConnection.connect]] is called explicitly).
 
 	@param host The remote hostname or IP address.
 	@param port The remote port number. Defaults to 80 for HTTP, 443 for HTTPS.
@@ -211,25 +211,25 @@ end
 	This is called automatically on the first request, so you rarely
 	need to call it directly.
 ]=]
-function HttpConnection.Connect(self: HttpConnection)
+function HttpConnection.connect(self: HttpConnection)
 	if self._sock then
 		return
 	end
 
 	local sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
 	if self.timeout then
-		sock:SetTimeout(self.timeout)
+		sock:setTimeout(self.timeout)
 	end
-	sock:SetSockOpt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, true)
-	sock:Connect(self.host, self.port)
+	sock:setSockOpt(_socket.IPPROTO_TCP, _socket.TCP_NODELAY, true)
+	sock:connect(self.host, self.port)
 
 	if self._scheme == "https" then
 		-- Wrap the raw TCP socket with TLS
 		local ctx = _ssl.createDefaultContext()
 		if not self._verifySsl then
-			ctx:SetVerify(_ssl.VERIFY_NONE)
+			ctx:setVerify(_ssl.VERIFY_NONE)
 		end
-		local ssock = ctx:WrapSocket(sock, self.host)
+		local ssock = ctx:wrapSocket(sock, self.host)
 		self._sock = ssock
 	else
 		self._sock = sock
@@ -240,12 +240,12 @@ end
 --[=[
 	Closes the connection and releases associated resources.
 
-	It is safe to call `Close` multiple times.
+	It is safe to call `close` multiple times.
 ]=]
-function HttpConnection.Close(self: HttpConnection)
+function HttpConnection.close(self: HttpConnection)
 	if self._sock then
 		pcall(function()
-			(self._sock :: any):Close()
+			(self._sock :: any):close()
 		end)
 		self._sock = nil
 		self._leftover = ""
@@ -263,7 +263,7 @@ end
 	@param headers Optional table of request headers.
 	@param body Optional request body string.
 ]=]
-function HttpConnection.Request(
+function HttpConnection.request(
 	self: HttpConnection,
 	method: string,
 	path: string,
@@ -272,7 +272,7 @@ function HttpConnection.Request(
 )
 	-- Auto-connect if not already connected
 	if not self._sock then
-		self:Connect()
+		self:connect()
 	end
 
 	-- Build header block
@@ -312,16 +312,17 @@ function HttpConnection.Request(
 
 	local request_str = table.concat(lines)
 	local sock = self._sock :: any
-	sock:SendAll(strToBuf(request_str))
+	sock:sendAll(strToBuf(request_str))
 
 	-- Send body if present
 	if body and #body > 0 then
-		sock:SendAll(strToBuf(body))
+		sock:sendAll(strToBuf(body))
 	end
 end
 
---- Internal: read from socket, respecting leftover from previous over-reads
-function HttpConnection._RecvUntil(self: HttpConnection, delim: string): (string, string)
+--- @private
+--- read from socket, respecting leftover from previous over-reads
+function HttpConnection._recvUntil(self: HttpConnection, delim: string): (string, string)
 	local accumulated = self._leftover
 	self._leftover = ""
 
@@ -335,7 +336,7 @@ function HttpConnection._RecvUntil(self: HttpConnection, delim: string): (string
 
 	local sock = self._sock :: any
 	while true do
-		local ok, chunk = pcall(sock.Recv, sock, 8192)
+		local ok, chunk = pcall(sock.recv, sock, 8192)
 		if not ok then
 			if typeof(chunk) == "Exception" and chunk.type == "interrupt" then
 				error(chunk)
@@ -357,15 +358,16 @@ function HttpConnection._RecvUntil(self: HttpConnection, delim: string): (string
 	return accumulated, ""
 end
 
---- Internal: read exactly n bytes, respecting leftover
-function HttpConnection._RecvExact(self: HttpConnection, n: number): string
+--- @private
+--- read exactly n bytes, respecting leftover
+function HttpConnection._recvExact(self: HttpConnection, n: number): string
 	local accumulated = self._leftover
 	self._leftover = ""
 
 	local sock = self._sock :: any
 	while #accumulated < n do
 		local remaining = n - #accumulated
-		local ok, chunk = pcall(sock.Recv, sock, remaining)
+		local ok, chunk = pcall(sock.recv, sock, remaining)
 		if not ok then
 			if typeof(chunk) == "Exception" and chunk.type == "interrupt" then
 				error(chunk)
@@ -386,8 +388,9 @@ function HttpConnection._RecvExact(self: HttpConnection, n: number): string
 	return accumulated
 end
 
---- Internal: read until connection closes, respecting leftover
-function HttpConnection._RecvAll(self: HttpConnection): string
+--- @private
+--- read until connection closes, respecting leftover
+function HttpConnection._recvAll(self: HttpConnection): string
 	local parts: { string } = {}
 	if #self._leftover > 0 then
 		table.insert(parts, self._leftover)
@@ -396,7 +399,7 @@ function HttpConnection._RecvAll(self: HttpConnection): string
 
 	local sock = self._sock :: any
 	while true do
-		local ok, chunk = pcall(sock.Recv, sock, 65536)
+		local ok, chunk = pcall(sock.recv, sock, 65536)
 		if not ok then
 			if typeof(chunk) == "Exception" and chunk.type == "interrupt" then
 				error(chunk)
@@ -412,13 +415,14 @@ function HttpConnection._RecvAll(self: HttpConnection): string
 	return table.concat(parts)
 end
 
---- Internal: read chunked transfer-encoding body
-function HttpConnection._RecvChunked(self: HttpConnection): string
+--- @private
+--- read chunked transfer-encoding body
+function HttpConnection._recvChunked(self: HttpConnection): string
 	local parts: { string } = {}
 
 	while true do
 		-- Read chunk size line
-		local size_line = self:_RecvUntil("\r\n")
+		local size_line = self:_recvUntil("\r\n")
 		-- Strip the delimiter
 		size_line = string.gsub(size_line, "\r\n$", "")
 		-- Chunk size may have extensions after a semicolon
@@ -430,23 +434,23 @@ function HttpConnection._RecvChunked(self: HttpConnection): string
 		local chunk_size = tonumber(size_str, 16)
 		if not chunk_size or chunk_size == 0 then
 			-- Terminal chunk - read trailing \r\n
-			self:_RecvUntil("\r\n")
+			self:_recvUntil("\r\n")
 			break
 		end
 
 		-- Read exactly chunk_size bytes + trailing \r\n
-		local data = self:_RecvExact(chunk_size)
+		local data = self:_recvExact(chunk_size)
 		table.insert(parts, data)
 		-- Consume trailing \r\n after chunk data
-		self:_RecvExact(2)
+		self:_recvExact(2)
 	end
 
 	return table.concat(parts)
 end
 
-function HttpConnection.GetResponse(self: HttpConnection): HttpResponse
+function HttpConnection.getResponse(self: HttpConnection): HttpResponse
 	-- Read the status line + all headers (terminated by \r\n\r\n)
-	local head_raw = self:_RecvUntil("\r\n\r\n")
+	local head_raw = self:_recvUntil("\r\n\r\n")
 
 	if #head_raw == 0 then
 		error("Connection closed before receiving HTTP response")
@@ -476,11 +480,11 @@ function HttpConnection.GetResponse(self: HttpConnection): HttpResponse
 	local cl = headers["content-length"]
 
 	if te and string.find(string.lower(te), "chunked", 1, true) then
-		body = self:_RecvChunked()
+		body = self:_recvChunked()
 	elseif cl then
 		local content_length = tonumber(cl)
 		if content_length and content_length > 0 then
-			body = self:_RecvExact(content_length)
+			body = self:_recvExact(content_length)
 		else
 			body = ""
 		end
@@ -488,7 +492,7 @@ function HttpConnection.GetResponse(self: HttpConnection): HttpResponse
 		-- No content-length and not chunked - read until close
 		-- (for responses that have a body)
 		if status_code >= 200 and status_code ~= 204 and status_code ~= 304 then
-			body = self:_RecvAll()
+			body = self:_recvAll()
 		else
 			body = ""
 		end
@@ -497,7 +501,7 @@ function HttpConnection.GetResponse(self: HttpConnection): HttpResponse
 	-- If Connection: close, shut down the socket
 	local conn_header = headers["connection"]
 	if conn_header and string.lower(conn_header) == "close" then
-		self:Close()
+		self:close()
 	end
 
 	return {
@@ -596,15 +600,15 @@ export type ServerRequest = {
 
 	**One-shot:**
 	```luau
-	res:Send(200, "Hello!")
+	res:send(200, "Hello!")
 	```
 
 	**Streaming:**
 	```luau
-	res:Status(200):Header("content-type", "text/plain")
-	res:Write("chunk 1")
-	res:Write("chunk 2")
-	res:Finish()
+	res:status(200):header("content-type", "text/plain")
+	res:write("chunk 1")
+	res:write("chunk 2")
+	res:finish()
 	```
 ]=]
 local ServerResponse = {}
@@ -614,6 +618,7 @@ type ServerResponseFields = {
 	_sock: any, -- the accepted client socket (or SSLSocket)
 	_headersSent: boolean,
 	_finished: boolean,
+	_upgraded: boolean, -- true when the connection has been upgraded (e.g. WebSocket); prevents socket cleanup
 	_status: number,
 	_reason: string,
 	_headers: { [string]: string },
@@ -627,6 +632,7 @@ function ServerResponse._new(sock: any): ServerResponse
 		_sock = sock,
 		_headersSent = false,
 		_finished = false,
+		_upgraded = false,
 		_status = 200,
 		_reason = "OK",
 		_headers = {} :: { [string]: string },
@@ -637,14 +643,14 @@ end
 --[=[
 	Sets the HTTP status code and optional reason phrase.
 
-	Must be called before [[ServerResponse.Write]] or [[ServerResponse.Finish]].
+	Must be called before [[ServerResponse.write]] or [[ServerResponse.finish]].
 	Returns `self` for chaining.
 
 	@param code The HTTP status code (e.g. `200`, `404`).
 	@param reason Custom reason phrase. Defaults to the standard phrase for the code.
 	@return ServerResponse -- Self, for method chaining.
 ]=]
-function ServerResponse.Status(self: ServerResponse, code: number, reason: string?): ServerResponse
+function ServerResponse.status(self: ServerResponse, code: number, reason: string?): ServerResponse
 	assert(not self._headersSent, "Cannot set status after headers have been sent")
 	self._status = code
 	self._reason = reason or _reasonFor(code)
@@ -654,14 +660,14 @@ end
 --[=[
 	Sets a single response header.
 
-	Must be called before [[ServerResponse.Write]] or [[ServerResponse.Finish]].
+	Must be called before [[ServerResponse.write]] or [[ServerResponse.finish]].
 	Returns `self` for chaining.
 
 	@param name The header name (case-insensitive).
 	@param value The header value.
 	@return ServerResponse -- Self, for method chaining.
 ]=]
-function ServerResponse.Header(self: ServerResponse, name: string, value: string): ServerResponse
+function ServerResponse.header(self: ServerResponse, name: string, value: string): ServerResponse
 	assert(not self._headersSent, "Cannot set headers after headers have been sent")
 	self._headers[string.lower(name)] = value
 	return self
@@ -670,13 +676,13 @@ end
 --[=[
 	Sets multiple response headers at once.
 
-	Must be called before [[ServerResponse.Write]] or [[ServerResponse.Finish]].
+	Must be called before [[ServerResponse.write]] or [[ServerResponse.finish]].
 	Returns `self` for chaining.
 
 	@param hdrs A table of header name/value pairs.
 	@return ServerResponse -- Self, for method chaining.
 ]=]
-function ServerResponse.Headers(self: ServerResponse, hdrs: { [string]: string }): ServerResponse
+function ServerResponse.headers(self: ServerResponse, hdrs: { [string]: string }): ServerResponse
 	assert(not self._headersSent, "Cannot set headers after headers have been sent")
 	for k, v in hdrs do
 		self._headers[string.lower(k)] = v
@@ -684,15 +690,16 @@ function ServerResponse.Headers(self: ServerResponse, hdrs: { [string]: string }
 	return self
 end
 
---- Internal: flush the status line + headers to the socket.
-function ServerResponse._SendHead(self: ServerResponse)
+--- @private
+--- flush the status line + headers to the socket.
+function ServerResponse._sendHead(self: ServerResponse)
 	if self._headersSent then
 		return
 	end
 	self._headersSent = true
 
 	-- If no content-length was set, use chunked transfer-encoding so
-	-- the caller can stream multiple Write() calls.
+	-- the caller can stream multiple write() calls.
 
 	local cl = self._headers["content-length"]
 	local te = self._headers["transfer-encoding"]
@@ -715,7 +722,7 @@ function ServerResponse._SendHead(self: ServerResponse)
 	end
 	table.insert(lines, "\r\n")
 
-	self._sock:SendAll(strToBuf(table.concat(lines)))
+	self._sock:sendAll(strToBuf(table.concat(lines)))
 end
 
 --[=[
@@ -728,9 +735,9 @@ end
 	@param data The body chunk to send.
 	@return ServerResponse -- Self, for method chaining.
 ]=]
-function ServerResponse.Write(self: ServerResponse, data: string): ServerResponse
+function ServerResponse.write(self: ServerResponse, data: string): ServerResponse
 	assert(not self._finished, "Cannot write after response is finished")
-	self:_SendHead()
+	self:_sendHead()
 
 	if #data == 0 then
 		return self
@@ -739,9 +746,9 @@ function ServerResponse.Write(self: ServerResponse, data: string): ServerRespons
 	if self._chunked then
 		-- Chunked encoding: size in hex + CRLF + data + CRLF
 		local chunk = string.format("%x\r\n", #data) .. data .. "\r\n"
-		self._sock:SendAll(strToBuf(chunk))
+		self._sock:sendAll(strToBuf(chunk))
 	else
-		self._sock:SendAll(strToBuf(data))
+		self._sock:sendAll(strToBuf(data))
 	end
 	return self
 end
@@ -751,11 +758,11 @@ end
 
 	Sends the terminating chunk if chunked transfer-encoding is active.
 	If `body` is provided, it is a shorthand for
-	`Write(body)` followed by `Finish()`.
+	`write(body)` followed by `finish()`.
 
 	@param body Optional final body to send before finishing.
 ]=]
-function ServerResponse.Finish(self: ServerResponse, body: string?)
+function ServerResponse.finish(self: ServerResponse, body: string?)
 	if self._finished then
 		return
 	end
@@ -766,14 +773,14 @@ function ServerResponse.Finish(self: ServerResponse, body: string?)
 		if not self._headersSent and not self._headers["content-length"] then
 			self._headers["content-length"] = tostring(#body)
 		end
-		self:Write(body)
+		self:write(body)
 	else
-		self:_SendHead()
+		self:_sendHead()
 	end
 
 	if self._chunked then
 		-- Send terminal chunk
-		self._sock:SendAll(strToBuf("0\r\n\r\n"))
+		self._sock:sendAll(strToBuf("0\r\n\r\n"))
 	end
 
 	self._finished = true
@@ -788,12 +795,12 @@ end
 	@param body The response body string.
 	@param hdrs Optional response headers.
 ]=]
-function ServerResponse.Send(self: ServerResponse, statusCode: number, body: string?, hdrs: { [string]: string }?)
-	self:Status(statusCode)
+function ServerResponse.send(self: ServerResponse, statusCode: number, body: string?, hdrs: { [string]: string }?)
+	self:status(statusCode)
 	if hdrs then
-		self:Headers(hdrs)
+		self:headers(hdrs)
 	end
-	self:Finish(body or "")
+	self:finish(body or "")
 end
 
 --[=[
@@ -803,10 +810,10 @@ end
 	@param statusCode The HTTP status code.
 	@param data The JSON string to send as the body.
 ]=]
-function ServerResponse.Json(self: ServerResponse, statusCode: number, data: string)
-	self:Status(statusCode)
-	self:Header("content-type", "application/json")
-	self:Finish(data)
+function ServerResponse.json(self: ServerResponse, statusCode: number, data: string)
+	self:status(statusCode)
+	self:header("content-type", "application/json")
+	self:finish(data)
 end
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -816,16 +823,16 @@ end
 --[=[
 	A single-threaded HTTP (or HTTPS) server.
 
-	Create one with [[createServer]], then call [[HttpServer.Listen]] to
+	Create one with [[createServer]], then call [[HttpServer.listen]] to
 	start accepting connections. Provide an `sslCtx` in the options
 	to enable HTTPS.
 
 	```luau
 	local server = http.createServer(function(req, res)
 	    print(req.method, req.path)
-	    res:Send(200, "OK")
+	    res:send(200, "OK")
 	end, { port = 8080 })
-	server:Listen()
+	server:kisten()
 	```
 ]=]
 local HttpServer = {}
@@ -887,17 +894,17 @@ end
 --[=[
 	Starts listening for connections and serves requests.
 
-	This call **blocks** until [[HttpServer.Close]] is called or the process
+	This call **blocks** until [[HttpServer.close]] is called or the process
 	is interrupted. The optional callback is invoked once the socket is
 	bound and ready to accept connections.
 
 	@param callback Called with `(host, port)` when the server is ready.
 ]=]
-function HttpServer.Listen(self: HttpServer, callback: ((host: string, port: number) -> ())?): never
+function HttpServer.listen(self: HttpServer, callback: ((host: string, port: number) -> ())?): never
 	local sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-	sock:SetSockOpt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, true)
-	sock:Bind(self._host, self._port)
-	sock:Listen(self._backlog)
+	sock:setSockOpt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, true)
+	sock:bind(self._host, self._port)
+	sock:listen(self._backlog)
 	self._sock = sock
 	self._running = true
 
@@ -906,12 +913,12 @@ function HttpServer.Listen(self: HttpServer, callback: ((host: string, port: num
 	end
 
 	while self._running do
-		local accept_ok, client_or_err, addr, port = pcall(sock.Accept, sock)
+		local accept_ok, client_or_err, addr, port = pcall(sock.accept, sock)
 		if not accept_ok then
 			-- If the error is "interrupted" (Ctrl+C), let it propagate
 
 			if typeof(client_or_err) == "Exception" and client_or_err.type == "interrupt" then
-				self:Close()
+				self:close()
 				error(client_or_err)
 			end
 			if self._running then
@@ -925,16 +932,16 @@ function HttpServer.Listen(self: HttpServer, callback: ((host: string, port: num
 		local remotePort = port or 0
 
 		-- Apply per-client receive timeout so a slow sender can't block the server indefinitely.
-		client_sock:SetTimeout(self._clientTimeout)
+		client_sock:setTimeout(self._clientTimeout)
 
 		-- Optional TLS handshake
 		if self._sslCtx then
 			local wrap_ok, ssl_sock = pcall(function()
-				return self._sslCtx:WrapSocket(client_sock)
+				return self._sslCtx:wrapSocket(client_sock)
 			end)
 			if not wrap_ok then
 				pcall(function()
-					client_sock:Close()
+					client_sock:close()
 				end)
 				continue
 			end
@@ -943,40 +950,44 @@ function HttpServer.Listen(self: HttpServer, callback: ((host: string, port: num
 
 		-- Handle the connection in a protected call so one bad request
 		-- can't crash the server.
+		local upgraded = false
 		local ok, err = pcall(function()
-			self:_HandleConnection(client_sock, remoteAddr, remotePort)
+			upgraded = self:_handleConnection(client_sock, remoteAddr, remotePort)
 		end)
 		if not ok then
 			local msg = tostring(err)
 			if string.find(msg, "interrupt", 1, true) then
 				pcall(function()
-					client_sock:Close()
+					client_sock:close()
 				end)
-				self:Close()
+				self:close()
 				error(err)
 			end
 			print("request handler error: " .. msg)
 		end
 
-		-- Ensure the socket is always closed
-		pcall(function()
-			client_sock:Close()
-		end)
+		-- Ensure the socket is always closed, unless the connection was
+		-- upgraded (e.g. to WebSocket) - the new owner manages the socket.
+		if not upgraded then
+			pcall(function()
+				client_sock:close()
+			end)
+		end
 	end
 
 	-- Unreachable in normal operation but typed as `never` for the loop.
 	-- If stop() breaks us out we still clean up.
-	self:Close()
+	self:close()
 	return nil :: never
 end
 
 --- Parse an incoming HTTP request from a client socket.
 --- Returns nil if the connection was closed before a full request arrived.
-function HttpServer._ReadRequest(self: HttpServer, sock: any, remoteAddr: string, remotePort: number): ServerRequest?
+function HttpServer._readRequest(self: HttpServer, sock: any, remoteAddr: string, remotePort: number): ServerRequest?
 	-- Read until we find the end of headers
 	local buf = ""
 	while true do
-		local ok, chunk = pcall(sock.Recv, sock, 8192)
+		local ok, chunk = pcall(sock.recv, sock, 8192)
 		if not ok then
 			if typeof(chunk) == "Exception" and chunk.type == "interrupt" then
 				error(chunk)
@@ -1024,7 +1035,7 @@ function HttpServer._ReadRequest(self: HttpServer, sock: any, remoteAddr: string
 		local content_length = tonumber(cl) or 0
 		while #body < content_length do
 			local remaining = content_length - #body
-			local ok, chunk = pcall(sock.Recv, sock, remaining)
+			local ok, chunk = pcall(sock.recv, sock, remaining)
 			if not ok then
 				if typeof(chunk) == "Exception" and chunk.type == "interrupt" then
 					error(chunk)
@@ -1050,10 +1061,10 @@ function HttpServer._ReadRequest(self: HttpServer, sock: any, remoteAddr: string
 	}
 end
 
-function HttpServer._HandleConnection(self: HttpServer, client_sock: any, remoteAddr: string, remotePort: number)
-	local request = self:_ReadRequest(client_sock, remoteAddr, remotePort)
+function HttpServer._handleConnection(self: HttpServer, client_sock: any, remoteAddr: string, remotePort: number): boolean
+	local request = self:_readRequest(client_sock, remoteAddr, remotePort)
 	if not request then
-		return
+		return false
 	end
 
 	local response = ServerResponse._new(client_sock)
@@ -1063,21 +1074,25 @@ function HttpServer._HandleConnection(self: HttpServer, client_sock: any, remote
 
 	-- If the handler didn't call finish(), do it now.
 	if not response._finished then
-		response:Finish()
+		response:finish()
 	end
+
+	-- Return whether the connection was upgraded (e.g. to WebSocket).
+	-- When true, the caller must NOT close the socket.
+	return response._upgraded
 end
 
 --[=[
 	Stops the server by closing the listening socket.
 
-	This unblocks the [[HttpServer.Listen]] call, allowing the server
+	This unblocks the [[HttpServer.listen]] call, allowing the server
 	loop to exit cleanly.
 ]=]
-function HttpServer.Close(self: HttpServer)
+function HttpServer.close(self: HttpServer)
 	self._running = false
 	if self._sock then
 		pcall(function()
-			(self._sock :: any):Close()
+			(self._sock :: any):close()
 		end)
 		self._sock = nil
 	end
@@ -1092,15 +1107,15 @@ http.ServerResponse = ServerResponse
 --[=[
 	Creates and returns a new [[HttpServer]] with the given request handler.
 
-	Call [[HttpServer.Listen]] on the returned server to start accepting
+	Call [[HttpServer.listen]] on the returned server to start accepting
 	connections.
 
 	```luau
 	local server = http.createServer(function(req, res)
 	    print(req.method, req.path)
-	    res:Send(200, "Hello, world!")
+	    res:send(200, "Hello, world!")
 	end)
-	server:Listen(function(host, port)
+	server:listen(function(host, port)
 	    print("Listening on " .. host .. ":" .. tostring(port))
 	end)
 	```
@@ -1141,10 +1156,10 @@ function http.request(method: string, url: string, options: RequestOptions?): Ht
 	local opts: RequestOptions = options or {}
 	local conn = HttpConnection.new(parsed_url.host, parsed_url.port, opts.timeout, parsed_url.scheme, opts.verifySsl)
 	local ok, result = pcall(function()
-		conn:Request(method, parsed_url.path, opts.headers, opts.body)
-		return conn:GetResponse()
+		conn:request(method, parsed_url.path, opts.headers, opts.body)
+		return conn:getResponse()
 	end)
-	conn:Close()
+	conn:close()
 
 	if not ok then
 		error(result :: any)
@@ -1215,4 +1230,4 @@ function http.head(url: string, options: RequestOptions?): HttpResponse
 	return http.request("HEAD", url, options)
 end
 
-return http
+return table.freeze(http)

@@ -69,4 +69,4 @@ end
 function vfs.setIsolated(isolated: boolean)
 end
 
-return vfs
+return table.freeze(vfs)

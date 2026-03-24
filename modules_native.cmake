@@ -113,7 +113,7 @@ add_luau_module(luau src/modules/luau.cpp src/modules/luau.luau
 add_luau_module(date src/modules/date.cpp src/modules/date.luau)
 
 if(ERYX_USE_XML)
-    add_luau_module(xml src/modules/xml.cpp src/modules/xml.luau
+    add_luau_module(xml src/modules/encoding/xml.cpp src/modules/encoding/xml.luau
         EXTRA_LIBS pugixml
         EXTRA_INCLUDES "${VENDOR_DIR}"
     )
@@ -141,6 +141,47 @@ add_luau_module(stdio src/modules/stdio.cpp src/modules/stdio.luau
 add_luau_module(exception src/modules/exception.cpp src/modules/exception.luau)
 add_luau_module(fs src/modules/fs.cpp src/modules/fs.luau)
 add_luau_module(vfs src/modules/vfs.cpp src/modules/vfs.luau)
+add_luau_module(_fs_watch src/modules/_fs_watch.cpp src/modules/_fs_watch.luau
+    EXTRA_LIBS uv_a
+)
+add_luau_module(image src/modules/image.cpp src/modules/image.luau
+    EXTRA_INCLUDES "${VENDOR_DIR}/stb"  # for stb_image.h
+)
+
+if(ERYX_USE_PCRE2)
+    add_luau_module(regex src/modules/regex.cpp src/modules/regex.luau
+        EXTRA_LIBS pcre2-8-static
+        EXTRA_INCLUDES "${PCRE2_DIR}/src" "${CMAKE_BINARY_DIR}/vendor/pcre2"
+    )
+endif()
+
+# -- WebView module
+# On windows, we're going to need to pull WebView2 down with nuget
+add_luau_module(webview src/modules/webview.cpp src/modules/webview.luau)
+
+set(NUGET_EXE ${CMAKE_BINARY_DIR}/nuget.exe)
+if(NOT EXISTS ${NUGET_EXE})
+    file(DOWNLOAD
+        https://dist.nuget.org/win-x86-commandline/latest/nuget.exe
+        ${NUGET_EXE}
+        SHOW_PROGRESS
+    )
+endif()
+execute_process(COMMAND ${NUGET_EXE} install "Microsoft.Web.WebView2" -Version 1.0.2592.51 -ExcludeVersion -OutputDirectory ${CMAKE_BINARY_DIR}/packages)
+execute_process(COMMAND ${NUGET_EXE} install "Microsoft.Windows.ImplementationLibrary" -Version 1.0.240122.1 -ExcludeVersion -OutputDirectory ${CMAKE_BINARY_DIR}/packages)
+
+set(WEBVIEW2_DIR ${CMAKE_BINARY_DIR}/packages/Microsoft.Web.WebView2)
+set(WIL_DIR ${CMAKE_BINARY_DIR}/packages/Microsoft.Windows.ImplementationLibrary)
+
+if(ERYX_EMBED_MODULES)
+target_include_directories(eryx PUBLIC ${WEBVIEW2_DIR}/build/native/include)
+target_include_directories(eryx PUBLIC ${WIL_DIR}/include)
+target_link_libraries(eryx PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
+else()
+target_include_directories(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/include)
+target_include_directories(mod_webview PUBLIC ${WIL_DIR}/include)
+target_link_libraries(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
+endif()
 
 # -- GFX module (SDL3 + WGPU + FreeType + miniaudio) -------------------------
 # This is a custom target rather than add_luau_module because it has many

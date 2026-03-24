@@ -347,9 +347,9 @@ LUAU_MODULE_EXPORT int luauopen_zip(lua_State* L) {
     luaL_newmetatable(L, ZIPREADER_MT);
 
     static const luaL_Reg reader_methods[] = {
-        {"List",  l_reader_list},
-        {"Read",  l_reader_read},
-        {"Close", l_reader_close},
+        {"list",  l_reader_list},
+        {"read",  l_reader_read},
+        {"close", l_reader_close},
         {nullptr, nullptr},
     };
     lua_newtable(L);

@@ -2,34 +2,34 @@ local base85 = require("@eryx/encoding/base85")
 local test = require("@eryx/test")
 local suite = test.Suite.new("base85")
 
-suite:Test("encode: empty", function()
-	test.expect(base85.encode(buffer.fromstring(""))):ToBe("")
+suite:test("encode: empty", function()
+	test.expect(base85.encode(buffer.fromstring(""))):toBe("")
 end)
 
-suite:Test("round-trip: 4 bytes", function()
+suite:test("round-trip: 4 bytes", function()
 	local data = "\x86\x4f\xd2\x6f"
 	local encoded = base85.encode(buffer.fromstring(data))
-	test.expect(#encoded):ToBe(5)
-	test.expect(buffer.tostring(base85.decode(encoded))):ToBe(data)
+	test.expect(#encoded):toBe(5)
+	test.expect(buffer.tostring(base85.decode(encoded))):toBe(data)
 end)
 
-suite:Test("round-trip: 8 bytes", function()
+suite:test("round-trip: 8 bytes", function()
 	local data = "abcdefgh"
 	local encoded = base85.encode(buffer.fromstring(data))
-	test.expect(#encoded):ToBe(10)
-	test.expect(buffer.tostring(base85.decode(encoded))):ToBe(data)
+	test.expect(#encoded):toBe(10)
+	test.expect(buffer.tostring(base85.decode(encoded))):toBe(data)
 end)
 
-suite:Test("encode: non-multiple-of-4 errors", function()
+suite:test("encode: non-multiple-of-4 errors", function()
 	test.expect(function()
 		base85.encode(buffer.fromstring("abc"))
-	end):ToError()
+	end):toError()
 end)
 
-suite:Test("decode: non-multiple-of-5 errors", function()
+suite:test("decode: non-multiple-of-5 errors", function()
 	test.expect(function()
 		base85.decode("abcd")
-	end):ToError()
+	end):toError()
 end)
 
 return suite

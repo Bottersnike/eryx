@@ -4,7 +4,7 @@
 	callbacks.
 
 	Handlers are invoked via `task.spawn`, so each callback runs in its own
-	coroutine. Disconnecting or connecting handlers during a `Fire` is safe —
+	coroutine. Disconnecting or connecting handlers during a `Fire` is safe -
 	the handler list is snapshotted before invocation.
 
 	```luau
@@ -12,21 +12,21 @@
 
 	local onDamage = Signal.new()
 
-	local conn = onDamage:Connect(function(amount)
+	local conn = onDamage:connect(function(amount)
 		print("Took " .. amount .. " damage!")
 	end)
 
-	onDamage:Fire(25)  --> "Took 25 damage!"
+	onDamage:fire(25)  --> "Took 25 damage!"
 
-	conn:Disconnect()
-	onDamage:Fire(10)  --> (nothing, handler was disconnected)
+	conn:disconnect()
+	onDamage:fire(10)  --> (nothing, handler was disconnected)
 	```
 ]=]
 local task = require("@eryx/task")
 
 --[=[
-	Represents a single subscription to a Signal. Created by `Signal:Connect`
-	or `Signal:Once`. Can be disconnected to stop receiving future events.
+	Represents a single subscription to a Signal. Created by `Signal:connect`
+	or `Signal:once`. Can be disconnected to stop receiving future events.
 ]=]
 local Connection = {}
 Connection.__index = Connection
@@ -36,19 +36,19 @@ export type Connection<T...> = setmetatable<{
 	_fn: (T...) -> (),
 	_next: Connection<T...>?,
 	_prev: Connection<T...>?,
-	read Connected: boolean,
+	read connected: boolean,
 }, typeof(Connection)>
 
 --[=[
 	Disconnects this connection from its signal. Future fires will no longer
-	invoke this connection's callback. Safe to call multiple times — subsequent
+	invoke this connection's callback. Safe to call multiple times - subsequent
 	calls are a no-op.
 ]=]
-function Connection.Disconnect<T...>(self: Connection<T...>)
-	if not self.Connected then
+function Connection.disconnect<T...>(self: Connection<T...>)
+	if not self.connected then
 		return
 	end
-	(self :: any).Connected = false
+	(self :: any).connected = false
 
 	local next = self._next
 	local prev = self._prev
@@ -106,17 +106,17 @@ end
 
 	```luau
 	local sig = Signal.new()
-	sig:Connect(function(msg) print(msg) end)
-	sig:Fire("hello") --> "hello", returns true
+	sig:connect(function(msg) print(msg) end)
+	sig:fire("hello") --> "hello", returns true
 	```
 ]=]
-function Signal.Fire<T...>(self: Signal<T...>, ...: T...): boolean
+function Signal.fire<T...>(self: Signal<T...>, ...: T...): boolean
 	-- Snapshot connected handlers so that disconnects during
 	-- callbacks cannot break traversal.
 	local handlers = {}
 	local node = self._head
 	while node do
-		if node.Connected then
+		if node.connected then
 			table.insert(handlers, node)
 		end
 		node = node._next
@@ -127,7 +127,7 @@ function Signal.Fire<T...>(self: Signal<T...>, ...: T...): boolean
 	end
 
 	for _, handler in handlers do
-		if handler.Connected then
+		if handler.connected then
 			task.spawn(handler._fn :: any, ...)
 		end
 	end
@@ -142,13 +142,13 @@ end
 
 	```luau
 	-- In a coroutine:
-	local damage = onDamage:Wait()
+	local damage = onDamage:wait()
 	print("Waited and received:", damage)
 	```
 ]=]
-function Signal.Wait<T...>(self: Signal<T...>): T...
+function Signal.wait<T...>(self: Signal<T...>): T...
 	local thread = coroutine.running()
-	self:Once(function(...)
+	self:once(function(...)
 		task.spawn(thread, ...)
 	end)
 	return coroutine.yield()
@@ -156,13 +156,13 @@ end
 
 --[=[
 	Disconnects all connections from this signal. All existing Connection
-	objects will have their `Connected` property set to `false`.
+	objects will have their `connected` property set to `false`.
 ]=]
-function Signal.DisconnectAll<T...>(self: Signal<T...>)
+function Signal.disconnectAll<T...>(self: Signal<T...>)
 	local node = self._head
 	while node do
 		local next = node._next;  -- Semicolon for disambiguation
-		(node :: any).Connected = false
+		(node :: any).connected = false
 		node._next = nil
 		node._prev = nil
 		node = next
@@ -178,20 +178,20 @@ end
 	@return Connection<T...> -- A connection that can be used to disconnect later.
 
 	```luau
-	local conn = signal:Connect(function(value)
+	local conn = signal:connect(function(value)
 		print("Got:", value)
 	end)
 	-- Later:
-	conn:Disconnect()
+	conn:disconnect()
 	```
 ]=]
-function Signal.Connect<T...>(self: Signal<T...>, callback: (T...) -> ()): Connection<T...>
+function Signal.connect<T...>(self: Signal<T...>, callback: (T...) -> ()): Connection<T...>
 	local node: Connection<T...> = setmetatable({
 		_signal = self,
 		_fn = callback,
 		_next = self._head,
 		_prev = nil :: Connection<T...>?,
-		Connected = true,
+		connected = true,
 	}, Connection)
 
 	if self._head then
@@ -210,20 +210,20 @@ end
 	@return Connection<T...> -- A connection that can be manually disconnected before it fires.
 
 	```luau
-	signal:Once(function(value)
+	signal:once(function(value)
 		print("Fired once with:", value)
 	end)
 	```
 ]=]
-function Signal.Once<T...>(self: Signal<T...>, callback: (T...) -> ()): Connection<T...>
+function Signal.once<T...>(self: Signal<T...>, callback: (T...) -> ()): Connection<T...>
 	local conn: Connection<T...>
-	conn = Signal.Connect(self, function(...)
-		if conn.Connected then
-			conn:Disconnect()
+	conn = Signal.connect(self, function(...)
+		if conn.connected then
+			conn:disconnect()
 			callback(...)
 		end
 	end)
 	return conn
 end
 
-return Signal
+return table.freeze(Signal)

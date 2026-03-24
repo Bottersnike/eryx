@@ -126,4 +126,4 @@ function pprint.pprint(val: any): ()
 	print(pprint.format(val))
 end
 
-return pprint
+return table.freeze(pprint)

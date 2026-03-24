@@ -5,6 +5,7 @@
 
 #include "../pch.hpp"
 #include "Luau/CodeGen.h"
+#include "Luau/ExperimentalFlags.h"
 #include "lua.h"
 #include "lualib.h"
 
@@ -63,3 +64,13 @@ ERYX_API int eryx_get_cliargs_argc();
 ERYX_API const char** eryx_get_cliargs_argv();
 
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename);
+
+// This function isn't going to be imported from our shared DLL, because
+// the compiler runs in individual threads, which each need their own
+// flags set!
+static void eryx_enable_all_luau_flags() {
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next) {
+        if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
+            flag->value = true;
+    }
+}

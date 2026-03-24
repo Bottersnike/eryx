@@ -6,7 +6,7 @@
 	local f = font.load("arial.ttf", 24)
 	```
 
-	The returned Font object has methods like :Measure(text) provided
+	The returned Font object has methods like :measure(text) provided
 	by the native metatable.
 ]=]
 

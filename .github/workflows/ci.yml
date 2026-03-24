@@ -70,3 +70,46 @@ jobs:
             build/EryxShared${{ runner.os == 'Windows' && '.dll' || '.so' }}
             build/modules/
           if-no-files-found: ignore
+
+  deploy-docs:
+    name: Deploy docs (Windows / standard)
+    runs-on: windows-latest
+    needs: build
+    # Only run this job on repository pushes or PRs after the build matrix completes.
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download Windows standard build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: eryx-standard-windows
+          path: artifact
+
+      - name: Show downloaded files
+        run: dir artifact
+
+      - name: Generate documentation
+        shell: pwsh
+        run: |
+          Write-Host "Running eryx doc from downloaded build"
+          Push-Location artifact
+          if (Test-Path .\build\eryx.exe) {
+            .\build\eryx.exe doc
+          } else {
+            Write-Error "eryx executable not found in artifact/build"
+            exit 1
+          }
+          Pop-Location
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v3
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: artifact/build-docs
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v1

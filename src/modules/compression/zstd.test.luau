@@ -7,40 +7,40 @@ local HELLO = buffer.fromstring("hello")
 local PANGRAM = buffer.fromstring("The quick brown fox jumps over the lazy dog")
 local REPEAT = buffer.fromstring(string.rep("abcdefgh", 100)) -- repetitive data compresses well
 
-suite:Test("round-trip: hello", function()
+suite:test("round-trip: hello", function()
 	local c = zstd.compress(HELLO)
-	test.expect(buffer.tostring(zstd.decompress(c))):ToBe("hello")
+	test.expect(buffer.tostring(zstd.decompress(c))):toBe("hello")
 end)
 
-suite:Test("round-trip: pangram", function()
+suite:test("round-trip: pangram", function()
 	local c = zstd.compress(PANGRAM)
-	test.expect(buffer.tostring(zstd.decompress(c))):ToBe(buffer.tostring(PANGRAM))
+	test.expect(buffer.tostring(zstd.decompress(c))):toBe(buffer.tostring(PANGRAM))
 end)
 
-suite:Test("compression reduces size for repetitive data", function()
+suite:test("compression reduces size for repetitive data", function()
 	local c = zstd.compress(REPEAT)
-	test.expect(buffer.len(c)):ToBeLessThan(buffer.len(REPEAT))
+	test.expect(buffer.len(c)):toBeLessThan(buffer.len(REPEAT))
 end)
 
-suite:Test("CLEVEL_MAX produces smaller output than CLEVEL_MIN for repetitive data", function()
+suite:test("CLEVEL_MAX produces smaller output than CLEVEL_MIN for repetitive data", function()
 	local fast = zstd.compress(REPEAT, zstd.CLEVEL_MIN)
 	local best = zstd.compress(REPEAT, zstd.CLEVEL_MAX)
 	-- both should decompress correctly regardless
-	test.expect(buffer.tostring(zstd.decompress(fast))):ToBe(buffer.tostring(REPEAT))
-	test.expect(buffer.tostring(zstd.decompress(best))):ToBe(buffer.tostring(REPEAT))
+	test.expect(buffer.tostring(zstd.decompress(fast))):toBe(buffer.tostring(REPEAT))
+	test.expect(buffer.tostring(zstd.decompress(best))):toBe(buffer.tostring(REPEAT))
 end)
 
-suite:Test("compressBound: returns value >= input length", function()
-	test.expect(zstd.compressBound(1000)):ToBeGreaterThanOrEqual(1000)
+suite:test("compressBound: returns value >= input length", function()
+	test.expect(zstd.compressBound(1000)):toBeGreaterThanOrEqual(1000)
 end)
 
-suite:Test("frameContentSize: returns decompressed size", function()
+suite:test("frameContentSize: returns decompressed size", function()
 	local c = zstd.compress(PANGRAM)
 	local sz = zstd.frameContentSize(c)
-	test.expect(sz):ToBe(buffer.len(PANGRAM))
+	test.expect(sz):toBe(buffer.len(PANGRAM))
 end)
 
-suite:Test("compressWithDict / decompressWithDict round-trip", function()
+suite:test("compressWithDict / decompressWithDict round-trip", function()
 	-- Train a tiny dictionary from similar samples
 	local samples = {}
 	for i = 1, 20 do
@@ -50,7 +50,7 @@ suite:Test("compressWithDict / decompressWithDict round-trip", function()
 	local data = buffer.fromstring('{"key1":"value1"}')
 	local c = zstd.compressWithDict(data, dict)
 	local d = zstd.decompressWithDict(c, dict)
-	test.expect(buffer.tostring(d)):ToBe('{"key1":"value1"}')
+	test.expect(buffer.tostring(d)):toBe('{"key1":"value1"}')
 end)
 
 return suite

@@ -82,6 +82,9 @@ end
 local function inlineNodeToHtml(node: parse.InlineNode, config: MarkdownRenderConfig): string
 	if node.type == "text" then
 		return htmlEscape(node.content)
+	elseif node.type == "html" then
+		-- Raw inline HTML is emitted verbatim (trusted by the source).
+		return node.content
 	elseif node.type == "code" then
 		return '<code class="md-code">' .. htmlEscape(node.content) .. "</code>"
 	elseif node.type == "bold" then
@@ -179,7 +182,7 @@ function html.blockNodeToHtml(node: parse.BlockNode, config: MarkdownRenderConfi
 			body = htmlEscape(node.content)
 		end
 		local open = if #node.lang > 0
-			then '<pre class="md-code_block"><code class="language-' .. node.lang .. '">'
+			then `<pre class="md-code_block language-{node.lang}"><code>`
 			else '<pre class="md-code_block"><code>'
 		return open .. body .. "</code></pre>"
 	elseif node.type == "hr" then

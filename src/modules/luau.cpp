@@ -381,6 +381,23 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         begin_node(L, "ExprFunction", e->location);
         push_name(L, e->debugname);
         lua_setfield(L, -2, "debugname");
+        // generics
+        if (e->generics.size > 0) {
+            lua_createtable(L, (int)e->generics.size, 0);
+            for (size_t i = 0; i < e->generics.size; i++) {
+                push_name(L, e->generics.data[i]->name);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "generics");
+        }
+        if (e->genericPacks.size > 0) {
+            lua_createtable(L, (int)e->genericPacks.size, 0);
+            for (size_t i = 0; i < e->genericPacks.size; i++) {
+                push_name(L, e->genericPacks.data[i]->name);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "genericPacks");
+        }
         // args
         lua_createtable(L, (int)e->args.size, 0);
         for (size_t i = 0; i < e->args.size; i++) {
@@ -864,6 +881,8 @@ static int l_load(lua_State* L) {
     const char* data = luaL_checklstring(L, 1, &dataLen);
     const char* chunkname = luaL_optstring(L, 2, "=load");
 
+    eryx_enable_all_luau_flags();
+
     std::string bytecode;
     bool isBytecode = (dataLen > 0 && (unsigned char)data[0] <= LBC_VERSION_MAX);
 
@@ -1026,5 +1045,6 @@ static const luaL_Reg funcs[] = {
 
 LUAU_MODULE_EXPORT int luauopen_luau(lua_State* L) {
     luaL_register(L, "luau", funcs);
+    lua_setreadonly(L, -1, true);
     return 1;
 }

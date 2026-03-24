@@ -472,7 +472,7 @@ static void stdout_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         if (pd->isExec) {
             pd->stdoutBuf.append(buf->base, nread);
         } else if (pd->stdoutReaderRef != LUA_NOREF) {
-            // A coroutine is waiting — resume it directly with this chunk
+            // A coroutine is waiting - resume it directly with this chunk
             resume_reader(pd, pd->stdoutReaderRef, buf->base, nread);
         } else {
             // Queue the chunk for later readStdout() calls
@@ -777,7 +777,7 @@ static int os_shell(lua_State* L) {
     pd->isExec = false;
     pd->isShell = true;
 
-    // We don't need pipes — inherit parent stdio
+    // We don't need pipes - inherit parent stdio
     uv_stdio_container_t stdio[3];
     stdio[0].flags = UV_INHERIT_FD;
     stdio[0].data.fd = 0;
@@ -1008,23 +1008,23 @@ static int process_gc(lua_State* L) {
 
 static void register_process_metatable(lua_State* L) {
     if (luaL_newmetatable(L, PROCESS_HANDLE_MT)) {
-        lua_pushcfunction(L, process_wait, "Wait");
-        lua_setfield(L, -2, "Wait");
+        lua_pushcfunction(L, process_wait, "wait");
+        lua_setfield(L, -2, "wait");
 
-        lua_pushcfunction(L, process_kill, "Kill");
-        lua_setfield(L, -2, "Kill");
+        lua_pushcfunction(L, process_kill, "kill");
+        lua_setfield(L, -2, "kill");
 
-        lua_pushcfunction(L, process_write, "Write");
-        lua_setfield(L, -2, "Write");
+        lua_pushcfunction(L, process_write, "write");
+        lua_setfield(L, -2, "write");
 
-        lua_pushcfunction(L, process_close_stdin, "CloseStdin");
-        lua_setfield(L, -2, "CloseStdin");
+        lua_pushcfunction(L, process_close_stdin, "closeStdin");
+        lua_setfield(L, -2, "closeStdin");
 
-        lua_pushcfunction(L, process_read_stdout, "ReadStdout");
-        lua_setfield(L, -2, "ReadStdout");
+        lua_pushcfunction(L, process_read_stdout, "readStdout");
+        lua_setfield(L, -2, "readStdout");
 
-        lua_pushcfunction(L, process_read_stderr, "ReadStderr");
-        lua_setfield(L, -2, "ReadStderr");
+        lua_pushcfunction(L, process_read_stderr, "readStderr");
+        lua_setfield(L, -2, "readStderr");
 
         lua_pushcfunction(L, process_index, "__index");
         lua_setfield(L, -2, "__index");
@@ -1128,5 +1128,6 @@ LUAU_MODULE_EXPORT int luauopen_os(lua_State* L) {
     lua_pushcfunction(L, os_spawn, "spawn");
     lua_setfield(L, -2, "spawn");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

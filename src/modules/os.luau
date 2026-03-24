@@ -23,23 +23,23 @@ export type ProcessHandle = {
 	--- Process return code, if it's exited
 	status: number?,
 	--- Wait for the process to complete
-	Wait: (self: ProcessHandle) -> ExecResult,
+	wait: (self: ProcessHandle) -> ExecResult,
 	--[=[
 		Kill the process
 		@param signal Optional signal to raise in process
 	]=]
-	Kill: (self: ProcessHandle, signal: number?) -> (),
+	kill: (self: ProcessHandle, signal: number?) -> (),
 	--[=[
 		Write data to the process' stdin
 		@param data Data to write
 	]=]
-	Write: (self: ProcessHandle, data: string) -> (),
+	write: (self: ProcessHandle, data: string) -> (),
 	--- Close the connecting to the process' stdin
-	CloseStdin: (self: ProcessHandle) -> (),
+	closeStdin: (self: ProcessHandle) -> (),
 	--- Read any data available on stdout
-	ReadStdout: (self: ProcessHandle) -> string?,
+	readStdout: (self: ProcessHandle) -> string?,
 	--- Read any data available on stderr
-	ReadStderr: (self: ProcessHandle) -> string?,
+	readStderr: (self: ProcessHandle) -> string?,
 }
 
 export type Platform = "windows" | "macos" | "linux" | nil
@@ -170,7 +170,7 @@ end
 
 	This function is equivalent to using:
 	```luau
-	os.spawn(...):Wait()
+	os.spawn(...):wait()
 	```
 
 	@param cmd string The process to spawn. Can be either a complete path, or a name to be resolve on the PATH
@@ -209,4 +209,4 @@ function os.shell(cmd: string, opts: SpawnOptions?): number
 	return nil :: any
 end
 
-return os
+return table.freeze(os)

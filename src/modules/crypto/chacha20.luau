@@ -83,7 +83,7 @@ end
 	@return buffer -- Ciphertext.
 	@return buffer -- 16-byte Poly1305 authentication tag.
 ]=]
-function chacha20.poly1305_encrypt(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
+function chacha20.encryptPoly1305(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
 	return _cc.poly1305_encrypt(key, nonce, data, aad)
 end
 
@@ -100,7 +100,7 @@ end
 	@param aad   Additional authenticated data (must match encryption).
 	@return buffer -- Plaintext.
 ]=]
-function chacha20.poly1305_decrypt(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
+function chacha20.decryptPoly1305(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
 	return _cc.poly1305_decrypt(key, nonce, ct, tag, aad)
 end
 

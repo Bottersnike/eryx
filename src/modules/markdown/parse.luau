@@ -42,6 +42,9 @@ export type TextNode = { type: "text", content: string }
 --- Inline code span (`` `code` ``).
 export type CodeNode = { type: "code", content: string }
 
+--- Raw inline HTML (`<span>...</span>`).
+export type HtmlNode = { type: "html", content: string }
+
 
 --- Bold text (`**...**` or `__...__`).
 export type BoldNode = { type: "bold", children: { InlineNode } }
@@ -72,6 +75,7 @@ export type WikiLinkNode = { type: "wiki_link", target: string, label: string }
 export type InlineNode =
 	TextNode
 	| CodeNode
+	| HtmlNode
 	| BoldNode
 	| ItalicNode
 	| BoldItalicNode
@@ -177,6 +181,8 @@ function parse.inlineText(nodes: { InlineNode }): string
 			table.insert(parts, n.content)
 		elseif n.type == "code" then
 			table.insert(parts, n.content)
+		elseif n.type == "html" then
+			table.insert(parts, n.content)
 		elseif n.type == "bold" then
 			table.insert(parts, parse.inlineText(n.children))
 		elseif n.type == "italic" then
@@ -275,6 +281,23 @@ local function parseInline(s: string, from: number, to: number): { InlineNode }
 				continue
 			end
 		end
+
+	-- ── Inline HTML: <tag ...> or <!-- comment -->; take raw until '>' ─
+	if ch == "<" then
+		local close = string.find(s, ">", pos, true)
+		if close and close <= to then
+			-- Heuristic: accept when it looks like a tag/comment/doctype
+			local after = string.sub(s, pos + 1, pos + 1)
+			if after:match("[A-Za-z!/\?]") then
+				pushText(nodes, s, seg, pos - 1)
+				local raw = string.sub(s, pos, close)
+				table.insert(nodes, { type = "html" :: "html", content = raw })
+				pos = close + 1
+				seg = pos
+				continue
+			end
+		end
+	end
 
 		-- ── Bold+italic: *** or ___ ───────────────────────────────────
 		if three == "***" or three == "___" then

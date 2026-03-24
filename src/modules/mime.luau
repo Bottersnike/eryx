@@ -196,7 +196,7 @@ function mime.fromFileContent(file: string | buffer): string?
 	else
 		filePath = file
 		local ok, result = pcall(function()
-			return buffer.fromstring(fs.readFile(file))
+			return fs.openSync(file):readBufferSync()
 		end)
 		if ok and type(result) == "string" then
 			data = result
@@ -210,7 +210,7 @@ function mime.fromFileContent(file: string | buffer): string?
 	local len = #data
 	if len == 0 then
 		if filePath then
-			local ext = fs.extension(filePath)
+			local ext = fs.path.extension(filePath)
 			if ext then
 				return mime.fromExtension(ext)
 			end
@@ -407,7 +407,7 @@ function mime.fromFileContent(file: string | buffer): string?
 	end
 
 	if filePath then
-		local ext = fs.extension(filePath)
+		local ext = fs.path.extension(filePath)
 		if ext then
 			local fromExt = mime.fromExtension(ext)
 			if fromExt then
@@ -423,4 +423,4 @@ function mime.fileMatchesMime(file: string | buffer, validateMime: string): bool
 	return mime.fromFileContent(file) == validateMime
 end
 
-return mime
+return table.freeze(mime)

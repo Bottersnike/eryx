@@ -19,10 +19,18 @@
 
 local task = {}
 
-function task.spawn(functionOrThread: ((...any) -> ...any) | thread, ...: any): thread return nil :: any end
-function task.defer(functionOrThread: ((...any) -> ...any) | thread, ...: any): thread return nil :: any end
-function task.delay(duration: number, functionOrThread: ((...any) -> ...any) | thread, ...: any): thread return nil :: any end
-function task.wait(duration: number?): number return 0 end
+function task.spawn<A..., R...>(functionOrThread: ((A...) -> R...) | thread, ...: A...): thread
+	return nil :: any
+end
+function task.defer<A..., R...>(functionOrThread: ((A...) -> R...) | thread, ...: A...): thread
+	return nil :: any
+end
+function task.delay<A..., R...>(duration: number?, functionOrThread: ((A...) -> R...) | thread, ...: A...): thread
+	return nil :: any
+end
+function task.wait(duration: number?): number
+	return 0
+end
 function task.cancel(t: thread) end
 
-return task
+return table.freeze(task)

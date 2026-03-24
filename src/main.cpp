@@ -29,7 +29,7 @@
 #include "vfs.hpp"
 
 #ifdef ERYX_EMBED
-// Generated tables — defined in embedded_modules.cpp / embedded_sources.cpp
+// Generated tables - defined in embedded_modules.cpp / embedded_sources.cpp
 extern const EmbeddedNativeModule  g_embedded_native_modules[];
 extern const EmbeddedScriptModule  g_embedded_script_modules[];
 #endif
@@ -488,7 +488,7 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
 }
 
 int main_repl() {
-    fprintf(stdout, "Erxy (Luau %s, %.8s)\n", LUAU_APPROX_VERSION, LUAU_GIT_HASH);
+    fprintf(stdout, "Eryx (Luau %s, %.8s)\n", LUAU_APPROX_VERSION, LUAU_GIT_HASH);
     std::cout << "Type \"help\" for help" << std::endl;
 
     lua_State* GL = eryx_initialise_environment(nullptr);
@@ -624,9 +624,6 @@ int main_run(const char* filename) {
     std::ifstream script_file(filename);
     if (!script_file.is_open()) {
         std::cerr << "Failed to open " << filename << std::endl;
-        std::cerr << std::filesystem::current_path() << std::endl;
-
-        while (1);
         return 1;
     }
     std::string luaScript((std::istreambuf_iterator<char>(script_file)),
@@ -661,7 +658,7 @@ int main(int argc, const char* argv[]) {
 
         // Build the chunk name with the @@vfs/ prefix.
         // main_script prepends "@" to its filename argument, so we pass
-        // the entry prefixed with just "@vfs/" — the outer "@" produces "@@vfs/…".
+        // the entry prefixed with just "@vfs/" - the outer "@" produces "@@vfs/…".
         std::string vfsChunkName = std::string("@vfs/") + std::string(entry);
         return main_script(
             vfsChunkName.c_str(),

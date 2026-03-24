@@ -15,15 +15,15 @@
 	local ffi = require("@eryx/_ffi")
 
 	local user32 = ffi.loadLibrary("user32.dll")
-	local msgBox = user32:GetFunction(
+	local msgBox = user32:getFunction(
 		"MessageBoxA",
 		ffi.i32,
-		{ ffi.u64, ffi.str:Pointer(), ffi.str:Pointer(), ffi.u32 }
+		{ ffi.u64, ffi.str:pointer(), ffi.str:pointer(), ffi.u32 }
 	)
 
 	local title = ffi.str("Hello from Luau!")
 	local body  = ffi.str("It works!")
-	msgBox(ffi.u64(0), body:Pointer(), title:Pointer(), ffi.u32(0))
+	msgBox(ffi.u64(0), body:pointer(), title:pointer(), ffi.u32(0))
 	```
 ]=]
 
@@ -43,7 +43,7 @@ export type ForeignLibrary = {
 		@param argTypes An array of argument types, in order.
 		@return ForeignFunction -- A callable wrapper for the native function.
 	]=]
-	GetFunction: (
+	getFunction: (
 		self: ForeignLibrary,
 		name: string | number,
 		retType: ForeignType,
@@ -90,7 +90,7 @@ export type ForeignType = {
 
 		@return ForeignType -- The pointer-to type.
 	]=]
-	Pointer: (self: ForeignType) -> ForeignType,
+	pointer: (self: ForeignType) -> ForeignType,
 
 	--[=[
 		Creates a new [[ForeignValue]] of this type.
@@ -125,7 +125,7 @@ export type ForeignValue = {
 			`true`.
 		@return any -- The Luau value, or a new ForeignValue for pointers.
 	]=]
-	Get: (self: ForeignValue, dereference: boolean?) -> any,
+	get: (self: ForeignValue, dereference: boolean?) -> any,
 
 	--[=[
 		Overwrites the stored value.
@@ -136,7 +136,7 @@ export type ForeignValue = {
 		@param value The new value to store.
 		@return ForeignValue -- self.
 	]=]
-	Set: (self: ForeignValue, value: any) -> ForeignValue,
+	set: (self: ForeignValue, value: any) -> ForeignValue,
 
 	--[=[
 		Returns a new [[ForeignValue]] that is a pointer to this value.
@@ -146,7 +146,7 @@ export type ForeignValue = {
 
 		@return ForeignValue -- A pointer to this value.
 	]=]
-	Pointer: (self: ForeignValue) -> ForeignValue,
+	pointer: (self: ForeignValue) -> ForeignValue,
 }
 
 local _ffi = {}
@@ -193,4 +193,4 @@ _ffi.i32 = nil :: ForeignType
 --- Signed 64-bit integer.
 _ffi.i64 = nil :: ForeignType
 
-return _ffi
+return table.freeze(_ffi)

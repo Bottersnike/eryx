@@ -16,14 +16,14 @@
 	local _ssl    = require("@eryx/_ssl")
 
 	local sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-	sock:Connect("example.com", 443)
+	sock:connect("example.com", 443)
 
 	local ctx  = _ssl.createDefaultContext()
-	local ssock = ctx:WrapSocket(sock, "example.com")
-	ssock:SendAll(buffer.fromstring("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n"))
-	local data = ssock:Recv(4096)
+	local ssock = ctx:wrapSocket(sock, "example.com")
+	ssock:sendAll(buffer.fromstring("GET / HTTP/1.0\r\nHost: example.com\r\n\r\n"))
+	local data = ssock:recv(4096)
 	print(buffer.tostring(data))
-	ssock:Close()
+	ssock:close()
 	```
 ]=]
 
@@ -43,7 +43,7 @@ export type SslContext = {
 		@param serverHostname Hostname for SNI and certificate verification.
 		@return SslSocket -- The wrapped TLS socket.
 	]=]
-	WrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
+	wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
 
 	--[=[
 		Loads a PEM-encoded CA certificate file for server certificate
@@ -54,7 +54,7 @@ export type SslContext = {
 
 		@param cafile Path to a PEM file containing one or more CA certificates.
 	]=]
-	LoadVerifyLocations: (self: SslContext, cafile: string) -> (),
+	loadVerifyLocations: (self: SslContext, cafile: string) -> (),
 
 	--[=[
 		Sets the certificate verification mode.
@@ -66,7 +66,7 @@ export type SslContext = {
 
 		@param mode Verification mode - `VERIFY_NONE` or `VERIFY_REQUIRED`.
 	]=]
-	SetVerify: (self: SslContext, mode: number) -> (),
+	setVerify: (self: SslContext, mode: number) -> (),
 }
 
 --[=[
@@ -91,7 +91,7 @@ export type SslSocket = {
 
 		@param data The data to send.
 	]=]
-	sendall: (self: SslSocket, data: buffer) -> (),
+	sendAll: (self: SslSocket, data: buffer) -> (),
 
 	--[=[
 		Receives up to `bufsize` bytes from the encrypted connection.
@@ -116,7 +116,7 @@ export type SslSocket = {
 		@return string -- The remote IP address.
 		@return number -- The remote port.
 	]=]
-	getpeername: (self: SslSocket) -> (string, number),
+	getPeerName: (self: SslSocket) -> (string, number),
 
 	--[=[
 		Returns the local address and port the socket is bound to.
@@ -124,7 +124,7 @@ export type SslSocket = {
 		@return string -- The local IP address.
 		@return number -- The local port.
 	]=]
-	getsockname: (self: SslSocket) -> (string, number),
+	getSockName: (self: SslSocket) -> (string, number),
 
 	--[=[
 		Returns the underlying OS file descriptor number for
@@ -132,7 +132,7 @@ export type SslSocket = {
 
 		@return number -- The file descriptor.
 	]=]
-	fileno: (self: SslSocket) -> number,
+	fileNo: (self: SslSocket) -> number,
 }
 
 --[=[
@@ -159,7 +159,7 @@ local _ssl = {}
 
 	```luau
 	local ctx = _ssl.createDefaultContext()
-	local ssock = ctx:WrapSocket(sock, "example.com")
+	local ssock = ctx:wrapSocket(sock, "example.com")
 	```
 
 	@return SslContext -- A client-mode TLS context.
@@ -202,7 +202,7 @@ end
 	Equivalent to:
 	```luau
 	local ctx = _ssl.createDefaultContext()
-	local ssock = ctx:WrapSocket(sock, hostname)
+	local ssock = ctx:wrapSocket(sock, hostname)
 	```
 
 	@param sock A connected `_socket.Socket`.
@@ -277,5 +277,5 @@ _ssl.VERIFY_REQUIRED = 2 :: number
 
 _ssl.SslContext = {} :: SslContext
 
-return _ssl
+return table.freeze(_ssl)
 

@@ -9,14 +9,14 @@
 	local argparse = require("@eryx/argparse2")
 
 	local parser = argparse.Parser.new("mytool", "A handy CLI")
-	parser:AddPositional("file", "string", nil, true, "Input file")
-	parser:AddFlag("verbose", "v", "Enable verbose output")
-	parser:AddOption("port", "p", "number", 8080, nil, "Port to listen on")
+	parser:addPositional("file", "string", nil, true, "Input file")
+	parser:addFlag("verbose", "v", "Enable verbose output")
+	parser:addOption("port", "p", "number", 8080, nil, "Port to listen on")
 
-	local run = parser:AddSubCommand("run", "Run a script")
-	run:AddPositional("script", "string", false, "Script to run")
+	local run = parser:addSubCommand("run", "Run a script")
+	run:addPositional("script", "string", false, "Script to run")
 
-	local config = parser:Parse()
+	local config = parser:parse()
 	```
 ]=]
 
@@ -31,7 +31,7 @@ Parser.__index = Parser
 	boolean flags, key-value options, and subcommands.
 
 	Every new parser comes with a built-in `--help`/`-h` flag. Use
-	[[Parser.DisableHelp]] to remove it or [[Parser.SetHelpHandler]] to replace its
+	[[Parser.disableHelp]] to remove it or [[Parser.setHelpHandler]] to replace its
 	behaviour.
 ]=]
 export type Parser = setmetatable<
@@ -80,7 +80,7 @@ export type Parser = setmetatable<
 >
 
 local function defaultHelpHandler(self: Parser)
-	print(self:GenerateHelp())
+	print(self:generateHelp())
 	os.exit(0)
 end
 
@@ -106,7 +106,7 @@ function Parser.new(name: string, description: string?, epilog: string?): Parser
 		subCommands = {},
 		_helpHandler = defaultHelpHandler,
 	}, Parser)
-	self:AddFlag("help", "h", "Show help message")
+	self:addFlag("help", "h", "Show help message")
 	return self
 end
 
@@ -151,7 +151,7 @@ end
 	@return Parser -- The new subcommand parser, ready to be configured.
 	@error Throws if a subcommand with the same name is already registered.
 ]=]
-function Parser.AddSubCommand(self: Parser, name: string, description: string?, epilog: string?): Parser
+function Parser.addSubCommand(self: Parser, name: string, description: string?, epilog: string?): Parser
 	if self.subCommands[name] then
 		error(`Subcommand '{name}' is already registered`)
 	end
@@ -165,7 +165,7 @@ end
 	a no-op. After calling this, `--help` and `-h` are free to be
 	re-registered as custom flags or options.
 ]=]
-function Parser.DisableHelp(self: Parser)
+function Parser.disableHelp(self: Parser)
 	for i, flag in self.flags do
 		if flag.longName == "help" then
 			table.remove(self.flags, i)
@@ -178,20 +178,20 @@ end
 --[=[
 	Replaces the built-in help behaviour with a custom handler.
 
-	The handler receives the parser so it can call [[Parser.GenerateHelp]] or
+	The handler receives the parser so it can call [[Parser.generateHelp]] or
 	inspect registered arguments. The built-in `--help`/`-h` flag remains
 	registered; only the action changes.
 
 	```luau
-	parser:SetHelpHandler(function(p)
-		io.write(p:GenerateHelp())
+	parser:setHelpHandler(function(p)
+		io.write(p:generateHelp())
 		os.exit(2)
 	end)
 	```
 
 	@param handler A function called when `--help` or `-h` is parsed.
 ]=]
-function Parser.SetHelpHandler(self: Parser, handler: (self: Parser) -> ())
+function Parser.setHelpHandler(self: Parser, handler: (self: Parser) -> ())
 	self._helpHandler = handler
 end
 
@@ -206,7 +206,7 @@ end
 	and `false` for required.
 
 	@param name Key used in the result table.
-	@param type `"string"` or `"number"` — numeric values are coerced automatically.
+	@param type `"string"` or `"number"` - numeric values are coerced automatically.
 	@param default Default value when omitted. Implies optional when non-nil.
 	@param required Whether the argument must be provided. Defaults to `true` unless a default is given.
 	@param description Human-readable text shown in help output.
@@ -214,7 +214,7 @@ end
 	@error Throws if a required positional is added after an optional one.
 	@error Throws if a default is provided for a required positional.
 ]=]
-function Parser.AddPositional(
+function Parser.addPositional(
 	self: Parser,
 	name: string,
 	type: "string" | "number",
@@ -261,7 +261,7 @@ end
 	@param description Human-readable text shown in help output.
 	@error Throws if the long or short name conflicts with an existing flag or option.
 ]=]
-function Parser.AddFlag(self: Parser, longName: string, shortName: string?, description: string?)
+function Parser.addFlag(self: Parser, longName: string, shortName: string?, description: string?)
 	checkLongConflict(self, longName)
 	if shortName then
 		checkShortConflict(self, shortName)
@@ -287,14 +287,14 @@ end
 
 	@param longName The `--long` name (without dashes).
 	@param shortName Optional single-character `-s` alias.
-	@param type `"string"` or `"number"` — numeric values are coerced automatically.
+	@param type `"string"` or `"number"` - numeric values are coerced automatically.
 	@param default Default value when omitted. Implies optional when non-nil.
 	@param required Whether the option must be provided. Defaults to `true` unless a default is given.
 	@param description Human-readable text shown in help output.
 	@error Throws if the long or short name conflicts with an existing flag or option.
 	@error Throws if a default is provided for a required option.
 ]=]
-function Parser.AddOption(
+function Parser.addOption(
 	self: Parser,
 	longName: string,
 	shortName: string?,
@@ -332,7 +332,7 @@ end
 
 	@return string -- The formatted help text.
 ]=]
-function Parser.GenerateHelp(self: Parser): string
+function Parser.generateHelp(self: Parser): string
 	local lines = {}
 
 	-- Usage line
@@ -413,12 +413,12 @@ end
 	Parses command-line arguments against this parser's configuration.
 
 	Parsing supports:
-	- **Positional arguments** — consumed left-to-right.
-	- **Long flags / options** — `--verbose`, `--port 8080`, `--port=8080`.
-	- **Short flags / options** — `-v`, `-p 8080`.
-	- **Merged short flags** — `-vh` expands to `-v -h`.
+	- **Positional arguments** - consumed left-to-right.
+	- **Long flags / options** - `--verbose`, `--port 8080`, `--port=8080`.
+	- **Short flags / options** - `-v`, `-p 8080`.
+	- **Merged short flags** - `-vh` expands to `-v -h`.
 	  The last character may be an option: `-vp 8080` -> `-v` flag + `-p 8080` option.
-	- **Subcommands** — remaining arguments are delegated to the
+	- **Subcommands** - remaining arguments are delegated to the
 	  subcommand's parser and its result is stored under the subcommand name.
 
 	If the built-in `--help` flag is set, the help handler is invoked
@@ -428,7 +428,7 @@ end
 	@return { [string]: any } -- A table mapping argument names to their parsed values.
 	@error Throws on unknown flags/options, missing required arguments, or type coercion failures.
 ]=]
-function Parser.Parse(self: Parser, arguments: { string }?): { [string]: any }
+function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 	local args: { string } = arguments or os.cliargs()
 
 	local result: { [string]: any } = {}
@@ -589,7 +589,7 @@ function Parser.Parse(self: Parser, arguments: { string }?): { [string]: any }
 			for k = i + 1, #args do
 				table.insert(remaining, args[k])
 			end
-			local subResult = sub:Parse(remaining)
+			local subResult = sub:parse(remaining)
 			result[arg] = subResult
 			return result
 
@@ -631,4 +631,4 @@ end
 
 argparse.Parser = Parser
 
-return argparse
+return table.freeze(argparse)

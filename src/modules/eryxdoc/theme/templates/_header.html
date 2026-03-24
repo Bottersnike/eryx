@@ -1,0 +1,23 @@
+<header class="top-header">
+    <div class="header-inner">
+        <div class="header-left">
+            <a class="header-brand" href="{{ global.siteRoot }}">{{ global.title | escape }}</a>
+            {% if global.pageName then %}
+            <span class="header-module">{{ global.pageName | escape }}</span>
+            {% end %}
+        </div>
+        <div class="search-container" id="search-container">
+            <input type="text" class="search-input" id="search-input" placeholder="Search docs..." aria-label="Search documentation" autocomplete="off">
+            <div class="search-results" id="search-results"></div>
+        </div>
+        <div class="header-right">
+            {% if global.versionName then %}
+            <div class="version-picker" id="version-picker">
+                <button class="version-btn" id="version-btn" aria-label="Switch version">{{ global.versionLabel | escape }}</button>
+                <div class="version-dropdown" id="version-dropdown"></div>
+            </div>
+            {% end %}
+            <button class="theme-toggle" id="theme-toggle" aria-label="Toggle theme" title="Toggle light/dark theme">&#9728;</button>
+        </div>
+    </div>
+</header>

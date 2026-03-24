@@ -21,6 +21,7 @@
 #include <string>
 #include <vector>
 
+#include "Luau/TypeArena.h"
 #include "dyncall.h"
 #include "module_api.h"
 #include "lua.h"
@@ -79,6 +80,12 @@ struct LuaForeignFunction {
     std::vector<LuaForeignType> args;
     FARPROC pFunc;
 };
+
+// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
+static void ffi_lib_dtor(void* ud);
+static void ffi_func_dtor(void* ud);
+static void ffi_type_dtor(void* ud);
+static void ffi_value_dtor(void* ud);
 
 static int push_lua_type_from_ffi(lua_State* L, LuaForeignType* type, void* value) {
     if (type->indirectionLevels > 0) {
@@ -265,17 +272,14 @@ static std::string get_win32_error(DWORD dwErrorCode) {
     return ret;
 }
 
-int ffi_lib_gc(lua_State* L) {
-    LuaForeignLibrary* flib = (LuaForeignLibrary*)luaL_checkudata(L, 1, FOREIGN_LIBRARY_METATABLE);
-    if (flib) {
-        if (flib->hModule != NULL) {
-            FreeLibrary(flib->hModule);
-            flib->hModule = NULL;
-        }
-
-        flib->~LuaForeignLibrary();  // Explicitly call destructor
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void ffi_lib_dtor(void* ud) {
+    LuaForeignLibrary* flib = (LuaForeignLibrary*)ud;
+    if (flib->hModule != NULL) {
+        FreeLibrary(flib->hModule);
+        flib->hModule = NULL;
     }
-    return 0;
+    flib->~LuaForeignLibrary();
 }
 
 int ffi_lib_tostring(lua_State* L) {
@@ -344,7 +348,7 @@ int ffi_lib_getFunction(lua_State* L) {
         }
     }
 
-    LuaForeignFunction* ffunc = (LuaForeignFunction*)lua_newuserdata(L, sizeof(LuaForeignFunction));
+    LuaForeignFunction* ffunc = (LuaForeignFunction*)lua_newuserdatadtor(L, sizeof(LuaForeignFunction), ffi_func_dtor);
     new (ffunc) LuaForeignFunction();
 
     ffunc->name = name;
@@ -373,13 +377,10 @@ int ffi_func_tostring(lua_State* L) {
     return 1;
 }
 
-int ffi_func_gc(lua_State* L) {
-    LuaForeignFunction* ffunc =
-        (LuaForeignFunction*)luaL_checkudata(L, 1, FOREIGN_FUNCTION_METATABLE);
-    if (ffunc) {
-        ffunc->~LuaForeignFunction();  // Explicitly call destructor
-    }
-    return 0;
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void ffi_func_dtor(void* ud) {
+    LuaForeignFunction* ffunc = (LuaForeignFunction*)ud;
+    ffunc->~LuaForeignFunction();
 }
 
 int ffi_func_call(lua_State* L) {
@@ -553,7 +554,7 @@ int ffi_func_call(lua_State* L) {
     //puts("Free 2");
 
     // 5. Wrap the result in a LuaForeignValue
-    LuaForeignValue* res = (LuaForeignValue*)lua_newuserdata(L, sizeof(LuaForeignValue));
+    LuaForeignValue* res = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     // if (ffunc->ret.indirectionLevels == 0) {
     res->pValue = rc;
     res->ownsValue = 1;
@@ -587,7 +588,7 @@ static int ffi_loadLibrary(lua_State* L) {
                    get_win32_error(GetLastError()).c_str());
     }
 
-    LuaForeignLibrary* flib = (LuaForeignLibrary*)lua_newuserdata(L, sizeof(LuaForeignLibrary));
+    LuaForeignLibrary* flib = (LuaForeignLibrary*)lua_newuserdatadtor(L, sizeof(LuaForeignLibrary), ffi_lib_dtor);
     new (flib) LuaForeignLibrary();
 
     flib->filename = szLibrary;
@@ -599,12 +600,10 @@ static int ffi_loadLibrary(lua_State* L) {
     return 1;
 }
 
-int ffi_type_gc(lua_State* L) {
-    LuaForeignType* ftype = (LuaForeignType*)luaL_checkudata(L, 1, FOREIGN_TYPE_METATABLE);
-    if (ftype) {
-        ftype->~LuaForeignType();  // Explicitly call destructor
-    }
-    return 0;
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void ffi_type_dtor(void* ud) {
+    LuaForeignType* ftype = (LuaForeignType*)ud;
+    ftype->~LuaForeignType();
 }
 
 int ffi_type_tostring(lua_State* L) {
@@ -618,7 +617,7 @@ int ffi_type_tostring(lua_State* L) {
 int ffi_type_pointer(lua_State* L) {
     LuaForeignType* ftype = (LuaForeignType*)luaL_checkudata(L, 1, FOREIGN_TYPE_METATABLE);
 
-    LuaForeignType* ftype_pointer = (LuaForeignType*)lua_newuserdata(L, sizeof(LuaForeignType));
+    LuaForeignType* ftype_pointer = (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
     new (ftype_pointer) LuaForeignType();
 
     ftype_pointer->kind = ftype->kind;
@@ -631,37 +630,27 @@ int ffi_type_pointer(lua_State* L) {
     return 1;
 }
 
-int ffi_value_gc(lua_State* L) {
-    LuaForeignValue* fvalue = (LuaForeignValue*)luaL_checkudata(L, 1, FOREIGN_VALUE_METATABLE);
-    if (fvalue) {
-        if (fvalue->pValue) {
-            // If we're the base value, we're the one that allocated memory
-            if (fvalue->ownsValue) {
-                void* toFree = fvalue->pValue;
-                while (fvalue->ownsValue) {
-                    fvalue->ownsValue--;
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void ffi_value_dtor(void* ud) {
+    LuaForeignValue* fvalue = (LuaForeignValue*)ud;
+    if (fvalue->pValue) {
+        if (fvalue->ownsValue) {
+            void* toFree = fvalue->pValue;
+            while (fvalue->ownsValue) {
+                fvalue->ownsValue--;
 
-                    void* nextToFree = NULL;
-                    if (fvalue->ownsValue) {
-                        nextToFree = *(void**)toFree;
-                    }
-                    free(toFree);
-                    toFree = nextToFree;
+                void* nextToFree = NULL;
+                if (fvalue->ownsValue) {
+                    nextToFree = *(void**)toFree;
                 }
-
-                // if (fvalue->type.kind == FFI_T_STR) {
-                //     if (*(const char*)fvalue->ownsValue != NULL) {
-                //         free(*(void**)fvalue->pValue);
-                //     }
-                // }
-                // free(fvalue->pValue);
-            } else {
-                fvalue->pValue = NULL;
+                free(toFree);
+                toFree = nextToFree;
             }
+        } else {
+            fvalue->pValue = NULL;
         }
-        fvalue->~LuaForeignValue();  // Explicitly call destructor
     }
-    return 0;
+    fvalue->~LuaForeignValue();
 }
 
 int ffi_value_tostring(lua_State* L) {
@@ -686,7 +675,7 @@ int ffi_value_get(lua_State* L) {
             }
 
             LuaForeignValue* new_fvalue =
-                (LuaForeignValue*)lua_newuserdata(L, sizeof(LuaForeignValue));
+                (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
             new (new_fvalue) LuaForeignValue();
 
             new_fvalue->type.indirectionLevels = fvalue->type.indirectionLevels - 1;
@@ -738,7 +727,7 @@ int ffi_type_call(lua_State* L) {
                     "then generate a pointer to it.");
     }
 
-    LuaForeignValue* fvalue = (LuaForeignValue*)lua_newuserdata(L, sizeof(LuaForeignValue));
+    LuaForeignValue* fvalue = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     new (fvalue) LuaForeignValue();
 
     fvalue->type.indirectionLevels = ftype->indirectionLevels;
@@ -765,7 +754,7 @@ int ffi_type_call(lua_State* L) {
 int ffi_value_pointer(lua_State* L) {
     LuaForeignValue* fvalue = (LuaForeignValue*)luaL_checkudata(L, 1, FOREIGN_VALUE_METATABLE);
 
-    LuaForeignValue* new_fvalue = (LuaForeignValue*)lua_newuserdata(L, sizeof(LuaForeignValue));
+    LuaForeignValue* new_fvalue = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     new (new_fvalue) LuaForeignValue();
 
     new_fvalue->type.indirectionLevels = fvalue->type.indirectionLevels + 1;
@@ -781,7 +770,7 @@ int ffi_value_pointer(lua_State* L) {
 }
 
 static void push_ffi_type(lua_State* L, ffi_type_kind kind, size_t size) {
-    LuaForeignType* ftype = (LuaForeignType*)lua_newuserdata(L, sizeof(LuaForeignType));
+    LuaForeignType* ftype = (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
     new (ftype) LuaForeignType();
 
     ftype->kind = kind;
@@ -801,11 +790,10 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_lib_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, ffi_lib_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
-    lua_pushcfunction(L, ffi_lib_getFunction, "GetFunction");
-    lua_setfield(L, -2, "GetFunction");
+    lua_pushcfunction(L, ffi_lib_getFunction, "getFunction");
+    lua_setfield(L, -2, "getFunction");
 
     lua_pop(L, 1);
 
@@ -818,8 +806,7 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_func_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, ffi_func_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, ffi_func_call, "call");
     lua_setfield(L, -2, "__call");
@@ -835,14 +822,13 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_type_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, ffi_type_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, ffi_type_call, "call");
     lua_setfield(L, -2, "__call");
 
-    lua_pushcfunction(L, ffi_type_pointer, "Pointer");
-    lua_setfield(L, -2, "Pointer");
+    lua_pushcfunction(L, ffi_type_pointer, "pointer");
+    lua_setfield(L, -2, "pointer");
 
     lua_pop(L, 1);
 
@@ -855,16 +841,15 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_value_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, ffi_value_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
-    lua_pushcfunction(L, ffi_value_pointer, "Pointer");
-    lua_setfield(L, -2, "Pointer");
+    lua_pushcfunction(L, ffi_value_pointer, "pointer");
+    lua_setfield(L, -2, "pointer");
 
-    lua_pushcfunction(L, ffi_value_get, "Get");
-    lua_setfield(L, -2, "Get");
-    lua_pushcfunction(L, ffi_value_set, "Set");
-    lua_setfield(L, -2, "Set");
+    lua_pushcfunction(L, ffi_value_get, "get");
+    lua_setfield(L, -2, "get");
+    lua_pushcfunction(L, ffi_value_set, "set");
+    lua_setfield(L, -2, "set");
 
     lua_pop(L, 1);
 
@@ -901,5 +886,6 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     push_ffi_type(L, FFI_T_I64, sizeof(int64_t));
     lua_setfield(L, -2, "i64");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

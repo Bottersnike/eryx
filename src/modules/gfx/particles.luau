@@ -6,8 +6,8 @@
 	local ps = particles.createSystem({ life = 2, speed = 100, ... })
 	```
 
-	The returned ParticleSystem object has methods like :Update(dt),
-	:Draw(window), :SpawnParticles(x, y, count?) provided by the
+	The returned ParticleSystem object has methods like :update(dt),
+	:draw(window), :spawnParticles(x, y, count?) provided by the
 	native metatable.
 ]=]
 

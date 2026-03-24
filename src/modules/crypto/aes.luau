@@ -41,7 +41,7 @@ local aes = {}
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext (length rounded up to a 16-byte block boundary).
 ]=]
-function aes.cbc_encrypt(key: buffer, iv: buffer, data: buffer): buffer
+function aes.encryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _aes.cbc_encrypt(key, iv, data)
 end
 
@@ -53,7 +53,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext.
 ]=]
-function aes.cbc_decrypt(key: buffer, iv: buffer, data: buffer): buffer
+function aes.decryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _aes.cbc_decrypt(key, iv, data)
 end
 
@@ -69,7 +69,7 @@ end
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext (same length as input).
 ]=]
-function aes.ctr_encrypt(key: buffer, iv: buffer, data: buffer): buffer
+function aes.encryptCTR(key: buffer, iv: buffer, data: buffer): buffer
 	return _aes.ctr_encrypt(key, iv, data)
 end
 
@@ -84,7 +84,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext (same length as input).
 ]=]
-function aes.ctr_decrypt(key: buffer, iv: buffer, data: buffer): buffer
+function aes.decryptCTR(key: buffer, iv: buffer, data: buffer): buffer
 	return _aes.ctr_decrypt(key, iv, data)
 end
 
@@ -109,7 +109,7 @@ end
 	@return buffer -- Ciphertext.
 	@return buffer -- 16-byte authentication tag.
 ]=]
-function aes.gcm_encrypt(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
+function aes.encryptGCM(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
 	return _aes.gcm_encrypt(key, nonce, data, aad)
 end
 
@@ -126,7 +126,7 @@ end
 	@param aad   Additional authenticated data (must match encryption).
 	@return buffer -- Plaintext.
 ]=]
-function aes.gcm_decrypt(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
+function aes.decryptGCM(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
 	return _aes.gcm_decrypt(key, nonce, ct, tag, aad)
 end
 
@@ -144,7 +144,7 @@ end
 	@return buffer -- Ciphertext.
 	@return buffer -- Authentication tag.
 ]=]
-function aes.ccm_encrypt(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
+function aes.encryptCCM(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
 	return _aes.ccm_encrypt(key, nonce, data, aad)
 end
 
@@ -160,7 +160,7 @@ end
 	@param aad   Additional authenticated data (must match encryption).
 	@return buffer -- Plaintext.
 ]=]
-function aes.ccm_decrypt(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
+function aes.decryptCCM(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
 	return _aes.ccm_decrypt(key, nonce, ct, tag, aad)
 end
 
@@ -170,7 +170,7 @@ end
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext (length rounded up to a 16-byte block boundary).
 ]=]
-function aes.ecb_encrypt(key: buffer, data: buffer): buffer
+function aes.encryptECB(key: buffer, data: buffer): buffer
 	return _aes.ecb_encrypt(key, data)
 end
 
@@ -180,7 +180,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext.
 ]=]
-function aes.ecb_decrypt(key: buffer, data: buffer): buffer
+function aes.decryptECB(key: buffer, data: buffer): buffer
 	return _aes.ecb_decrypt(key, data)
 end
 

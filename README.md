@@ -19,13 +19,25 @@ http.serve({ port = 8080 }, function(req)
 end)
 ```
 
+## What version do I want?
+
+Most users will want the **standard** build. This consists of the main Eryx executable, a shared library for all runtime operations, and every available module as individual files. Each module consists of either pure Luau scripts, or a single shared library with Luau scripts providing type stubs.
+
+This build is generally recommended as it provides maximum flexibility, along with full type annotation.
+
+For distribution, the **embedded** build is generally recommend. This build is a single executable, with no other files, providing the entire runtime along with all built in modules. As the runtime is now part of the executable, instead of a separate shared library, external library-based modules cannot be used with this build. Types will be unavailable in a development environment, though the type stubs from the standard build can be used.
+
+When compiling a project to a single executable using a virtual filesystem, the embedded build will result in a truly single-file distribution. When using the standard build all of Eryx's files need distributed alongside the compiled file.
+
+The **hybrid** build is similar to the embedded build, but the runtime is provided as a separate shared library. This build can be used if the single-file nature of the embedded build is desired, but external shared library modules are required.
+
 ## Building
 
-Windows (x64) is currently the only validated build target. Linux and macOS support is planned.
+Windows (x64), and Linux (GCC 14 or 15) are the currently validated build targets. macOS in theory has working code paths, but they're entirely untested due to a lack of hardware to test them with.
 
 ### Requirements
 
-- MSVC (Tested against Visual Studio 2019)
+- MSVC (Tested against Visual Studio 2019), or GCC 14/15
 - CMake
 - Git (dependencies are vendored as submodules)
 
@@ -37,20 +49,20 @@ cmake --preset release
 cmake --build build
 ```
 
-For debugging
+For debugging on Windows
 
 ```bash
 cmake -S . -B build-vs -G "Visual Studio 16 2019"
-
 ```
 
 ### Presets
 
-| Preset    | Description                                           |
-| --------- | ----------------------------------------------------- |
-| `default` | Debug build, modules as separate DLLs                 |
-| `release` | Optimized release build                               |
-| `embed`   | Single portable binary, all modules statically linked |
+| Preset    | Description                                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `default` | Debug build, modules as separate shared libraries                                                                 |
+| `release` | Optimized release build                                                                                           |
+| `embed`   | Single portable binary, all modules statically linked                                                             |
+| `hybrid`  | A binary with all modules statically linked, alongside the shared runtime library required for external libraries |
 
 ### Build Options
 

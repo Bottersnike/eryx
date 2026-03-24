@@ -40,7 +40,7 @@ local des = {}
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext.
 ]=]
-function des.cbc_encrypt(key: buffer, iv: buffer, data: buffer): buffer
+function des.encryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _des.cbc_encrypt(key, iv, data)
 end
 
@@ -52,7 +52,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext.
 ]=]
-function des.cbc_decrypt(key: buffer, iv: buffer, data: buffer): buffer
+function des.decryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _des.cbc_decrypt(key, iv, data)
 end
 

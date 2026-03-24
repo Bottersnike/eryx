@@ -5,11 +5,11 @@
 	local sound = require("@eryx/gfx/sound")
 	sound.init()
 	local sfx = sound.load("click.wav")
-	sfx:Play()
+	sfx:play()
 	```
 
-	The returned Sound object has methods like :Play(), :Stop(),
-	:SetVolume(), :SetCursor(), :GetCursor(), :GetDuration()
+	The returned Sound object has methods like :play(), :stop(),
+	:setVolume(), :setCursor(), :getCursor(), :getDuration()
 	provided by the native metatable.
 ]=]
 

@@ -301,26 +301,26 @@ function Parser.new(source: string, filepath: string?): Parser
 
 	return setmetatable(this, Parser)
 end
-function Parser.Cur(self: Parser, n: number?): string
+function Parser.cur(self: Parser, n: number?): string
 	return self.source:sub(self.cursor, self.cursor + if n then n else 0)
 end
-function Parser.TryConsume(self: Parser, match: string): boolean
-	if self:Cur(#match - 1) ~= match then
+function Parser.tryConsume(self: Parser, match: string): boolean
+	if self:cur(#match - 1) ~= match then
 		return false
 	end
 	self.cursor += #match
 	return true
 end
-function Parser.Consume(self: Parser, match: string)
-	if self:Cur(#match - 1) ~= match then
-		local line, col = self:Pos()
+function Parser.consume(self: Parser, match: string)
+	if self:cur(#match - 1) ~= match then
+		local line, col = self:pos()
 		error({ message = "Expected '" .. match .. "'", line = line, col = col, filepath = self.filepath })
 	end
 	self.cursor += #match
 end
-function Parser.SkipWhitespace(self: Parser): ()
+function Parser.skipWhitespace(self: Parser): ()
 	repeat
-		local c = self:Cur()
+		local c = self:cur()
 		if c == " " or c == "\t" or c == "\n" or c == "\r" then
 			self.cursor += 1
 		else
@@ -336,7 +336,7 @@ end
 	creating AST nodes or when an error is about to be raised, so the
 	cost is negligible in practice.
 ]=]
-function Parser.Pos(self: Parser): (number, number)
+function Parser.pos(self: Parser): (number, number)
 	local line = 1
 	local col = 1
 	for i = 1, self.cursor - 1 do
@@ -349,22 +349,22 @@ function Parser.Pos(self: Parser): (number, number)
 	end
 	return line, col
 end
-function Parser.ConsumeName(self: Parser): string
-	if not _isName(self:Cur()) then
-		local line, col = self:Pos()
+function Parser.consumeName(self: Parser): string
+	if not _isName(self:cur()) then
+		local line, col = self:pos()
 		error({
-			message = "Expected a name but got '" .. self:Cur() .. "'",
+			message = "Expected a name but got '" .. self:cur() .. "'",
 			line = line,
 			col = col,
 			filepath = self.filepath,
 		})
 	end
 
-	local name = self:Cur()
+	local name = self:cur()
 	self.cursor += 1
 
-	while _isName(self:Cur()) or _isDigit(self:Cur()) do
-		name ..= self:Cur()
+	while _isName(self:cur()) or _isDigit(self:cur()) do
+		name ..= self:cur()
 		self.cursor += 1
 	end
 	return name
@@ -376,9 +376,9 @@ end
 
 	@return AstExpression -- The parsed expression node.
 ]=]
-function Parser.ConsumeExpr(self: Parser): AstExpression
-	self:SkipWhitespace()
-	local line, col = self:Pos()
+function Parser.consumeExpr(self: Parser): AstExpression
+	self:skipWhitespace()
+	local line, col = self:pos()
 
 	-- Detect unary `not` operator (only when not followed by a name/digit char).
 	local negate = false
@@ -389,23 +389,23 @@ function Parser.ConsumeExpr(self: Parser): AstExpression
 			if after == "" or not (_isName(after) or _isDigit(after)) then
 				negate = true
 				self.cursor += 3
-				self:SkipWhitespace()
+				self:skipWhitespace()
 			end
 		end
 	end
 
 	local value: boolean | number | string | { string | { dyn: AstExpression } } | { group: { TCondition } }
 
-	if _isDigit(self:Cur()) then
+	if _isDigit(self:cur()) then
 		local num: string = ""
 		repeat
-			num ..= self:Cur()
+			num ..= self:cur()
 			self.cursor += 1
-		until not _isDigit(self:Cur())
-		if self:TryConsume(".") then
+		until not _isDigit(self:cur())
+		if self:tryConsume(".") then
 			num ..= "."
-			if not _isDigit(self:Cur()) then
-				local el, ec = self:Pos()
+			if not _isDigit(self:cur()) then
+				local el, ec = self:pos()
 				error({
 					message = "Expected digit after decimal point in '" .. num .. "'",
 					line = el,
@@ -414,21 +414,21 @@ function Parser.ConsumeExpr(self: Parser): AstExpression
 				})
 			end
 			repeat
-				num ..= self:Cur()
+				num ..= self:cur()
 				self.cursor += 1
-			until not _isDigit(self:Cur())
+			until not _isDigit(self:cur())
 		end
 		value = tonumber(num) :: number
-		self:SkipWhitespace()
-	elseif self:TryConsume('"') then
+		self:skipWhitespace()
+	elseif self:tryConsume('"') then
 		local buf = {}
 		while self.cursor <= #self.source do
-			local c = self:Cur()
+			local c = self:cur()
 			if c == '"' then
 				break
 			elseif c == "\\" then
 				self.cursor += 1
-				local esc = self:Cur()
+				local esc = self:cur()
 				if esc == "n" then
 					table.insert(buf, "\n")
 				elseif esc == "t" then
@@ -440,7 +440,7 @@ function Parser.ConsumeExpr(self: Parser): AstExpression
 				elseif esc == '"' then
 					table.insert(buf, '"')
 				else
-					local el, ec = self:Pos()
+					local el, ec = self:pos()
 					error({
 						message = "Unknown string escape sequence: '\\" .. esc .. "'",
 						line = el,
@@ -454,41 +454,41 @@ function Parser.ConsumeExpr(self: Parser): AstExpression
 			self.cursor += 1
 		end
 		if self.cursor > #self.source then
-			local el, ec = self:Pos()
+			local el, ec = self:pos()
 			error({ message = "Unterminated string literal", line = el, col = ec, filepath = self.filepath })
 		end
-		self:Consume('"')
+		self:consume('"')
 		value = table.concat(buf)
-	elseif self:TryConsume("(") then
-		self:SkipWhitespace()
-		local innerChain = self:ConsumeCondition()
-		self:SkipWhitespace()
-		self:Consume(")")
-		self:SkipWhitespace()
+	elseif self:tryConsume("(") then
+		self:skipWhitespace()
+		local innerChain = self:consumeCondition()
+		self:skipWhitespace()
+		self:consume(")")
+		self:skipWhitespace()
 		value = { group = innerChain }
 	else
-		local firstName = self:ConsumeName()
+		local firstName = self:consumeName()
 		if firstName == "true" then
 			value = true
-			self:SkipWhitespace()
+			self:skipWhitespace()
 		elseif firstName == "false" then
 			value = false
-			self:SkipWhitespace()
+			self:skipWhitespace()
 		else
 			-- Build a path that may contain static keys (`.key`) and dynamic
 			-- subscripts (`[expr]`), represented as `{ dyn = <AstExpression> }`.
 			local path: { string | { dyn: AstExpression } } = { firstName }
-			self:SkipWhitespace()
+			self:skipWhitespace()
 			while true do
-				if self:TryConsume(".") then
-					table.insert(path, self:ConsumeName())
-					self:SkipWhitespace()
-				elseif self:TryConsume("[") then
-					self:SkipWhitespace()
-					local indexExpr = self:ConsumeExpr()
-					self:SkipWhitespace()
-					self:Consume("]")
-					self:SkipWhitespace()
+				if self:tryConsume(".") then
+					table.insert(path, self:consumeName())
+					self:skipWhitespace()
+				elseif self:tryConsume("[") then
+					self:skipWhitespace()
+					local indexExpr = self:consumeExpr()
+					self:skipWhitespace()
+					self:consume("]")
+					self:skipWhitespace()
 					table.insert(path, { dyn = indexExpr })
 				else
 					break
@@ -499,12 +499,13 @@ function Parser.ConsumeExpr(self: Parser): AstExpression
 	end
 
 	local filters: { string } = {}
-	while self:TryConsume("|") do
-		self:SkipWhitespace()
-		table.insert(filters, self:ConsumeName())
-		self:SkipWhitespace()
+	while self:tryConsume("|") do
+		self:skipWhitespace()
+		table.insert(filters, self:consumeName())
+		self:skipWhitespace()
 	end
 
+	self:skipWhitespace()
 	return {
 		type = "expression",
 		value = value,
@@ -525,36 +526,36 @@ end
 
 	@return { TCondition } -- The parsed condition chain.
 ]=]
-function Parser.ConsumeCondition(self: Parser): { TCondition }
+function Parser.consumeCondition(self: Parser): { TCondition }
 	local chain: { TCondition } = {}
 
 	while true do
-		if not _isName(self:Cur()) and self:Cur() ~= "(" then
+		if not _isName(self:cur()) and self:cur() ~= "(" then
 			break
 		end
 
-		local lhs = self:ConsumeExpr()
+		local lhs = self:consumeExpr()
 
 		local rhs: AstExpression? = nil
 		local cond: string? = nil
 
-		local cur2 = self:Cur(1)
-		local cur1 = self:Cur(0)
+		local cur2 = self:cur(1)
+		local cur1 = self:cur(0)
 		if cur2 == "==" or cur2 == "~=" or cur2 == "<=" or cur2 == ">=" then
 			cond = cur2
 			self.cursor += 2
-			rhs = self:ConsumeExpr()
+			rhs = self:consumeExpr()
 		elseif cur1 == "<" or cur1 == ">" then
 			cond = cur1
 			self.cursor += 1
-			rhs = self:ConsumeExpr()
+			rhs = self:consumeExpr()
 		end
 
 		local bool: ("or" | "and")? = nil
-		if self:Cur(2) == "or " then
+		if self:cur(2) == "or " then
 			bool = "or"
 			self.cursor += 3
-		elseif self:Cur(3) == "and " then
+		elseif self:cur(3) == "and " then
 			bool = "and"
 			self.cursor += 4
 		end
@@ -567,7 +568,7 @@ function Parser.ConsumeCondition(self: Parser): { TCondition }
 	end
 
 	if #chain == 0 then
-		local line, col = self:Pos()
+		local line, col = self:pos()
 		error({
 			message = "Empty condition - expected an expression",
 			line = line,
@@ -587,28 +588,28 @@ end
 
 	@return AstNode -- The parsed statement node.
 ]=]
-function Parser.ConsumeStmt(self: Parser): AstNode
-	self:SkipWhitespace()
-	local line, col = self:Pos()
-	local key = self:ConsumeName()
-	self:SkipWhitespace()
+function Parser.consumeStmt(self: Parser): AstNode
+	self:skipWhitespace()
+	local line, col = self:pos()
+	local key = self:consumeName()
+	self:skipWhitespace()
 
 	if key == "if" then
-		local condition = self:ConsumeCondition()
-		if self:ConsumeName() ~= "then" then
-			local el, ec = self:Pos()
+		local condition = self:consumeCondition()
+		if self:consumeName() ~= "then" then
+			local el, ec = self:pos()
 			error({ message = "Expected 'then' after if condition", line = el, col = ec, filepath = self.filepath })
 		end
-		self:SkipWhitespace()
+		self:skipWhitespace()
 
-		if self:Cur(1) ~= "%}" then
-			local el, ec = self:Pos()
+		if self:cur(1) ~= "%}" then
+			local el, ec = self:pos()
 			error({ message = "Expected '%}' to close {% if %} tag", line = el, col = ec, filepath = self.filepath })
 		end
 		self.cursor += 2
 
 		while true do
-			local body, terminate = self:ConsumeUntil({ "elseif", "else", "end" })
+			local body, terminate = self:consumeUntil({ "elseif", "else", "end" })
 			return {
 				type = "if",
 				conditionChain = condition,
@@ -620,18 +621,18 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 			}
 		end
 	elseif key == "elseif" then
-		local condition = self:ConsumeCondition()
-		if self:ConsumeName() ~= "then" then
-			local el, ec = self:Pos()
+		local condition = self:consumeCondition()
+		if self:consumeName() ~= "then" then
+			local el, ec = self:pos()
 			error({ message = "Expected 'then' after elseif condition", line = el, col = ec, filepath = self.filepath })
 		end
-		self:SkipWhitespace()
-		if self:Cur(1) ~= "%}" then
-			local el, ec = self:Pos()
+		self:skipWhitespace()
+		if self:cur(1) ~= "%}" then
+			local el, ec = self:pos()
 			error({ message = "Expected '%}' to close {% elseif %} tag", line = el, col = ec, filepath = self.filepath })
 		end
 		self.cursor += 2
-		local body, terminate = self:ConsumeUntil({ "elseif", "else", "end" })
+		local body, terminate = self:consumeUntil({ "elseif", "else", "end" })
 		return {
 			type = "elseif",
 			conditionChain = condition,
@@ -642,29 +643,29 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 			filepath = self.filepath,
 		}
 	elseif key == "else" then
-		if self:Cur(1) ~= "%}" then
-			local el, ec = self:Pos()
+		if self:cur(1) ~= "%}" then
+			local el, ec = self:pos()
 			error({ message = "Expected '%}' to close {% else %} tag", line = el, col = ec, filepath = self.filepath })
 		end
 		self.cursor += 2
-		local body = self:ConsumeUntil({ "end" })
+		local body = self:consumeUntil({ "end" })
 		return { type = "else", body = body, line = line, col = col, filepath = self.filepath }
 	elseif key == "for" then
-		local itera = self:ConsumeName()
-		self:SkipWhitespace()
-		if self:Cur() == "," then
+		local itera = self:consumeName()
+		self:skipWhitespace()
+		if self:cur() == "," then
 			self.cursor += 1
-			self:SkipWhitespace()
-			local iterb = self:ConsumeName()
-			self:SkipWhitespace()
-			if self:ConsumeName() ~= "in" then
-				local el, ec = self:Pos()
+			self:skipWhitespace()
+			local iterb = self:consumeName()
+			self:skipWhitespace()
+			if self:consumeName() ~= "in" then
+				local el, ec = self:pos()
 				error({ message = "Expected 'in' in for-in loop", line = el, col = ec, filepath = self.filepath })
 			end
-			self:SkipWhitespace()
-			local iterval = self:ConsumeExpr()
-			if self:ConsumeName() ~= "do" then
-				local el, ec = self:Pos()
+			self:skipWhitespace()
+			local iterval = self:consumeExpr()
+			if self:consumeName() ~= "do" then
+				local el, ec = self:pos()
 				error({
 					message = "Expected 'do' at end of for-in loop header",
 					line = el,
@@ -672,10 +673,10 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 					filepath = self.filepath,
 				})
 			end
-			self:SkipWhitespace()
+			self:skipWhitespace()
 
-			if self:Cur(1) ~= "%}" then
-				local el, ec = self:Pos()
+			if self:cur(1) ~= "%}" then
+				local el, ec = self:pos()
 				error({
 					message = "Expected '%}' to close {% for %} tag",
 					line = el,
@@ -690,18 +691,18 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 				var1 = itera,
 				var2 = iterb,
 				items = iterval,
-				body = (self:ConsumeUntil({ "end" })),
+				body = (self:consumeUntil({ "end" })),
 				line = line,
 				col = col,
 				filepath = self.filepath,
 			}
-		elseif self:Cur() == "=" then
+		elseif self:cur() == "=" then
 			self.cursor += 1
-			self:SkipWhitespace()
-			local start = self:ConsumeExpr()
-			self:SkipWhitespace()
-			if self:Cur() ~= "," then
-				local el, ec = self:Pos()
+			self:skipWhitespace()
+			local start = self:consumeExpr()
+			self:skipWhitespace()
+			if self:cur() ~= "," then
+				local el, ec = self:pos()
 				error({
 					message = "Expected ',' between start and end in numeric for loop",
 					line = el,
@@ -710,10 +711,10 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 				})
 			end
 			self.cursor += 1
-			self:SkipWhitespace()
-			local end_ = self:ConsumeExpr()
-			if self:ConsumeName() ~= "do" then
-				local el, ec = self:Pos()
+			self:skipWhitespace()
+			local end_ = self:consumeExpr()
+			if self:consumeName() ~= "do" then
+				local el, ec = self:pos()
 				error({
 					message = "Expected 'do' at end of numeric for loop header",
 					line = el,
@@ -721,10 +722,10 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 					filepath = self.filepath,
 				})
 			end
-			self:SkipWhitespace()
+			self:skipWhitespace()
 
-			if self:Cur(1) ~= "%}" then
-				local el, ec = self:Pos()
+			if self:cur(1) ~= "%}" then
+				local el, ec = self:pos()
 				error({
 					message = "Expected '%}' to close {% for %} tag",
 					line = el,
@@ -739,13 +740,13 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 				var = itera,
 				start = start,
 				end_ = end_,
-				body = (self:ConsumeUntil({ "end" })),
+				body = (self:consumeUntil({ "end" })),
 				line = line,
 				col = col,
 				filepath = self.filepath,
 			}
 		else
-			local el, ec = self:Pos()
+			local el, ec = self:pos()
 			error({
 				message = "Malformed for loop - expected ',' (for-in) or '=' (numeric for) after loop variable",
 				line = el,
@@ -757,109 +758,109 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 		self.cursor += 2
 		return { type = "end", line = line, col = col, filepath = self.filepath }
 	elseif key == "macro" then
-		local macroName = self:ConsumeName()
-		self:SkipWhitespace()
+		local macroName = self:consumeName()
+		self:skipWhitespace()
 		local args = {}
-		if self:TryConsume("(") then
-			self:SkipWhitespace()
-			if not self:TryConsume(")") then
-				self:SkipWhitespace()
-				table.insert(args, self:ConsumeName())
-				while self:TryConsume(",") do
-					self:SkipWhitespace()
-					table.insert(args, self:ConsumeName())
+		if self:tryConsume("(") then
+			self:skipWhitespace()
+			if not self:tryConsume(")") then
+				self:skipWhitespace()
+				table.insert(args, self:consumeName())
+				while self:tryConsume(",") do
+					self:skipWhitespace()
+					table.insert(args, self:consumeName())
 				end
-				self:SkipWhitespace()
-				self:Consume(")")
+				self:skipWhitespace()
+				self:consume(")")
 			end
 		end
-		self:SkipWhitespace()
-		self:Consume("%}")
+		self:skipWhitespace()
+		self:consume("%}")
 		return {
 			type = "macro",
 			name = macroName,
 			args = args,
-			body = (self:ConsumeUntil({ "end" })),
+			body = (self:consumeUntil({ "end" })),
 			line = line,
 			col = col,
 			filepath = self.filepath,
 		}
 	elseif key == "use" then
-		local macroName = self:ConsumeName()
-		self:SkipWhitespace()
+		local macroName = self:consumeName()
+		self:skipWhitespace()
 		local args: { AstExpression } = {}
-		if self:TryConsume("(") then
-			self:SkipWhitespace()
-			if not self:TryConsume(")") then
-				self:SkipWhitespace()
-				table.insert(args, self:ConsumeExpr())
-				while self:TryConsume(",") do
-					self:SkipWhitespace()
-					table.insert(args, self:ConsumeExpr())
+		if self:tryConsume("(") then
+			self:skipWhitespace()
+			if not self:tryConsume(")") then
+				self:skipWhitespace()
+				table.insert(args, self:consumeExpr())
+				while self:tryConsume(",") do
+					self:skipWhitespace()
+					table.insert(args, self:consumeExpr())
 				end
-				self:SkipWhitespace()
-				self:Consume(")")
+				self:skipWhitespace()
+				self:consume(")")
 			end
 		end
-		self:SkipWhitespace()
-		self:Consume("%}")
+		self:skipWhitespace()
+		self:consume("%}")
 		return {
 			type = "macroCall",
 			name = macroName,
 			args = args,
-			body = (self:ConsumeUntil({ "end" })),
+			body = (self:consumeUntil({ "end" })),
 			line = line,
 			col = col,
 			filepath = self.filepath,
 		}
 	elseif key == "slot" then
-		local slotName = self:ConsumeName()
+		local slotName = self:consumeName()
 		-- if slotName == "default" then
 		-- 	error({ message = "Slot name 'default' is reserved", line = line, col = col, filepath = self.filepath })
 		-- end
-		self:SkipWhitespace()
-		self:Consume("%}")
+		self:skipWhitespace()
+		self:consume("%}")
 		return {
 			type = "slot",
 			name = slotName,
-			body = (self:ConsumeUntil({ "end" })),
+			body = (self:consumeUntil({ "end" })),
 			line = line,
 			col = col,
 			filepath = self.filepath,
 		}
 	elseif key == "fill" then
-		local slotName = self:ConsumeName()
+		local slotName = self:consumeName()
 		if slotName == "default" then
 			error({ message = "Slot name 'default' is reserved", line = line, col = col, filepath = self.filepath })
 		end
-		self:SkipWhitespace()
-		self:Consume("%}")
+		self:skipWhitespace()
+		self:consume("%}")
 		return {
 			type = "slotAssign",
 			name = slotName,
-			body = (self:ConsumeUntil({ "end" })),
+			body = (self:consumeUntil({ "end" })),
 			line = line,
 			col = col,
 			filepath = self.filepath,
 		}
 	elseif key == "set" then
-		self:SkipWhitespace()
-		local name = self:ConsumeName()
-		self:SkipWhitespace()
-		self:Consume("=")
-		self:SkipWhitespace()
-		local value = self:ConsumeExpr()
-		self:SkipWhitespace()
-		self:Consume("%}")
+		self:skipWhitespace()
+		local name = self:consumeName()
+		self:skipWhitespace()
+		self:consume("=")
+		self:skipWhitespace()
+		local value = self:consumeExpr()
+		self:skipWhitespace()
+		self:consume("%}")
 		return {
 			type = "set",
 			name = name,
 			value = value,
 		}
 	elseif key == "include" then
-		self:SkipWhitespace()
-		local path = self:ConsumeExpr().value
-		self:SkipWhitespace()
+		self:skipWhitespace()
+		local path = self:consumeExpr().value
+		self:skipWhitespace()
 		if typeof(path) ~= "string" then
 			error({
 				message = "{% include %} path must be a string literal",
@@ -868,7 +869,7 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 				filepath = self.filepath,
 			})
 		end
-		self:Consume("%}")
+		self:consume("%}")
 
 		if not self.filepath then
 			error({
@@ -879,8 +880,8 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 			})
 		end
 
-		local dir = fs.dirname(self.filepath)
-		local fullFile = fs.join(dir, path)
+		local dir = fs.path.dirname(self.filepath)
+		local fullFile = fs.path.join(dir, path)
 		if not fs.isFile(fullFile) then
 			error({
 				message = "{% include %} could not find '" .. path .. "' (tried: " .. fullFile .. ")",
@@ -889,15 +890,15 @@ function Parser.ConsumeStmt(self: Parser): AstNode
 				filepath = self.filepath,
 			})
 		end
-		local content = fs.readFile(fullFile)
+		local content = fs.openSync(fullFile):readSync()
 
-		local subFile = (Parser.new(content, fullFile):ConsumeUntil({ "eof" }))
+		local subFile = (Parser.new(content, fullFile):consumeUntil({ "eof" }))
 
 		return {
 			type = "included",
 			path = fullFile,
 			body = subFile,
-			passed = self:ConsumeUntil({ "end" }),
+			passed = self:consumeUntil({ "end" }),
 			line = line,
 			col = col,
 			filepath = self.filepath,
@@ -912,11 +913,11 @@ end
 	Advances the cursor past the closing `#}` and returns `nil` (no AST
 	node is produced).
 ]=]
-function Parser.ConsumeComment(self: Parser): nil
+function Parser.consumeComment(self: Parser): nil
 	local commendEnd = self.source:find("#}", self.cursor, true)
 
 	if not commendEnd then
-		local line, col = self:Pos()
+		local line, col = self:pos()
 		error({
 			message = "Unterminated comment - missing closing '#}'",
 			line = line,
@@ -941,10 +942,10 @@ end
 	@return AstSuite -- The body nodes collected before the match.
 	@return AstNode -- The terminating node.
 ]=]
-function Parser.ConsumeUntil(self: Parser, match: { string }): (AstSuite, AstNode)
+function Parser.consumeUntil(self: Parser, match: { string }): (AstSuite, AstNode)
 	local nodes = {}
 	while true do
-		local node = self:Next()
+		local node = self:next()
 		if not node then
 			continue
 		end
@@ -952,7 +953,7 @@ function Parser.ConsumeUntil(self: Parser, match: { string }): (AstSuite, AstNod
 			return nodes, node
 		end
 		if node.type == "eof" then
-			local line, col = self:Pos()
+			local line, col = self:pos()
 			error({
 				message = "Unexpected end of template - expected one of: " .. table.concat(match, ", "),
 				line = line,
@@ -972,10 +973,10 @@ end
 
 	@return AstNode? -- The next node, or `nil` for comments.
 ]=]
-function Parser.Next(self: Parser): AstNode?
+function Parser.next(self: Parser): AstNode?
 	-- End of string
 	if self.cursor > #self.source then
-		local line, col = self:Pos()
+		local line, col = self:pos()
 		return { type = "eof", line = line, col = col, filepath = self.filepath }
 	end
 
@@ -988,7 +989,7 @@ function Parser.Next(self: Parser): AstNode?
 
 	-- If we've got nothing left in this file, return a literal
 	if math.isinf(nextMin) then
-		local line, col = self:Pos()
+		local line, col = self:pos()
 		local oldCur = self.cursor
 		self.cursor = #self.source + 1
 
@@ -1003,7 +1004,7 @@ function Parser.Next(self: Parser): AstNode?
 
 	-- Whatever is coming up next is still a bit away
 	if (nextMin - self.cursor) ~= 0 then
-		local line, col = self:Pos()
+		local line, col = self:pos()
 		local literalChunk: AstLiteral = {
 			type = "literal",
 			value = self.source:sub(self.cursor, nextMin - 1),
@@ -1017,9 +1018,9 @@ function Parser.Next(self: Parser): AstNode?
 
 	if (nextExpr - self.cursor) == 0 then
 		self.cursor += 2
-		local expr = self:ConsumeExpr()
-		if self:Cur(1) ~= "}}" then
-			local line, col = self:Pos()
+		local expr = self:consumeExpr()
+		if self:cur(1) ~= "}}" then
+			local line, col = self:pos()
 			error({
 				message = "Unterminated expression - missing closing '}}'",
 				line = line,
@@ -1031,10 +1032,10 @@ function Parser.Next(self: Parser): AstNode?
 		return expr
 	elseif (nextStmt - self.cursor) == 0 then
 		self.cursor += 2
-		return self:ConsumeStmt()
+		return self:consumeStmt()
 	elseif (nextComment - self.cursor) == 0 then
 		self.cursor += 2
-		return self:ConsumeComment()
+		return self:consumeComment()
 	else
 		assert(false, "Impossible parser code path")
 	end

@@ -9,7 +9,8 @@ local test = {}
 
 -- ── ANSI colour helpers ──────────────────────────────────────────────────────
 
-local COLOR: boolean do
+local COLOR: boolean
+do
 	-- Honour https://no-color.org/
 	if os.getenv("NO_COLOR") then
 		COLOR = false
@@ -21,15 +22,27 @@ local COLOR: boolean do
 end
 
 local function ansi(code: string, s: string): string
-	if not COLOR then return s end
+	if not COLOR then
+		return s
+	end
 	return `\27[{code}m{s}\27[0m`
 end
 
-local function green(s: string)  return ansi("32",   s) end
-local function red(s: string)    return ansi("31",   s) end
-local function cyan(s: string)   return ansi("36",   s) end
-local function bold(s: string)   return ansi("1",    s) end
-local function dim(s: string)    return ansi("2",    s) end
+local function green(s: string)
+	return ansi("32", s)
+end
+local function red(s: string)
+	return ansi("31", s)
+end
+local function cyan(s: string)
+	return ansi("36", s)
+end
+local function bold(s: string)
+	return ansi("1", s)
+end
+local function dim(s: string)
+	return ansi("2", s)
+end
 
 local function fmtErr(err: any): string
 	return exception.format(err :: exception.Exception)
@@ -78,39 +91,39 @@ function Suite.new(name: string): Suite
 end
 
 --- Register a test case.
-function Suite.Test(self: Suite, name: string, runner: () -> ())
+function Suite.test(self: Suite, name: string, runner: () -> ())
 	table.insert(self.tests, { name = name, runner = runner })
 end
 
 --- Run once before all tests in this suite.
-function Suite.BeforeAll(self: Suite, fn: () -> ())
+function Suite.beforeAll(self: Suite, fn: () -> ())
 	self.beforeAll = fn
 end
 
 --- Run once after all tests in this suite.
-function Suite.AfterAll(self: Suite, fn: () -> ())
+function Suite.afterAll(self: Suite, fn: () -> ())
 	self.afterAll = fn
 end
 
 --- Run before each individual test.
-function Suite.BeforeEach(self: Suite, fn: () -> ())
+function Suite.beforeEach(self: Suite, fn: () -> ())
 	self.beforeEach = fn
 end
 
 --- Run after each individual test.
-function Suite.AfterEach(self: Suite, fn: () -> ())
+function Suite.afterEach(self: Suite, fn: () -> ())
 	self.afterEach = fn
 end
 
 --- Execute all tests in the suite and print results.  Returns pass/fail totals.
-function Suite.Run(self: Suite): RunTotals
+function Suite.run(self: Suite): RunTotals
 	local passed = 0
 	local failed = 0
 
 	stdio.write(bold(cyan(`  > {self.name}\n`)))
 
 	if self.beforeAll then
-		local r = table.pack(pcall(self.beforeAll :: () -> ()))
+		local r = table.pack(pcall(self.beforeAll :: (self: Suite) -> (), self))
 		local ok, err = r[1], r[2]
 		if not ok then
 			stdio.write(red(`    beforeAll failed: {fmtErr(err)}\n\n`))
@@ -175,7 +188,7 @@ end
 -- Equality / inequality -------------------------------------------------------
 
 --- Assert that the returned values equal `...` (via `==`).
-function Expecter.ToBe(self: Expecter, ...: any)
+function Expecter.toBe(self: Expecter, ...: any)
 	local expect = table.pack(...)
 	if expect.n ~= self.values.n then
 		error(`Expected {expect.n} return value(s) but got {self.values.n}`, 2)
@@ -188,7 +201,7 @@ function Expecter.ToBe(self: Expecter, ...: any)
 end
 
 --- Assert that the first returned value does NOT equal `value`.
-function Expecter.ToNotBe(self: Expecter, value: any)
+function Expecter.toNotBe(self: Expecter, value: any)
 	if self.values[1] == value then
 		error(`Expected value to not be {fmt(value)}`, 2)
 	end
@@ -197,14 +210,14 @@ end
 -- Nil / existence -------------------------------------------------------------
 
 --- Assert that at least one value was returned.
-function Expecter.ToExist(self: Expecter)
+function Expecter.toExist(self: Expecter)
 	if self.values.n == 0 then
 		error("Expected a return value but the function returned nothing", 2)
 	end
 end
 
 --- Assert that the first returned value is not nil (and that something was returned).
-function Expecter.ToNotBeNil(self: Expecter)
+function Expecter.toNotBeNil(self: Expecter)
 	if self.values.n == 0 then
 		error("Expected a non-nil return but the function returned nothing", 2)
 	end
@@ -214,7 +227,7 @@ function Expecter.ToNotBeNil(self: Expecter)
 end
 
 --- Assert that the first returned value is nil.
-function Expecter.ToBeNil(self: Expecter)
+function Expecter.toBeNil(self: Expecter)
 	if self.values[1] ~= nil then
 		error(`Expected nil but got {fmt(self.values[1])}`, 2)
 	end
@@ -223,28 +236,28 @@ end
 -- Boolean / truthy ------------------------------------------------------------
 
 --- Assert that the first returned value is exactly `true`.
-function Expecter.ToBeTrue(self: Expecter)
+function Expecter.toBeTrue(self: Expecter)
 	if self.values[1] ~= true then
 		error(`Expected true but got {fmt(self.values[1])}`, 2)
 	end
 end
 
 --- Assert that the first returned value is exactly `false`.
-function Expecter.ToBeFalse(self: Expecter)
+function Expecter.toBeFalse(self: Expecter)
 	if self.values[1] ~= false then
 		error(`Expected false but got {fmt(self.values[1])}`, 2)
 	end
 end
 
 --- Assert that the first returned value is truthy (not nil and not false).
-function Expecter.ToBeTruthy(self: Expecter)
+function Expecter.toBeTruthy(self: Expecter)
 	if not self.values[1] then
 		error(`Expected a truthy value but got {fmt(self.values[1])}`, 2)
 	end
 end
 
 --- Assert that the first returned value is falsy (nil or false).
-function Expecter.ToBeFalsy(self: Expecter)
+function Expecter.toBeFalsy(self: Expecter)
 	if self.values[1] then
 		error(`Expected a falsy value but got {fmt(self.values[1])}`, 2)
 	end
@@ -253,7 +266,7 @@ end
 -- Type checking ---------------------------------------------------------------
 
 --- Assert that `type(value) == expected`.
-function Expecter.ToBeType(self: Expecter, expected: string)
+function Expecter.toBeType(self: Expecter, expected: string)
 	local got = type(self.values[1])
 	if got ~= expected then
 		error(`Expected type "{expected}" but got "{got}"`, 2)
@@ -263,7 +276,7 @@ end
 -- Length / containment --------------------------------------------------------
 
 --- Assert that `#value == length`.
-function Expecter.ToHaveLength(self: Expecter, length: number)
+function Expecter.toHaveLength(self: Expecter, length: number)
 	if self.values.n == 0 then
 		error("Expected a return value but the function returned nothing", 2)
 	end
@@ -274,7 +287,7 @@ function Expecter.ToHaveLength(self: Expecter, length: number)
 end
 
 --- Assert that a string contains `item` as a plain substring, or that a table contains `item` as a value.
-function Expecter.ToContain(self: Expecter, item: any)
+function Expecter.toContain(self: Expecter, item: any)
 	local val = self.values[1]
 	if type(val) == "string" then
 		if not string.find(val, tostring(item), 1, true) then
@@ -282,7 +295,9 @@ function Expecter.ToContain(self: Expecter, item: any)
 		end
 	elseif type(val) == "table" then
 		for _, v in val do
-			if v == item then return end
+			if v == item then
+				return
+			end
 		end
 		error(`Expected table to contain {fmt(item)}`, 2)
 	else
@@ -291,7 +306,7 @@ function Expecter.ToContain(self: Expecter, item: any)
 end
 
 --- Assert that a string matches a Lua pattern.
-function Expecter.ToMatch(self: Expecter, pattern: string)
+function Expecter.toMatch(self: Expecter, pattern: string)
 	local val = self.values[1]
 	if type(val) ~= "string" then
 		error(`ToMatch requires a string but got "{type(val)}"`, 2)
@@ -303,7 +318,7 @@ end
 
 -- Numeric comparisons ---------------------------------------------------------
 
-function Expecter.ToBeGreaterThan(self: Expecter, n: number)
+function Expecter.toBeGreaterThan(self: Expecter, n: number)
 	local val = self.values[1]
 	if type(val) ~= "number" then
 		error(`ToBeGreaterThan requires a number but got "{type(val)}"`, 2)
@@ -313,7 +328,7 @@ function Expecter.ToBeGreaterThan(self: Expecter, n: number)
 	end
 end
 
-function Expecter.ToBeLessThan(self: Expecter, n: number)
+function Expecter.toBeLessThan(self: Expecter, n: number)
 	local val = self.values[1]
 	if type(val) ~= "number" then
 		error(`ToBeLessThan requires a number but got "{type(val)}"`, 2)
@@ -323,7 +338,7 @@ function Expecter.ToBeLessThan(self: Expecter, n: number)
 	end
 end
 
-function Expecter.ToBeGreaterThanOrEqual(self: Expecter, n: number)
+function Expecter.toBeGreaterThanOrEqual(self: Expecter, n: number)
 	local val = self.values[1]
 	if type(val) ~= "number" then
 		error(`ToBeGreaterThanOrEqual requires a number but got "{type(val)}"`, 2)
@@ -333,7 +348,7 @@ function Expecter.ToBeGreaterThanOrEqual(self: Expecter, n: number)
 	end
 end
 
-function Expecter.ToBeLessThanOrEqual(self: Expecter, n: number)
+function Expecter.toBeLessThanOrEqual(self: Expecter, n: number)
 	local val = self.values[1]
 	if type(val) ~= "number" then
 		error(`ToBeLessThanOrEqual requires a number but got "{type(val)}"`, 2)
@@ -344,7 +359,7 @@ function Expecter.ToBeLessThanOrEqual(self: Expecter, n: number)
 end
 
 --- Assert that two numbers are within `epsilon` of each other (default 1e-9).
-function Expecter.ToBeCloseTo(self: Expecter, expected: number, epsilon: number?)
+function Expecter.toBeCloseTo(self: Expecter, expected: number, epsilon: number?)
 	local eps = epsilon or 1e-9
 	local val = self.values[1]
 	if type(val) ~= "number" then
@@ -358,7 +373,7 @@ end
 -- Error handling --------------------------------------------------------------
 
 --- Assert that a function throws.  If `match` is provided, the error message must match that Lua pattern.
-function Expecter.ToError(self: Expecter, match: string?)
+function Expecter.toError(self: Expecter, match: string?)
 	if type(self.values[1]) ~= "function" then
 		error("ToError() requires a function argument", 2)
 	end
@@ -376,7 +391,7 @@ function Expecter.ToError(self: Expecter, match: string?)
 end
 
 --- Assert that a function does NOT throw.
-function Expecter.ToNotError(self: Expecter)
+function Expecter.toNotError(self: Expecter)
 	if type(self.values[1]) ~= "function" then
 		error("ToNotError() requires a function argument", 2)
 	end
@@ -395,7 +410,7 @@ end
 
 -- Loads a .test.luau file and returns the Suite it returns, or errors.
 local function load_test_file(path: string): Suite
-	local source = fs.readFile(path)
+	local source = fs.openSync(path):readSync()
 	local fn = luau.load(source, `@{path}`)
 	local suite = fn()
 	if type(suite) ~= "table" or getmetatable(suite) ~= Suite then
@@ -409,16 +424,20 @@ end
 --- Load and run a single `.test.luau` file. Exits with code 1 on failure
 --- when `exitOnFail` is true (the default).
 function test.runOne(path: string, exitOnFail: boolean?)
-	if exitOnFail == nil then exitOnFail = true end
+	if exitOnFail == nil then
+		exitOnFail = true
+	end
 
 	local ok, result = pcall(load_test_file, path)
 	if not ok then
 		stdio.write(red(`Failed to load {path}:\n{fmtErr(result)}\n`))
-		if exitOnFail then os.exit(1) end
+		if exitOnFail then
+			os.exit(1)
+		end
 		return { passed = 0, failed = 1 }
 	end
 
-	local totals = result:Run()
+	local totals = result:run()
 	stdio.write("\n")
 
 	if totals.failed > 0 then
@@ -451,7 +470,9 @@ end
 	any test fails.
 ]=]
 function test.runAll(path: string, exitOnFail: boolean?)
-	if exitOnFail == nil then exitOnFail = true end
+	if exitOnFail == nil then
+		exitOnFail = true
+	end
 
 	local totalPassed = 0
 	local totalFailed = 0
@@ -467,7 +488,7 @@ function test.runAll(path: string, exitOnFail: boolean?)
 		local entries = fs.listDir(dir)
 		table.sort(entries)
 		for _, entry in entries do
-			local full = fs.join(dir, entry)
+			local full = fs.path.join(dir, entry)
 			if fs.isDirectory(full) then
 				walk(full)
 			elseif entry:match("%.test%.luau$") then
@@ -478,7 +499,7 @@ function test.runAll(path: string, exitOnFail: boolean?)
 					continue
 				end
 				local s = suite :: Suite
-				local totals = s:Run()
+				local totals = s:run()
 				totalPassed += totals.passed
 				totalFailed += totals.failed
 				suiteCount += 1
@@ -486,7 +507,7 @@ function test.runAll(path: string, exitOnFail: boolean?)
 				for _, r in s.results do
 					if not r.passed then
 						local fe: FailEntry = { suite = s.name, name = r.name, err = (r.err or "") :: string }
-					table.insert(failures, fe)
+						table.insert(failures, fe)
 					end
 				end
 			end
@@ -530,4 +551,4 @@ function test.runAll(path: string, exitOnFail: boolean?)
 	return { passed = totalPassed, failed = totalFailed }
 end
 
-return test
+return table.freeze(test)

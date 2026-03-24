@@ -23,5 +23,52 @@ add_luau_script_module(pprint src/modules/pprint.luau)
 add_luau_script_module(argparse src/modules/argparse.luau)
 add_luau_script_module(mime src/modules/mime.luau)
 add_luau_script_module(signal src/modules/signal.luau)
+add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(test src/modules/test.luau)
+add_luau_script_module(websocket src/modules/websocket.luau)
+add_luau_script_module(webui src/modules/webui.luau)
+
+# Documentation engine
+add_luau_script_module(eryxdoc/content/
+    src/modules/eryxdoc/content/article.luau
+    src/modules/eryxdoc/content/modules.luau
+)
+add_luau_script_module(eryxdoc/extract/
+    src/modules/eryxdoc/extract/classDetection.luau
+    src/modules/eryxdoc/extract/comments.luau
+    src/modules/eryxdoc/extract/init.luau
+    src/modules/eryxdoc/extract/members.luau
+    src/modules/eryxdoc/extract/signatures.luau
+    src/modules/eryxdoc/extract/typeDescriber.luau
+    src/modules/eryxdoc/extract/types.luau
+)
+add_luau_script_module(eryxdoc/parse/
+    src/modules/eryxdoc/parse/doctags.luau
+    src/modules/eryxdoc/parse/highlight.luau
+)
+add_luau_script_module(eryxdoc/render/
+    src/modules/eryxdoc/render/jsonExport.luau
+    src/modules/eryxdoc/render/links.luau
+    src/modules/eryxdoc/render/renderer.luau
+    src/modules/eryxdoc/render/sidebar.luau
+)
+add_luau_script_module(eryxdoc/theme/templates/
+    src/modules/eryxdoc/theme/templates/_footer.html
+    src/modules/eryxdoc/theme/templates/_header.html
+    src/modules/eryxdoc/theme/templates/_layout.html
+    src/modules/eryxdoc/theme/templates/_sidebar.html
+    src/modules/eryxdoc/theme/templates/404_page.html
+    src/modules/eryxdoc/theme/templates/api_page.html
+    src/modules/eryxdoc/theme/templates/article_page.html
+    src/modules/eryxdoc/theme/templates/index_page.html
+)
+add_luau_script_module(eryxdoc/theme/
+    src/modules/eryxdoc/theme/eryxdoc-live-reload.js
+    src/modules/eryxdoc/theme/style.css
+)
+add_luau_script_module(eryxdoc/
+    src/modules/eryxdoc/_devServer.luau
+    src/modules/eryxdoc/init.luau
+    src/modules/eryxdoc/warnings.luau
+)

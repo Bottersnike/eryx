@@ -251,5 +251,6 @@ LUAU_MODULE_EXPORT int luauopen_task(lua_State* L) {
     lua_pushcfunction(L, task_cancel, "cancel");
     lua_setfield(L, -2, "cancel");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

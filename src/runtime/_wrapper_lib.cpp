@@ -1,9 +1,10 @@
 #include "_wrapper_lib.hpp"
 
-#include "lconfig.hpp"
-#include "lexception.hpp"
 #include "../vfs.hpp"
 #include "embedded_modules.h"
+#include "lconfig.hpp"
+#include "lexception.hpp"
+
 
 // Analysis headers (available because LuauShared links Luau.Analysis)
 #include <cstring>
@@ -20,7 +21,6 @@
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/Config.h"
-#include "Luau/ExperimentalFlags.h"
 #include "Luau/Frontend.h"
 #include "Luau/ModuleResolver.h"
 #include "Luau/PrettyPrinter.h"
@@ -30,14 +30,16 @@
 #include "lrequire.hpp"
 #include "lresolve.hpp"
 
-
 // CLI args offset – default 1 (skip just the exe name)
 static int g_cliargs_offset = 1;
 static int g_cliargs_argc = 0;
 static const char** g_cliargs_argv = nullptr;
 ERYX_API void eryx_set_cliargs_offset(int offset) { g_cliargs_offset = offset; }
 ERYX_API int eryx_get_cliargs_offset() { return g_cliargs_offset; }
-ERYX_API void eryx_set_cliargs(int argc, const char** argv) { g_cliargs_argc = argc; g_cliargs_argv = argv; }
+ERYX_API void eryx_set_cliargs(int argc, const char** argv) {
+    g_cliargs_argc = argc;
+    g_cliargs_argv = argv;
+}
 ERYX_API int eryx_get_cliargs_argc() { return g_cliargs_argc; }
 ERYX_API const char** eryx_get_cliargs_argv() { return g_cliargs_argv; }
 
@@ -377,7 +379,7 @@ struct EryxConfigResolver : Luau::ConfigResolver {
         fs::path dir;
         std::string vfsDir;
         try {
-            // VFS modules have names like @@vfs/subdir/file.luau —
+            // VFS modules have names like @@vfs/subdir/file.luau -
             // strip the prefix and use the VFS directory directly.
             if (name.starts_with(CHUNK_PREFIX_VFS)) {
                 std::string vfsPath = name.substr(CHUNK_PREFIX_VFS_LEN);
@@ -760,20 +762,13 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     return 1;
 }
 
-static void enableAllLuauFlags() {
-    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next) {
-        if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
-            flag->value = true;
-    }
-}
-
 #ifdef ERYX_EMBED
 int luaG_isnative(lua_State* L, int level);
 #else
 LUA_API int luaG_isnative(lua_State* L, int level);
 #endif
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
-    enableAllLuauFlags();
+    eryx_enable_all_luau_flags();
 
     // Create Lua state
     lua_State* L = luaL_newstate();
@@ -838,18 +833,26 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     lua_pushcfunction(L, eryx_lua_require, "require");
     lua_setglobal(L, "require");
 
-    // Set __DIR__ and __FILE__
+    // Set _DIR and _FILE
     if (sourceFilename) {
         std::filesystem::path scriptPath = std::filesystem::absolute(sourceFilename);
         std::string scriptDir = scriptPath.parent_path().string();
         std::string scriptFile = scriptPath.string();
 
         lua_pushstring(L, scriptDir.c_str());
-        lua_setglobal(L, "__DIR__");
+        lua_setglobal(L, "_DIR");
 
         lua_pushstring(L, scriptFile.c_str());
-        lua_setglobal(L, "__FILE__");
+        lua_setglobal(L, "_FILE");
     }
+
+    // Set _VERSION
+    std::string version = "erxy ";
+    version += LUAU_APPROX_VERSION;
+    version += "-";
+    version += LUAU_GIT_HASH;
+    lua_pushstring(L, version.c_str());
+    lua_setglobal(L, "_VERSION");
 
     // Sandbox all libraries
     // ! REQUIRED FOR NATIVE CODE GEN

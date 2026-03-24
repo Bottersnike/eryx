@@ -3,11 +3,15 @@
     "luau-lsp.platform.type": "standard",
     "luau-lsp.types.definitionFiles": { "@standard": "./sample/types.d.luau" },
     "luau-lsp.fflags.enableNewSolver": true,
+    "luau-lsp.fflags.enableByDefault": true,
+    "luau-lsp.fflags.override": { "LuauConst": "true" },
     "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",
-    "clangd.arguments": [
-        "--compile-commands-dir=${workspaceFolder}/build/"
-    ],
-    "cSpell.words": [
-        "eryx"
-    ],
+    "clangd.arguments": ["--compile-commands-dir=${workspaceFolder}/build/"],
+    "cSpell.words": ["eryx"],
+    "search.useIgnoreFiles": false,
+    "files.exclude": {
+        "vendor/**": true,
+        "build*/**": true,
+        ".cache/**": true,
+    }
 }

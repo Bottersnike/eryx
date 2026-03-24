@@ -242,7 +242,7 @@ static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::p
 }
 
 // Walk from `startDir` upward to `stopDir` (inclusive), collecting all
-// config files (.luaurc or *.config.luau).  Configs are merged parent-first
+// config files (.luaurc or .config.luau).  Configs are merged parent-first
 // so that inner (closer to startDir) configs take precedence.
 //
 // When `vfsStartDir` is non-empty the search begins inside the VFS at that
@@ -277,19 +277,16 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
             std::string vfsLuaurc = vfsDir.empty() ? ".luaurc" : vfsDir + "/.luaurc";
             bool vfsHasLuaurc = !vfs_read_file(vfsLuaurc).empty();
 
-            // Check for *.config.luau in VFS
+            // Check for .config.luau in VFS
             std::string vfsConfigLuau;
             auto vfsFiles = vfs_list_dir(vfsDir);
             for (auto& f : vfsFiles) {
                 std::string_view relative = std::string_view(f).substr(
                     vfsDir.empty() ? 0 : vfsDir.size() + 1);
                 if (relative.find('/') != std::string_view::npos) continue;
-                if (f.size() >= 12 && f.substr(f.size() - 12) == ".config.luau") {
-                    if (!vfsConfigLuau.empty()) {
-                        luaL_error(L, "Found multiple .config.luau files in VFS directory %s",
-                                   vfsDir.c_str());
-                    }
+                if (relative == ".config.luau") {
                     vfsConfigLuau = f;
+                    break;
                 }
             }
             bool vfsHasConfigLuau = !vfsConfigLuau.empty();
@@ -347,33 +344,23 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
         while (true) {
             fs::path luaurc = cur / ".luaurc";
 
-            // Scan filesystem for *.config.luau files
-            std::vector<fs::path> configLuaus;
+            // Scan filesystem for .config.luau files
+            fs::path configLuau;
             if (fs::exists(cur) && fs::is_directory(cur)) {
                 for (auto& entry : fs::directory_iterator(cur)) {
                     if (!entry.is_regular_file()) continue;
                     std::string name = entry.path().filename().string();
-                    if (name.size() >= 12 && name.substr(name.size() - 12) == ".config.luau") {
-                        configLuaus.push_back(entry.path());
+                    if (name == ".config.luau") {
+                        configLuau = entry.path();
                         break;
                     }
                 }
             }
 
-            // Guard against duplicate *.config.luau
-            fs::path configLuau;
-            if (configLuaus.size() > 1) {
-                luaL_error(L,
-                           "Found multiple .config.luau files (" PATH_PRINTF ", " PATH_PRINTF ")",
-                           configLuaus[0].c_str(), configLuaus[1].c_str());
-            } else if (configLuaus.size() == 1) {
-                configLuau = configLuaus[0];
-            }
-
             bool hasLuaurc = fs::exists(luaurc);
             bool hasConfigLuau = !configLuau.empty();
 
-            // Guard against .luaurc and *.config.luau in the same directory
+            // Guard against .luaurc and .config.luau in the same directory
             if (hasLuaurc && hasConfigLuau) {
                 luaL_error(L,
                            "Found both .luaurc and " PATH_PRINTF " in " PATH_PRINTF
@@ -400,13 +387,9 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
                     std::string_view relative = std::string_view(f).substr(
                         vfsDir.empty() ? 0 : vfsDir.size() + 1);
                     if (relative.find('/') != std::string_view::npos) continue;
-                    if (f.size() >= 12 && f.substr(f.size() - 12) == ".config.luau") {
-                        if (!vfsConfigLuau.empty()) {
-                            luaL_error(L,
-                                       "Found multiple .config.luau files in VFS directory %s",
-                                       vfsDir.c_str());
-                        }
+                    if (relative == ".config.luau") {
                         vfsConfigLuau = f;
+                        break;
                     }
                 }
                 bool vfsHasConfigLuau = !vfsConfigLuau.empty();
@@ -444,7 +427,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
     Luau::Config cfg;
 
     for (auto it = configs.rbegin(); it != configs.rend(); ++it) {
-        // Read file contents — from VFS or filesystem
+        // Read file contents - from VFS or filesystem
         std::string contents;
         if (it->isVFS) {
             auto data = vfs_read_file(it->vfsPath);

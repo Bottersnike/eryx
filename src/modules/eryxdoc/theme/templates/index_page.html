@@ -1,0 +1,49 @@
+{% include "_layout.html" %}
+
+<main class="main-content">
+    <div class="container">
+        <h1>{{ global.title | escape }}</h1>
+
+        {% if global.articles | length > 0 then %}
+        <h2>Guides</h2>
+        <div class="module-grid">
+            {% for _, a in global.articles do %}
+            <a class="module-card" href="{{ a.article | webPath }}">
+                <div class="module-name">{{ a.article.title | escape }}</div>
+                {% if a.article.summary then %}
+                <div class="module-desc">{{ a.article.summary | escape }}</div>
+                {% end %}
+            </a>
+            {% end %}
+        </div>
+        {% end %}
+
+        <h2>API Reference</h2>
+        <div class="module-grid">
+            {% for _, mod in global.modules do %}
+            <a class="module-card" href="{{ mod | webPath }}">
+                <div class="module-name"><code>{{ mod.qualifiedName | escape }}</code></div>
+                {% if moduleSummaries[mod.qualifiedName] then %}
+                <div class="module-desc">{{ moduleSummaries[mod.qualifiedName] }}</div>
+                {% end %}
+                <div class="module-stats">
+                    {% if mod.classes | length > 0 then %}
+                    <span>{{mod.classes | length}} class{% if mod.classes | length ~= 1 then %}es{% end %}</span>
+                    {% end %}
+                    {% if mod.functions | length > 0 then %}
+                    <span>{{mod.functions | length}} function{% if mod.functions | length ~= 1 then %}s{% end %}</span>
+                    {% end %}
+                    {% if mod.types | length > 0 then %}
+                    <span>{{mod.types | length}} type{% if mod.types | length ~= 1 then %}s{% end %}</span>
+                    {% end %}
+                    {% if mod.constants | length > 0 then %}
+                    <span>{{mod.constants | length}} constant{% if mod.constants | length ~= 1 then %}s{% end %}</span>
+                    {% end %}
+                </div>
+            </a>
+            {% end %}
+        </div>
+    </div>
+</main>
+
+{% end %}

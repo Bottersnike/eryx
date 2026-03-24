@@ -91,7 +91,7 @@ export type Duration = setmetatable<
 		totalNanoseconds: number,
 
 		--- Returns a new Duration with the same magnitude but always non-negative.
-		Abs: (self: Duration) -> Duration,
+		abs: (self: Duration) -> Duration,
 	},
 	{
 		__add: (self: Duration, delta: Duration) -> Duration,
@@ -153,43 +153,43 @@ export type DateTime = setmetatable<
 
 		--- Returns an ISO 8601 string such as `"2024-03-15T10:30:00+05:30"`.
 		--- Sub-seconds are included only when non-zero.
-		ToIsoString: (self: DateTime) -> string,
+		toIsoString: (self: DateTime) -> string,
 
 		--- Returns the UTC Unix timestamp as a **whole number of seconds**.
-		ToUnix: (self: DateTime) -> number,
+		toUnix: (self: DateTime) -> number,
 
 		--- Returns the UTC Unix timestamp as a **whole number of milliseconds**.
-		ToUnixMs: (self: DateTime) -> number,
+		toUnixMs: (self: DateTime) -> number,
 
 		--- Returns a new DateTime representing the same UTC instant displayed in
 		--- `zone`. Converts a fixed-offset instant into a DST-aware named-zone one.
 		--- Throws if `zone` is not a valid IANA timezone name.
-		WithZone: (self: DateTime, zone: string) -> DateTime,
+		withZone: (self: DateTime, zone: string) -> DateTime,
 
 		--- Returns a Duration equal to `self − other` (positive when `self` is later).
-		Diff: (self: DateTime, other: DateTime) -> Duration,
+		diff: (self: DateTime, other: DateTime) -> Duration,
 
 		--- Formats local time using a chrono format string (see module docs for tokens).
 		--- For fixed-offset instants, `%z`/`%Ez`/`%Z` expand to the literal offset.
 		--- Example: `dt:Format("%Y-%m-%d %H:%M")` -> `"2024-03-15 10:30"`
-		Format: (self: DateTime, fmt: string) -> string,
+		format: (self: DateTime, fmt: string) -> string,
 
 		--- Formats the underlying **UTC** time using a chrono format string.
 		--- `%z` will always output `+0000`.
-		FormatUtc: (self: DateTime, fmt: string) -> string,
+		formatUtc: (self: DateTime, fmt: string) -> string,
 
 		--- Returns a new DateTime at midnight (00:00:00.000000000) of the same
 		--- local calendar day, preserving the zone/offset.
-		StartOfDay: (self: DateTime) -> DateTime,
+		startOfDay: (self: DateTime) -> DateTime,
 
 		--- Returns a new DateTime shifted by `n` calendar months (may be negative).
 		--- The day is clamped to the last valid day of the target month
 		--- (e.g. Jan 31 + 1 month -> Feb 28/29).
-		AddMonths: (self: DateTime, n: number) -> DateTime,
+		addMonths: (self: DateTime, n: number) -> DateTime,
 
 		--- Returns a new DateTime shifted by `n` calendar years (may be negative).
 		--- Equivalent to `AddMonths(n * 12)`.
-		AddYears: (self: DateTime, n: number) -> DateTime,
+		addYears: (self: DateTime, n: number) -> DateTime,
 	},
 	{
 		--- Shift the instant forward by a Duration.
@@ -322,4 +322,4 @@ function date.days(n: number): Duration
 	return nil :: any
 end
 
-return date
+return table.freeze(date)

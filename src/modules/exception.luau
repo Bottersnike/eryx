@@ -12,6 +12,7 @@ export type ExceptionType = "runtime" | "assert" | "thrown" | "syntax" | "requir
 
 export type Exception = {
 	message: string,
+	data: any?,
 	type: ExceptionType,
 	traceback: { ExceptionFrame },
 }
@@ -23,4 +24,4 @@ function exception.format(error: Exception): string
 	return nil :: any
 end
 
-return exception
+return table.freeze(exception)

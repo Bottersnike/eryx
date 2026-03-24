@@ -12,11 +12,11 @@
 
 	```luau
 	local sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
-	sock:Connect("127.0.0.1", 8080)
-	sock:SendAll(buffer.fromstring("GET / HTTP/1.0\r\n\r\n"))
-	local data = sock:Recv(4096)
+	sock:connect("127.0.0.1", 8080)
+	sock:sendAll(buffer.fromstring("GET / HTTP/1.0\r\n\r\n"))
+	local data = sock:recv(4096)
 	print(buffer.tostring(data))
-	sock:Close()
+	sock:close()
 	```
 ]=]
 
@@ -30,7 +30,7 @@ export type Socket = {
 		@param host The local address to bind to.
 		@param port The port number to bind to.
 	]=]
-	Bind: (self: Socket, host: string, port: number) -> (),
+	bind: (self: Socket, host: string, port: number) -> (),
 
 	--[=[
 		Starts listening for incoming connections.
@@ -41,7 +41,7 @@ export type Socket = {
 		@param backlog Maximum number of queued connections.  Defaults to
 			a system-defined value (usually 128) when omitted.
 	]=]
-	Listen: (self: Socket, backlog: number?) -> (),
+	listen: (self: Socket, backlog: number?) -> (),
 
 	--[=[
 		Accepts an incoming connection, returning a new socket for
@@ -60,7 +60,7 @@ export type Socket = {
 		@return string -- The remote IP address.
 		@return number -- The remote port.
 	]=]
-	Accept: (self: Socket) -> (Socket, string, number) | (self: Socket) -> (nil, nil, nil),
+	accept: (self: Socket) -> (Socket, string, number) | (self: Socket) -> (nil, nil, nil),
 
 	--[=[
 		Opens a connection to a remote host.
@@ -72,7 +72,7 @@ export type Socket = {
 		@param host The remote address to connect to.
 		@param port The remote port number.
 	]=]
-	Connect: (self: Socket, host: string, port: number) -> (),
+	connect: (self: Socket, host: string, port: number) -> (),
 
 	--[=[
 		Closes the socket, releasing all associated OS resources.
@@ -80,7 +80,7 @@ export type Socket = {
 		After closing, no further operations may be performed on this socket.
 		It is safe to call `close` multiple times.
 	]=]
-	Close: (self: Socket) -> (),
+	close: (self: Socket) -> (),
 
 	--[=[
 		Shuts down one or both halves of the connection without closing the
@@ -91,7 +91,7 @@ export type Socket = {
 
 		@param how The shutdown mode - one of `SHUT_RD`, `SHUT_WR`, or `SHUT_RDWR`.
 	]=]
-	Shutdown: (self: Socket, how: number) -> (),
+	shutdown: (self: Socket, how: number) -> (),
 
 	--[=[
 		Sends data over the socket. Returns the number of bytes actually
@@ -106,7 +106,7 @@ export type Socket = {
 		@param data The data to send.
 		@return number -- Number of bytes sent.
 	]=]
-	Send: (self: Socket, data: buffer) -> number?,
+	send: (self: Socket, data: buffer) -> number?,
 
 	--[=[
 		Sends all data in the buffer, retrying internally until every byte
@@ -119,7 +119,7 @@ export type Socket = {
 
 		@param data The data to send.
 	]=]
-	SendAll: (self: Socket, data: buffer) -> boolean,
+	sendAll: (self: Socket, data: buffer) -> boolean,
 
 	--[=[
 		Sends data to a specific destination address (UDP).
@@ -135,7 +135,7 @@ export type Socket = {
 		@param port The destination port.
 		@return number -- Number of bytes sent.
 	]=]
-	SendTo: (self: Socket, data: buffer, host: string, port: number) -> number?,
+	sendTo: (self: Socket, data: buffer, host: string, port: number) -> number?,
 
 	--[=[
 		Receives up to `bufsize` bytes from the socket.
@@ -150,7 +150,7 @@ export type Socket = {
 		@param bufsize Maximum number of bytes to receive.
 		@return buffer -- The received data.
 	]=]
-	Recv: (self: Socket, bufsize: number) -> buffer?,
+	recv: (self: Socket, bufsize: number) -> buffer?,
 
 	--[=[
 		Receives a datagram of up to `bufsize` bytes along with the
@@ -164,7 +164,7 @@ export type Socket = {
 		@return string -- The sender's IP address.
 		@return number -- The sender's port.
 	]=]
-	RecvFrom: (self: Socket, bufsize: number) -> (buffer, string, number)
+	recvFrom: (self: Socket, bufsize: number) -> (buffer, string, number)
 		| (self: Socket, bufsize: number) -> (nil, nil, nil),
 
 	--[=[
@@ -179,7 +179,7 @@ export type Socket = {
 		@param optname The option identifier.
 		@param value The value to set - a number or boolean depending on the option.
 	]=]
-	SetSockOpt: (self: Socket, level: number, optname: number, value: number | boolean) -> (),
+	setSockOpt: (self: Socket, level: number, optname: number, value: number | boolean) -> (),
 
 	--[=[
 		Gets the current value of a socket option.
@@ -188,7 +188,7 @@ export type Socket = {
 		@param optname The option identifier.
 		@return number -- The current option value.
 	]=]
-	GetSockOpt: (self: Socket, level: number, optname: number) -> number,
+	getSockOpt: (self: Socket, level: number, optname: number) -> number,
 
 	--[=[
 		Switches the socket between blocking and non-blocking mode.
@@ -199,7 +199,7 @@ export type Socket = {
 
 		@param flag `true` for blocking, `false` for non-blocking.
 	]=]
-	SetBlocking: (self: Socket, flag: boolean) -> (),
+	setBlocking: (self: Socket, flag: boolean) -> (),
 
 	--[=[
 		Sets a timeout (in seconds) for blocking socket operations.
@@ -208,7 +208,7 @@ export type Socket = {
 
 		@param seconds Timeout duration, or `nil` for no timeout.
 	]=]
-	SetTimeout: (self: Socket, seconds: number?) -> (),
+	setTimeout: (self: Socket, seconds: number?) -> (),
 
 	--[=[
 		Returns the remote address and port of the connected peer.
@@ -216,7 +216,7 @@ export type Socket = {
 		@return string -- The remote IP address.
 		@return number -- The remote port.
 	]=]
-	GetPeerName: (self: Socket) -> (string, number),
+	getPeerName: (self: Socket) -> (string, number),
 
 	--[=[
 		Returns the local address and port the socket is bound to.
@@ -224,7 +224,7 @@ export type Socket = {
 		@return string -- The local IP address.
 		@return number -- The local port.
 	]=]
-	GetSockName: (self: Socket) -> (string, number),
+	getSockName: (self: Socket) -> (string, number),
 
 	--[=[
 		Returns the underlying OS file descriptor / handle number for
@@ -232,11 +232,11 @@ export type Socket = {
 
 		@return number -- The file descriptor.
 	]=]
-	FileNo: (self: Socket) -> number,
+	fileNo: (self: Socket) -> number,
 }
 
 --[=[
-	Result record from [[getaddrinfo]], representing a single resolved
+	Result record from [[getAddrInfo]], representing a single resolved
 	address with its protocol metadata.
 ]=]
 export type AddrInfo = {
@@ -401,4 +401,4 @@ _socket.NI_NUMERICHOST = 1 :: number
 _socket.NI_NUMERICSERV = 2 :: number
 _socket.NI_DGRAM = 16 :: number
 
-return _socket
+return table.freeze(_socket)

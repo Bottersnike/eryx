@@ -26,7 +26,7 @@ int exception_new(lua_State* L) {
     return 1;
 }
 
-int exception_format(lua_State*L ) {
+int exception_format(lua_State* L) {
     luaL_checkudata(L, 1, EXCEPTION_METATABLE);
     lua_pushstring(L, eryx_format_exception(L, 1).c_str());
     return 1;
@@ -39,5 +39,6 @@ LUAU_MODULE_EXPORT int luauopen_exception(lua_State* L) {
     lua_pushcfunction(L, exception_format, "format");
     lua_setfield(L, -2, "format");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(LuauEmbedding LANGUAGES CXX C)
+project(Eryx LANGUAGES CXX C)
 
 # Prevent Windows.h from defining max and min macros which conflict with std::max/min
 add_compile_definitions(NOMINMAX)
@@ -22,6 +22,7 @@ option(ERYX_USE_ZSTD "Compile the zstd module" ON)
 option(ERYX_USE_BROTLI "Compile the brotli module" ON)
 option(ERYX_USE_BZIP2 "Compile the bzip2 module" ON)
 option(ERYX_USE_SQLITE3 "Compile the sqlite3 module" ON)
+option(ERYX_USE_PCRE2 "Compile the regex module, using PCRE2" ON)
 # ---------------------------------------------------------------------------
 
 # ERYX_HYBRID implies NOT ERYX_EMBED — hybrid keeps EryxShared as a DLL.
@@ -97,6 +98,18 @@ if(ERYX_USE_BZIP2)
     set(ENABLE_STATIC_LIB ON)
     set(ENABLE_LIB_ONLY ON)
     add_subdirectory("${BZIP2_DIR}" EXCLUDE_FROM_ALL)
+endif()
+if(ERYX_USE_PCRE2)
+    set(PCRE2_DIR "${VENDOR_DIR}/pcre2")
+    set(PCRE2_STATIC_PIC ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_8 ON CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_16 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2_32 OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_PCRE2GREP OFF CACHE BOOL "" FORCE)
+    set(PCRE2_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_JIT ON CACHE BOOL "" FORCE)
+    set(PCRE2_SUPPORT_UNICODE ON CACHE BOOL "" FORCE)
+    add_subdirectory("${PCRE2_DIR}" EXCLUDE_FROM_ALL)
 endif()
 
 set(LIBUV_DIR "${VENDOR_DIR}/libuv")
@@ -252,15 +265,31 @@ target_include_directories(eryx PRIVATE
 
 # ---------------------------------------------------------------------------
 # Copy built-in scripts to scripts/ next to the eryx executable
-file(GLOB ERYX_SCRIPTS "${CMAKE_CURRENT_SOURCE_DIR}/src/scripts/*.luau")
+# Use CONFIGURE_DEPENDS so CMake re-runs configure when files are added/removed,
+# and per-file stamp outputs so copies happen when sources change without
+# requiring the `eryx` target to be rebuilt.
+file(GLOB ERYX_SCRIPTS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/scripts/*.luau")
+set(_stamp_dir "${CMAKE_CURRENT_BINARY_DIR}/stamps/eryx_scripts")
+set(_stamp_files)
 foreach(_script ${ERYX_SCRIPTS})
     get_filename_component(_fname "${_script}" NAME)
-    add_custom_command(TARGET eryx POST_BUILD
+    set(_stamp "${_stamp_dir}/${_fname}.stamp")
+    add_custom_command(
+        OUTPUT "${_stamp}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_stamp_dir}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:eryx>/scripts"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_script}" "$<TARGET_FILE_DIR:eryx>/scripts/${_fname}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_script}"
+            "$<TARGET_FILE_DIR:eryx>/scripts/${_fname}"
+        COMMAND ${CMAKE_COMMAND} -E touch "${_stamp}"
+        DEPENDS "${_script}"
         COMMENT "Copying ${_fname} to scripts/"
     )
+    list(APPEND _stamp_files "${_stamp}")
 endforeach()
+
+add_custom_target(eryx_scripts ALL DEPENDS ${_stamp_files})
+add_dependencies(eryx eryx_scripts)
 
 # ---------------------------------------------------------------------------
 # add_luau_module(<name> <source_file> <types_file> [EXTRA_SOURCES ...] [EXTRA_INCLUDES ...] [EXTRA_LIBS ...])

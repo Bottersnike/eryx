@@ -286,6 +286,8 @@ export type ExprFunction = {
 	type: "ExprFunction",
 	location: Location,
 	debugname: string?,
+	generics: { string }?,
+	genericPacks: { string }?,
 	args: { AstLocal },
 	vararg: boolean,
 	varargAnnotation: AstTypePack?,
@@ -857,7 +859,7 @@ end
 	Computes autocompletion entries at a cursor position.
 
 	Runs type checking and returns contextual completions, including
-	property names, local bindings, keywords, and types — along with
+	property names, local bindings, keywords, and types - along with
 	their inferred types where available. This is the same engine
 	used by Luau language servers.
 
@@ -912,4 +914,4 @@ function luau.resolve(filePath: string, requirePath: string): string?
 	return nil :: any
 end
 
-return luau
+return table.freeze(luau)

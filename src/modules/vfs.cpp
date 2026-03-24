@@ -165,7 +165,7 @@ static int vfs_lua_build(lua_State* L) {
     std::string entrypoint = lua_tostring(L, -1);
     lua_pop(L, 1);
 
-    // sourceExe (optional — defaults to current executable)
+    // sourceExe (optional - defaults to current executable)
     fs::path sourceExe;
     lua_getfield(L, 1, "sourceExe");
     if (lua_isstring(L, -1)) {
@@ -186,7 +186,7 @@ static int vfs_lua_build(lua_State* L) {
     }
     lua_pop(L, 1);
 
-    // files (required — array of strings, or array of strings/directories to expand)
+    // files (required - array of strings, or array of strings/directories to expand)
     lua_getfield(L, 1, "files");
     if (!lua_istable(L, -1)) luaL_error(L, "vfs.build: 'files' is required (array of strings)");
 
@@ -261,5 +261,6 @@ LUAU_MODULE_EXPORT int luauopen_vfs(lua_State* L) {
     lua_pushcfunction(L, vfs_lua_setIsolated, "setIsolated");
     lua_setfield(L, -2, "setIsolated");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

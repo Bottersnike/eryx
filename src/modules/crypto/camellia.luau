@@ -32,7 +32,7 @@ local camellia = {}
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext.
 ]=]
-function camellia.cbc_encrypt(key: buffer, iv: buffer, data: buffer): buffer
+function camellia.encryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _cam.cbc_encrypt(key, iv, data)
 end
 
@@ -44,7 +44,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext.
 ]=]
-function camellia.cbc_decrypt(key: buffer, iv: buffer, data: buffer): buffer
+function camellia.decryptCBC(key: buffer, iv: buffer, data: buffer): buffer
 	return _cam.cbc_decrypt(key, iv, data)
 end
 
@@ -56,7 +56,7 @@ end
 	@param data Plaintext to encrypt.
 	@return buffer -- Ciphertext (same length as input).
 ]=]
-function camellia.ctr_encrypt(key: buffer, iv: buffer, data: buffer): buffer
+function camellia.encryptCTR(key: buffer, iv: buffer, data: buffer): buffer
 	return _cam.ctr_encrypt(key, iv, data)
 end
 
@@ -68,7 +68,7 @@ end
 	@param data Ciphertext to decrypt.
 	@return buffer -- Plaintext (same length as input).
 ]=]
-function camellia.ctr_decrypt(key: buffer, iv: buffer, data: buffer): buffer
+function camellia.decryptCTR(key: buffer, iv: buffer, data: buffer): buffer
 	return _cam.ctr_decrypt(key, iv, data)
 end
 
@@ -84,7 +84,7 @@ end
 	@return buffer -- Ciphertext.
 	@return buffer -- 16-byte authentication tag.
 ]=]
-function camellia.gcm_encrypt(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
+function camellia.encryptGCM(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
 	return _cam.gcm_encrypt(key, nonce, data, aad)
 end
 
@@ -100,7 +100,7 @@ end
 	@param aad   Additional authenticated data (must match encryption).
 	@return buffer -- Plaintext.
 ]=]
-function camellia.gcm_decrypt(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
+function camellia.decryptGCM(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
 	return _cam.gcm_decrypt(key, nonce, ct, tag, aad)
 end
 

@@ -107,11 +107,16 @@ struct LuaSSLSocket {
     int ctx_ref;         // LUA_REGISTRYINDEX ref to keep ctx alive
     bool connected;
     std::string hostname;
+    lua_State* L;        // stored for dtor cleanup (lua_unref)
 };
 
 static LuaSSLSocket* check_sslsocket(lua_State* L, int idx) {
     return (LuaSSLSocket*)luaL_checkudata(L, idx, SSLSOCKET_METATABLE);
 }
+
+// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
+static void sslctx_dtor(void* ud);
+static void sslsock_dtor(void* ud);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -342,7 +347,7 @@ static int bio_recv(void* ctx, unsigned char* buf, size_t len) {
 
 // ssl.create_default_context() -> SSLContext  (client mode)
 static int ssl_create_default_context(lua_State* L) {
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdata(L, sizeof(LuaSSLContext));
+    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
     new (ctx) LuaSSLContext();
 
     mbedtls_ssl_config_init(&ctx->conf);
@@ -384,7 +389,7 @@ static int ssl_create_server_context(lua_State* L) {
     { FILE* f = fopen(certfile, "rb"); if (!f) luaL_error(L, "ssl: certificate file not found: %s", certfile); else fclose(f); }
     { FILE* f = fopen(keyfile, "rb"); if (!f) luaL_error(L, "ssl: private key file not found: %s", keyfile); else fclose(f); }
 
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdata(L, sizeof(LuaSSLContext));
+    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
     new (ctx) LuaSSLContext();
 
     mbedtls_ssl_config_init(&ctx->conf);
@@ -477,13 +482,14 @@ static int sslctx_wrap_socket(lua_State* L) {
     const char* hostname = luaL_optstring(L, 3, nullptr);
 
     // Allocate SSLSocket userdata
-    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdata(L, sizeof(LuaSSLSocket));
+    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
     new (ss) LuaSSLSocket();
 
     mbedtls_ssl_init(&ss->ssl);
     mbedtls_net_init(&ss->net);
     ss->ctx = ctx;
     ss->connected = false;
+    ss->L = L;
     if (hostname) ss->hostname = hostname;
 
     // Keep a strong reference to the SSLContext so it stays alive
@@ -538,19 +544,16 @@ static int sslctx_tostring(lua_State* L) {
     return 1;
 }
 
-// __gc
-static int sslctx_gc(lua_State* L) {
-    LuaSSLContext* ctx = (LuaSSLContext*)luaL_checkudata(L, 1, SSLCTX_METATABLE);
-    if (ctx) {
-        if (ctx->has_own_cert) {
-            mbedtls_pk_free(&ctx->pk_key);
-            mbedtls_x509_crt_free(&ctx->own_cert);
-        }
-        mbedtls_x509_crt_free(&ctx->cacert);
-        mbedtls_ssl_config_free(&ctx->conf);
-        ctx->~LuaSSLContext();
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void sslctx_dtor(void* ud) {
+    LuaSSLContext* ctx = (LuaSSLContext*)ud;
+    if (ctx->has_own_cert) {
+        mbedtls_pk_free(&ctx->pk_key);
+        mbedtls_x509_crt_free(&ctx->own_cert);
     }
-    return 0;
+    mbedtls_x509_crt_free(&ctx->cacert);
+    mbedtls_ssl_config_free(&ctx->conf);
+    ctx->~LuaSSLContext();
 }
 
 // ---------------------------------------------------------------------------
@@ -695,27 +698,24 @@ static int sslsock_tostring(lua_State* L) {
     return 1;
 }
 
-// __gc
-static int sslsock_gc(lua_State* L) {
-    LuaSSLSocket* ss = (LuaSSLSocket*)luaL_checkudata(L, 1, SSLSOCKET_METATABLE);
-    if (ss) {
-        if (ss->connected) {
-            mbedtls_ssl_close_notify(&ss->ssl);
-            ss->connected = false;
-        }
-        mbedtls_ssl_free(&ss->ssl);
-        if (ss->net.fd >= 0) {
-            sock_fd_close((SOCKET)(intptr_t)ss->net.fd);
-            ss->net.fd = -1;
-        }
-        // Release the SSLContext reference
-        if (ss->ctx_ref != LUA_NOREF) {
-            lua_unref(L, ss->ctx_ref);
-            ss->ctx_ref = LUA_NOREF;
-        }
-        ss->~LuaSSLSocket();
+// Destructor called by Luau GC (lua_newuserdatadtor).
+static void sslsock_dtor(void* ud) {
+    LuaSSLSocket* ss = (LuaSSLSocket*)ud;
+    if (ss->connected) {
+        mbedtls_ssl_close_notify(&ss->ssl);
+        ss->connected = false;
     }
-    return 0;
+    mbedtls_ssl_free(&ss->ssl);
+    if (ss->net.fd >= 0) {
+        sock_fd_close((SOCKET)(intptr_t)ss->net.fd);
+        ss->net.fd = -1;
+    }
+    // Release the SSLContext reference (safe during both normal GC and lua_close)
+    if (ss->ctx_ref != LUA_NOREF && ss->L) {
+        lua_unref(ss->L, ss->ctx_ref);
+        ss->ctx_ref = LUA_NOREF;
+    }
+    ss->~LuaSSLSocket();
 }
 
 // ---------------------------------------------------------------------------
@@ -733,7 +733,7 @@ static int ssl_wrap_socket(lua_State* L) {
     *(SOCKET*)raw_socket = INVALID_SOCKET;
 
     // Create a default context (system verify, VERIFY_REQUIRED)
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdata(L, sizeof(LuaSSLContext));
+    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
     new (ctx) LuaSSLContext();
     mbedtls_ssl_config_init(&ctx->conf);
     mbedtls_x509_crt_init(&ctx->cacert);
@@ -757,12 +757,13 @@ static int ssl_wrap_socket(lua_State* L) {
     int ctx_idx = lua_gettop(L);
 
     // Allocate SSLSocket
-    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdata(L, sizeof(LuaSSLSocket));
+    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
     new (ss) LuaSSLSocket();
     mbedtls_ssl_init(&ss->ssl);
     mbedtls_net_init(&ss->net);
     ss->ctx = ctx;
     ss->connected = false;
+    ss->L = L;
     if (hostname) ss->hostname = hostname;
 
     // Keep context alive via Lua ref
@@ -1108,7 +1109,7 @@ static int ssl_create_server_context_pem(lua_State* L) {
     size_t key_len = lua_objlen(L, 2);
     const char* password = luaL_optstring(L, 3, nullptr);
 
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdata(L, sizeof(LuaSSLContext));
+    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
     new (ctx) LuaSSLContext();
 
     mbedtls_ssl_config_init(&ctx->conf);
@@ -1157,17 +1158,16 @@ static void register_sslctx_metatable(lua_State* L) {
     lua_pushcfunction(L, sslctx_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, sslctx_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
-    lua_pushcfunction(L, sslctx_wrap_socket, "wrap_socket");
-    lua_setfield(L, -2, "wrap_socket");
+    lua_pushcfunction(L, sslctx_wrap_socket, "wrapSocket");
+    lua_setfield(L, -2, "wrapSocket");
 
-    lua_pushcfunction(L, sslctx_load_verify_locations, "load_verify_locations");
-    lua_setfield(L, -2, "load_verify_locations");
+    lua_pushcfunction(L, sslctx_load_verify_locations, "loadVerifyLocations");
+    lua_setfield(L, -2, "loadVerifyLocations");
 
-    lua_pushcfunction(L, sslctx_set_verify, "set_verify");
-    lua_setfield(L, -2, "set_verify");
+    lua_pushcfunction(L, sslctx_set_verify, "setVerify");
+    lua_setfield(L, -2, "setVerify");
 
     lua_pop(L, 1);
 }
@@ -1181,14 +1181,13 @@ static void register_sslsocket_metatable(lua_State* L) {
     lua_pushcfunction(L, sslsock_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, sslsock_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, sslsock_send, "send");
     lua_setfield(L, -2, "send");
 
-    lua_pushcfunction(L, sslsock_sendall, "sendall");
-    lua_setfield(L, -2, "sendall");
+    lua_pushcfunction(L, sslsock_sendall, "sendAll");
+    lua_setfield(L, -2, "sendAll");
 
     lua_pushcfunction(L, sslsock_recv, "recv");
     lua_setfield(L, -2, "recv");
@@ -1196,14 +1195,14 @@ static void register_sslsocket_metatable(lua_State* L) {
     lua_pushcfunction(L, sslsock_close, "close");
     lua_setfield(L, -2, "close");
 
-    lua_pushcfunction(L, sslsock_getpeername, "getpeername");
-    lua_setfield(L, -2, "getpeername");
+    lua_pushcfunction(L, sslsock_getpeername, "getPeerName");
+    lua_setfield(L, -2, "getPeerName");
 
-    lua_pushcfunction(L, sslsock_getsockname, "getsockname");
-    lua_setfield(L, -2, "getsockname");
+    lua_pushcfunction(L, sslsock_getsockname, "getSockName");
+    lua_setfield(L, -2, "getSockName");
 
-    lua_pushcfunction(L, sslsock_fileno, "fileno");
-    lua_setfield(L, -2, "fileno");
+    lua_pushcfunction(L, sslsock_fileno, "fileNo");
+    lua_setfield(L, -2, "fileNo");
 
     lua_pop(L, 1);
 }
@@ -1252,5 +1251,6 @@ LUAU_MODULE_EXPORT int luauopen__ssl(lua_State* L) {
     lua_pushinteger(L, MBEDTLS_SSL_VERIFY_REQUIRED);
     lua_setfield(L, -2, "VERIFY_REQUIRED");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

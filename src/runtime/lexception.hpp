@@ -40,6 +40,7 @@ typedef struct _LuaException {
     std::string message;
     std::vector<LuaFrame> traceback;
     const void* extra;
+    int dataRef = LUA_NOREF;  // Registry ref to the original error value
 } LuaException;
 
 LuaException* eryx_get_exception(lua_State* L, int idx);
@@ -49,7 +50,7 @@ void eryx_exception_push_exception(lua_State* L, const char* type, const char* m
 std::string eryx_format_exception(lua_State* L, int idx);
 
 // If the value at the top of the stack is not already a LuaException, replaces it
-// with one. Traceback is walked from L's current call stack — valid after
+// with one. Traceback is walked from L's current call stack - valid after
 // lua_resume fails (frames preserved) or within an error handler.
 void eryx_coerce_to_exception(lua_State* L);
 

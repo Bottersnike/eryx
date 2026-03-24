@@ -1,0 +1,10 @@
+title: Getting Started
+children:
+  - welcome
+  - editor-setup
+  - console-io
+  - testing
+  - filesystem
+  - tasks
+  - documentation
+  - what-next

@@ -45,6 +45,9 @@
 #include "../runtime/lexception.hpp"
 #include "uv.h"
 
+// Forward declaration – dtor is defined later but referenced by lua_newuserdatadtor
+static void sock_dtor(void* ud);
+
 // ---------------------------------------------------------------------------
 // Platform socket compatibility
 // ---------------------------------------------------------------------------
@@ -404,7 +407,7 @@ static void execute_ready_op(SocketPendingOp* op) {
             SOCKET client = accept(op->socket->fd, (struct sockaddr*)&addr, &addrlen);
             if (client != INVALID_SOCKET) {
                 make_nonblocking(client);
-                LuaSocket* cs = (LuaSocket*)lua_newuserdata(L, sizeof(LuaSocket));
+                LuaSocket* cs = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
                 cs->fd = client;
                 cs->family = op->socket->family;
                 cs->type = op->socket->type;
@@ -571,7 +574,7 @@ static int sock_accept(lua_State* L) {
 
     if (client != INVALID_SOCKET) {
         make_nonblocking(client);
-        LuaSocket* cs = (LuaSocket*)lua_newuserdata(L, sizeof(LuaSocket));
+        LuaSocket* cs = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
         cs->fd = client;
         cs->family = s->family;
         cs->type = s->type;
@@ -870,6 +873,15 @@ static int sock_gc(lua_State* L) {
     return 0;
 }
 
+// Destructor called by Luau GC (lua_newuserdatadtor)
+static void sock_dtor(void* ud) {
+    auto* s = (LuaSocket*)ud;
+    if (s->fd != INVALID_SOCKET) {
+        sock_fd_close(s->fd);
+        s->fd = INVALID_SOCKET;
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Module-level functions
 // ---------------------------------------------------------------------------
@@ -885,7 +897,7 @@ static int socket_socket(lua_State* L) {
     // All sockets are permanently non-blocking at the OS level
     make_nonblocking(fd);
 
-    LuaSocket* s = (LuaSocket*)lua_newuserdata(L, sizeof(LuaSocket));
+    LuaSocket* s = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
     s->fd = fd;
     s->family = family;
     s->type = type;
@@ -1015,62 +1027,61 @@ static void register_socket_metatable(lua_State* L) {
     lua_pushcfunction(L, sock_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pushcfunction(L, sock_gc, "gc");
-    lua_setfield(L, -2, "__gc");
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
-    lua_pushcfunction(L, sock_bind, "Bind");
-    lua_setfield(L, -2, "Bind");
+    lua_pushcfunction(L, sock_bind, "bind");
+    lua_setfield(L, -2, "bind");
 
-    lua_pushcfunction(L, sock_listen, "Listen");
-    lua_setfield(L, -2, "Listen");
+    lua_pushcfunction(L, sock_listen, "listen");
+    lua_setfield(L, -2, "listen");
 
-    lua_pushcfunction(L, sock_accept, "Accept");
-    lua_setfield(L, -2, "Accept");
+    lua_pushcfunction(L, sock_accept, "accept");
+    lua_setfield(L, -2, "accept");
 
-    lua_pushcfunction(L, sock_connect, "Connect");
-    lua_setfield(L, -2, "Connect");
+    lua_pushcfunction(L, sock_connect, "connect");
+    lua_setfield(L, -2, "connect");
 
-    lua_pushcfunction(L, sock_close, "Close");
-    lua_setfield(L, -2, "Close");
+    lua_pushcfunction(L, sock_close, "close");
+    lua_setfield(L, -2, "close");
 
-    lua_pushcfunction(L, sock_shutdown, "Shutdown");
-    lua_setfield(L, -2, "Shutdown");
+    lua_pushcfunction(L, sock_shutdown, "shutdown");
+    lua_setfield(L, -2, "shutdown");
 
-    lua_pushcfunction(L, sock_send, "Send");
-    lua_setfield(L, -2, "Send");
+    lua_pushcfunction(L, sock_send, "send");
+    lua_setfield(L, -2, "send");
 
-    lua_pushcfunction(L, sock_sendall, "SendAll");
-    lua_setfield(L, -2, "SendAll");
+    lua_pushcfunction(L, sock_sendall, "sendAll");
+    lua_setfield(L, -2, "sendAll");
 
-    lua_pushcfunction(L, sock_sendto, "SendTo");
-    lua_setfield(L, -2, "SendTo");
+    lua_pushcfunction(L, sock_sendto, "sendTo");
+    lua_setfield(L, -2, "sendTo");
 
-    lua_pushcfunction(L, sock_recv, "Recv");
-    lua_setfield(L, -2, "Recv");
+    lua_pushcfunction(L, sock_recv, "recv");
+    lua_setfield(L, -2, "recv");
 
-    lua_pushcfunction(L, sock_recvfrom, "RecvFrom");
-    lua_setfield(L, -2, "RecvFrom");
+    lua_pushcfunction(L, sock_recvfrom, "recvFrom");
+    lua_setfield(L, -2, "recvFrom");
 
-    lua_pushcfunction(L, sock_setsockopt, "SetSockOpt");
-    lua_setfield(L, -2, "SetSockOpt");
+    lua_pushcfunction(L, sock_setsockopt, "setSockOpt");
+    lua_setfield(L, -2, "setSockOpt");
 
-    lua_pushcfunction(L, sock_getsockopt, "GetSockOpt");
-    lua_setfield(L, -2, "GetSockOpt");
+    lua_pushcfunction(L, sock_getsockopt, "getSockOpt");
+    lua_setfield(L, -2, "getSockOpt");
 
-    lua_pushcfunction(L, sock_setblocking, "SetBlocking");
-    lua_setfield(L, -2, "SetBlocking");
+    lua_pushcfunction(L, sock_setblocking, "setBlocking");
+    lua_setfield(L, -2, "setBlocking");
 
-    lua_pushcfunction(L, sock_settimeout, "SetTimeout");
-    lua_setfield(L, -2, "SetTimeout");
+    lua_pushcfunction(L, sock_settimeout, "setTimeout");
+    lua_setfield(L, -2, "setTimeout");
 
-    lua_pushcfunction(L, sock_getpeername, "GetPeerName");
-    lua_setfield(L, -2, "GetPeerName");
+    lua_pushcfunction(L, sock_getpeername, "getPeerName");
+    lua_setfield(L, -2, "getPeerName");
 
-    lua_pushcfunction(L, sock_getsockname, "GetSockName");
-    lua_setfield(L, -2, "GetSockName");
+    lua_pushcfunction(L, sock_getsockname, "getSockName");
+    lua_setfield(L, -2, "getSockName");
 
-    lua_pushcfunction(L, sock_fileno, "FileNo");
-    lua_setfield(L, -2, "FileNo");
+    lua_pushcfunction(L, sock_fileno, "fileNo");
+    lua_setfield(L, -2, "fileNo");
 
     lua_pop(L, 1);
 }
@@ -1159,6 +1170,7 @@ LUAU_MODULE_EXPORT int luauopen__socket(lua_State* L) {
     SETCONST(NI_NUMERICSERV);
     SETCONST(NI_DGRAM);
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }
 #undef SETCONST

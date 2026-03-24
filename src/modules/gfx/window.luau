@@ -6,8 +6,8 @@
 	local win = window.create(800, 600, "My App")
 	```
 
-	The returned Window object has methods like :PollEvents(), :StartFrame(),
-	:EndFrame(), :DrawText(), :DrawTexture(), :DrawRectangle(), etc.
+	The returned Window object has methods like :pollEvents(), :startFrame(),
+	:endFrame(), :drawText(), :drawTexture(), :drawRectangle(), etc.
 	These are provided by the native metatable.
 ]=]
 

@@ -8,12 +8,11 @@
 #include "../vfs.hpp"
 #include "Luau/CodeGen.h"
 #include "_wrapper_lib.hpp"
+#include "embedded_modules.h"
 #include "lexception.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
 #include "lua.h"
-
-#include "embedded_modules.h"
 
 namespace fs = std::filesystem;
 
@@ -168,6 +167,65 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
         lua_remove(L, -2);
 
         lua_error(L);
+    }
+
+    // Create a per-module environment table with `_DIR` and `_FILE` set.
+    // The table falls back to the global `_G` so existing globals remain
+    // accessible. We set this as the chunk's `_ENV` upvalue (upvalue #1)
+    // so the module sees these values as globals without mutating `_G`.
+    std::string dirStr;
+    std::string fileStr;
+    if (!chunkName.empty()) {
+        if (chunkName[0] == '@') {
+            std::string p = chunkName.substr(1);
+            try {
+                fs::path sp = fs::path(p);
+                dirStr = sp.parent_path().generic_string();
+                fileStr = sp.generic_string();
+            } catch (...) {
+            }
+        } else if (chunkName.rfind(CHUNK_PREFIX_VFS, 0) == 0) {
+            std::string p = chunkName.substr(CHUNK_PREFIX_VFS_LEN);
+            try {
+                fs::path sp = fs::path(p);
+                dirStr = std::string(CHUNK_PREFIX_VFS) + sp.parent_path().generic_string();
+                fileStr = std::string(CHUNK_PREFIX_VFS) + p;
+            } catch (...) {
+            }
+        } else if (chunkName.rfind(CHUNK_PREFIX_ERYX, 0) == 0) {
+            std::string p = chunkName.substr(CHUNK_PREFIX_ERYX_LEN);
+            try {
+                fs::path sp = fs::path(p);
+                dirStr = std::string(CHUNK_PREFIX_ERYX) + sp.parent_path().generic_string();
+                fileStr = std::string(CHUNK_PREFIX_ERYX) + p;
+            } catch (...) {
+            }
+        }
+    }
+
+    if (!dirStr.empty() || !fileStr.empty()) {
+        lua_newtable(ML);  // env
+
+        // env.__index = _G
+        lua_getglobal(ML, "_G");
+        lua_setfield(ML, -2, "__index");
+
+        lua_newtable(ML);                 // metatable
+        lua_getglobal(ML, "_G");          // fallback
+        lua_setfield(ML, -2, "__index");  // mt.__index = _G
+        lua_setmetatable(ML, -2);         // setmetatable(env, mt)
+
+        if (!fileStr.empty()) {
+            lua_pushstring(ML, fileStr.c_str());
+            lua_setfield(ML, -2, "_FILE");
+        }
+        if (!dirStr.empty()) {
+            lua_pushstring(ML, dirStr.c_str());
+            lua_setfield(ML, -2, "_DIR");
+        }
+
+        // set as environment for chunk
+        lua_setfenv(ML, -2);
     }
 
     int status = lua_resume(ML, L, 0);

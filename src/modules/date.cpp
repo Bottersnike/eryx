@@ -314,9 +314,7 @@ ZonedInstant add_years(lua_State* L, const ZonedInstant& z, int years) {
 std::string format_custom(lua_State* L, const ZonedInstant& z, const std::string& fmt) {
     if (!z.fixed_offset) {
         auto zt = std::chrono::zoned_time{ resolve_zone(L, z.zone), z.utc };
-        return std::vformat(
-            "{:" + fmt + "}",
-            std::make_format_args(zt));
+        return std::vformat("{:" + fmt + "}", std::make_format_args(zt));
     }
     // Preprocess timezone tokens into literal offset strings so local_time can handle the rest.
     int total = int(z.fixed_offset->count());
@@ -996,26 +994,26 @@ LUAU_MODULE_EXPORT int luauopen_date(lua_State* L) {
     lua_pushcfunction(L, dt_le, "le");
     lua_setfield(L, -2, "__le");
     // Methods (reached via __index fallback)
-    lua_pushcfunction(L, dt_toisostring, "ToIsoString");
-    lua_setfield(L, -2, "ToIsoString");
-    lua_pushcfunction(L, dt_tounix, "ToUnix");
-    lua_setfield(L, -2, "ToUnix");
-    lua_pushcfunction(L, dt_tounixms, "ToUnixMs");
-    lua_setfield(L, -2, "ToUnixMs");
-    lua_pushcfunction(L, dt_withzone, "WithZone");
-    lua_setfield(L, -2, "WithZone");
-    lua_pushcfunction(L, dt_diff, "Diff");
-    lua_setfield(L, -2, "Diff");
-    lua_pushcfunction(L, dt_format, "Format");
-    lua_setfield(L, -2, "Format");
-    lua_pushcfunction(L, dt_formatutc, "FormatUtc");
-    lua_setfield(L, -2, "FormatUtc");
-    lua_pushcfunction(L, dt_startofday, "StartOfDay");
-    lua_setfield(L, -2, "StartOfDay");
-    lua_pushcfunction(L, dt_addmonths, "AddMonths");
-    lua_setfield(L, -2, "AddMonths");
-    lua_pushcfunction(L, dt_addyears, "AddYears");
-    lua_setfield(L, -2, "AddYears");
+    lua_pushcfunction(L, dt_toisostring, "toIsoString");
+    lua_setfield(L, -2, "toIsoString");
+    lua_pushcfunction(L, dt_tounix, "toUnix");
+    lua_setfield(L, -2, "toUnix");
+    lua_pushcfunction(L, dt_tounixms, "toUnixMs");
+    lua_setfield(L, -2, "toUnixMs");
+    lua_pushcfunction(L, dt_withzone, "withZone");
+    lua_setfield(L, -2, "withZone");
+    lua_pushcfunction(L, dt_diff, "diff");
+    lua_setfield(L, -2, "diff");
+    lua_pushcfunction(L, dt_format, "format");
+    lua_setfield(L, -2, "format");
+    lua_pushcfunction(L, dt_formatutc, "formatUtc");
+    lua_setfield(L, -2, "formatUtc");
+    lua_pushcfunction(L, dt_startofday, "startOfDay");
+    lua_setfield(L, -2, "startOfDay");
+    lua_pushcfunction(L, dt_addmonths, "addMonths");
+    lua_setfield(L, -2, "addMonths");
+    lua_pushcfunction(L, dt_addyears, "addYears");
+    lua_setfield(L, -2, "addYears");
     lua_pop(L, 1);
 
     // Duration metatable
@@ -1041,8 +1039,8 @@ LUAU_MODULE_EXPORT int luauopen_date(lua_State* L) {
     lua_pushcfunction(L, dur_le, "le");
     lua_setfield(L, -2, "__le");
     // Methods
-    lua_pushcfunction(L, dur_abs, "Abs");
-    lua_setfield(L, -2, "Abs");
+    lua_pushcfunction(L, dur_abs, "abs");
+    lua_setfield(L, -2, "abs");
     lua_pop(L, 1);
 
     // Module table
@@ -1079,5 +1077,6 @@ LUAU_MODULE_EXPORT int luauopen_date(lua_State* L) {
     lua_pushcfunction(L, date_days, "days");
     lua_setfield(L, -2, "days");
 
+    lua_setreadonly(L, -1, true);
     return 1;
 }

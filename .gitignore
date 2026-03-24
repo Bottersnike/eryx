@@ -2,14 +2,13 @@
 /build/
 /build-*/
 
-# Luau config (used for development)
-/.luaurc/
-
 # clangd
 /.cache/
 
+# Old version of the documentation
+docs_old/
+
 # Test projects that might become official examples down the line
-/docgen/
 /lsp/
 /sample/
 

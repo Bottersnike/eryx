@@ -1,5 +1,5 @@
 --[=[
-	Zip file entry metadata returned by `zip.list` and `ZipReader:List`.
+	Zip file entry metadata returned by `zip.list` and `ZipReader:list`.
 	@field name string: the entry filename (directories end with '/')
 	@field size number: uncompressed size in bytes
 	@field compressedSize number: compressed size in bytes
@@ -45,7 +45,7 @@ local zip = {}
 
 	Open a zip archive from an in-memory buffer and return a `ZipReader`.
 	The returned reader pins the provided buffer to avoid copying; call
-	`reader:Close()` (or let it be GC'd) to release the buffer.
+	`reader:close()` (or let it be GC'd) to release the buffer.
 	@param data buffer -- zip archive bytes
 	@return ZipReader -- reader object
 ]=]
