@@ -23,15 +23,16 @@
 
 #include "pch.hpp"
 #include "runtime/_wrapper_lib.hpp"
+#include "runtime/embedded_modules.h"
 #include "runtime/lexception.hpp"
 #include "runtime/lrequire.hpp"
-#include "runtime/embedded_modules.h"
 #include "vfs.hpp"
+
 
 #ifdef ERYX_EMBED
 // Generated tables - defined in embedded_modules.cpp / embedded_sources.cpp
-extern const EmbeddedNativeModule  g_embedded_native_modules[];
-extern const EmbeddedScriptModule  g_embedded_script_modules[];
+extern const EmbeddedNativeModule g_embedded_native_modules[];
+extern const EmbeddedScriptModule g_embedded_script_modules[];
 #endif
 
 // ---------------------------------------------------------------------------
@@ -623,7 +624,7 @@ int main_builtin_script(int argc, const char* argv[], const char* name) {
 int main_run(const char* filename) {
     std::ifstream script_file(filename);
     if (!script_file.is_open()) {
-        std::cerr << "Failed to open " << filename << std::endl;
+        std::cerr << "Failed to open file \"" << filename << "\"" << std::endl;
         return 1;
     }
     std::string luaScript((std::istreambuf_iterator<char>(script_file)),
@@ -660,9 +661,8 @@ int main(int argc, const char* argv[]) {
         // main_script prepends "@" to its filename argument, so we pass
         // the entry prefixed with just "@vfs/" - the outer "@" produces "@@vfs/…".
         std::string vfsChunkName = std::string("@vfs/") + std::string(entry);
-        return main_script(
-            vfsChunkName.c_str(),
-            std::string(std::string_view((char*)entryData.data(), entryData.size())));
+        return main_script(vfsChunkName.c_str(), std::string(std::string_view(
+                                                     (char*)entryData.data(), entryData.size())));
     }
 
     if (argc < 2) {

@@ -733,7 +733,9 @@ body:has(#sidebar) .main-content {
     }
 
     .main-content {
-        margin-left: 0;
+        margin-left: 0 !important;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
     }
 
     .sidebar-toggle {
@@ -1435,9 +1437,9 @@ body:has(#toc-sidebar) .main-content {
     border-radius: 0.5rem;
     text-decoration: none;
     color: var(--text);
-    max-width: 45%;
+    max-width: 50%;
     transition: border-color 0.15s;
-    flex-basis: 45%;
+    flex-basis: 50%;
 }
 
 .article-nav-link:hover {
