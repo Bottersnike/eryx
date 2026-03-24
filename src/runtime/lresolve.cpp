@@ -389,7 +389,7 @@ std::optional<LocatedModule> eryx_resolve_module(lua_State* L, const std::string
             err += "- " + i.path + "\n";
         }
 
-        luaL_error(L, err.c_str());
+        luaL_error(L, "%s", err.c_str());
     }
 
     if (modules.size() == 1) {

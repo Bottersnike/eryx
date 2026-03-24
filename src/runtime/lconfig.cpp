@@ -1,9 +1,9 @@
 #include "lconfig.hpp"
 
+#include "../vfs.hpp"
 #include "Luau/Config.h"
 #include "Luau/LuauConfig.h"
 #include "lrequire.hpp"
-#include "../vfs.hpp"
 
 namespace fs = std::filesystem;
 
@@ -215,7 +215,7 @@ static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::p
     auto table = serializeTable(CL, &error);
 
     if (!error.empty()) {
-        luaL_error(L, error.c_str());
+        luaL_error(L, "%s", error.c_str());
     }
 
     if (!table->contains("luau")) {
@@ -237,7 +237,7 @@ static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::p
     lua_pop(GL, 1);  // pop thread
 
     if (maybeError) {
-        luaL_error(L, (*maybeError).c_str());
+        luaL_error(L, "%s", (*maybeError).c_str());
     }
 }
 
@@ -249,19 +249,19 @@ static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::p
 // path and walks upward to the VFS root before continuing to the real
 // filesystem from CWD upward.
 ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDir,
-                                 const std::optional<fs::path> stopDir,
-                                 const std::string& vfsStartDir) {
+                                           const std::optional<fs::path> stopDir,
+                                           const std::string& vfsStartDir) {
     auto out = new LocatedConfig;
     out->found = false;
 
     // Phase 1: Collect all config locations.
     // Each entry is (directory, configFilePath, isLuaurc, isVFS).
     struct ConfigEntry {
-        fs::path dir;        // filesystem directory (for non-VFS) or CWD-based equivalent
-        fs::path file;       // display path
+        fs::path dir;   // filesystem directory (for non-VFS) or CWD-based equivalent
+        fs::path file;  // display path
         bool isLuaurc;
         bool isVFS = false;
-        std::string vfsPath; // only set when isVFS
+        std::string vfsPath;  // only set when isVFS
     };
     std::vector<ConfigEntry> configs;
 
@@ -281,8 +281,8 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
             std::string vfsConfigLuau;
             auto vfsFiles = vfs_list_dir(vfsDir);
             for (auto& f : vfsFiles) {
-                std::string_view relative = std::string_view(f).substr(
-                    vfsDir.empty() ? 0 : vfsDir.size() + 1);
+                std::string_view relative =
+                    std::string_view(f).substr(vfsDir.empty() ? 0 : vfsDir.size() + 1);
                 if (relative.find('/') != std::string_view::npos) continue;
                 if (relative == ".config.luau") {
                     vfsConfigLuau = f;
@@ -384,8 +384,8 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
                 std::string vfsConfigLuau;
                 auto vfsFiles = vfs_list_dir(vfsDir);
                 for (auto& f : vfsFiles) {
-                    std::string_view relative = std::string_view(f).substr(
-                        vfsDir.empty() ? 0 : vfsDir.size() + 1);
+                    std::string_view relative =
+                        std::string_view(f).substr(vfsDir.empty() ? 0 : vfsDir.size() + 1);
                     if (relative.find('/') != std::string_view::npos) continue;
                     if (relative == ".config.luau") {
                         vfsConfigLuau = f;
@@ -440,8 +440,8 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
             if (!f) {
                 luaL_error(L, "Failed to read " PATH_PRINTF, it->file.c_str());
             }
-            contents = std::string(std::istreambuf_iterator<char>(f),
-                                   std::istreambuf_iterator<char>());
+            contents =
+                std::string(std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>());
         }
 
         // Determine the directory to use for alias resolution.
@@ -457,8 +457,13 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
 
         if (it->isLuaurc) {
             if (configDir.string().length() == 0) {
+#ifdef _WIN32
                 luaL_error(L, "Config loading went drastically wrong. \"%ls\" has no directory!",
                            it->file.c_str());
+#else
+                luaL_error(L, "Config loading went drastically wrong. \"%s\" has no directory!",
+                           it->file.c_str());
+#endif
             }
 
             Luau::ConfigOptions opts;

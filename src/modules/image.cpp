@@ -51,7 +51,7 @@ static int image_open(lua_State* L) {
     }
     if (w * h * forceChannels > MAX_BUFFER_SIZE) {
         stbi_image_free(data);
-        luaL_error(L, "Failed to load: %s: %dx%d is too large for a Luau buffer!");
+        luaL_error(L, "Failed to load: %s: %dx%d is too large for a Luau buffer!", path, w, h);
         return 0;
     }
 
@@ -73,8 +73,8 @@ static int image_open(lua_State* L) {
     lua_setmetatable(L, -2);
     return 1;
 }
-static int image_fromRGBABuffer(lua_State*L) {
-    unsigned long long bufLen;
+static int image_fromRGBABuffer(lua_State* L) {
+    size_t bufLen;
     void* buffer = luaL_checkbuffer(L, 1, &bufLen);
     int width = luaL_checkinteger(L, 2);
     if (width <= 0) {
@@ -194,7 +194,7 @@ static int image_SetPixel(lua_State* L) {
         int num = lua_tointegerx(L, -1, &isNum);
         if (!isNum) {
             lua_pop(L, 1);
-            luaL_error(L, "#%d in colour data is not a number", j + i);
+            luaL_error(L, "#%d in colour data is not a number", j + 1);
         }
         if (num < 0 || num > 255) {
             lua_pop(L, 1);

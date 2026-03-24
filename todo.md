@@ -1,0 +1,16 @@
+- [x] RegEx
+- [x] WebSocket
+- [ ] WebView :)
+- [x] Filesystem atomic rename
+- [ ] Temp files and folders
+- [ ] Logging utilities
+- [ ] Glob
+- [ ] UUID
+- [ ] rpc/RCON
+- [ ] rpc/JSON-RPC
+- [ ] Retry
+- [ ] Caching? (LRU, etc)
+- [ ] Cleaner
+- [x] Image format
+- [ ] Sound formats
+- [ ] Tweens
