@@ -736,6 +736,8 @@ body:has(#sidebar) .main-content {
         margin-left: 0 !important;
         padding-left: 0.5rem;
         padding-right: 0.5rem;
+        /* Reserve some space for the burger icon on mobile */
+        padding-bottom: 4.5rem;
     }
 
     .sidebar-toggle {

@@ -75,8 +75,14 @@
             (function () {
                 const btn = document.getElementById("sidebar-toggle");
                 const sb = document.getElementById("sidebar");
-                btn.addEventListener("click", function () {
+                btn.addEventListener("click", function (e) {
+                    e.stopPropagation();
                     sb.classList.toggle("open");
+                });
+                document.addEventListener("click", function (e) {
+                    if (sb.classList.contains("open") && !sb.contains(e.target)) {
+                        sb.classList.remove("open");
+                    }
                 });
 
                 const tocLinks = document.querySelectorAll('#page-toc a[href^="#"]');
