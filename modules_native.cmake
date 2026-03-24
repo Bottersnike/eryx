@@ -157,6 +157,7 @@ endif()
 
 # -- WebView module
 # On windows, we're going to need to pull WebView2 down with nuget
+if(WIN32)
 add_luau_module(webview src/modules/webview.cpp src/modules/webview.luau)
 
 set(NUGET_EXE ${CMAKE_BINARY_DIR}/nuget.exe)
@@ -181,6 +182,7 @@ else()
 target_include_directories(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/include)
 target_include_directories(mod_webview PUBLIC ${WIL_DIR}/include)
 target_link_libraries(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
+endif()
 endif()
 
 # -- GFX module (SDL3 + WGPU + FreeType + miniaudio) -------------------------

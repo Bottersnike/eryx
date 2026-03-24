@@ -1,7 +1,9 @@
 #include "LL_Texture.hpp"
 
 // Must be here to ensure it's only in a single unit
+#ifndef ERYX_EMBED  // But if we're embedded, @eryx/image already has it!
 #define STB_IMAGE_IMPLEMENTATION
+#endif
 #define STBI_FAILURE_USERMSG
 #include "stb_image.h"
 

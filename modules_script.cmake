@@ -27,7 +27,10 @@ add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(test src/modules/test.luau)
 add_luau_script_module(websocket src/modules/websocket.luau)
+
+if(WIN32)
 add_luau_script_module(webui src/modules/webui.luau)
+endif()
 
 # Documentation engine
 add_luau_script_module(eryxdoc/content/

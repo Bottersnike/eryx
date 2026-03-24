@@ -6,7 +6,6 @@
 #include <vector>
 
 #define PCRE2_CODE_UNIT_WIDTH 8
-#define PCRE2_STATIC
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"

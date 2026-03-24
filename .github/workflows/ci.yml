@@ -93,15 +93,14 @@ jobs:
       - name: Generate documentation
         shell: pwsh
         run: |
-          Write-Host "Running eryx doc from downloaded build"
-          Push-Location artifact
-          if (Test-Path .\build\eryx.exe) {
-            .\build\eryx.exe doc
+          Write-Host "Running eryx doc from repository root using downloaded executable"
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifact\build\eryx.exe'
+          if (Test-Path $exe) {
+            & $exe doc
           } else {
-            Write-Error "eryx executable not found in artifact/build"
+            Write-Error "eryx executable not found at $exe"
             exit 1
           }
-          Pop-Location
 
       - name: Configure Pages
         uses: actions/configure-pages@v3
@@ -109,7 +108,7 @@ jobs:
       - name: Upload pages artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          path: artifact/build-docs
+          path: build-docs
 
       - name: Deploy to GitHub Pages
         uses: actions/deploy-pages@v1
