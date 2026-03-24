@@ -3,7 +3,6 @@
 #include "Texture.hpp"
 #include "Window.hpp"
 
-
 FT_Library ft_library = nullptr;
 
 // Texture methods

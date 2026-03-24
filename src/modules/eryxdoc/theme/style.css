@@ -418,6 +418,7 @@ body::-webkit-scrollbar-thumb {
         position: fixed;
         left: 50%;
         transform: translateX(-50%);
+        top: calc(var(--header-height) + 4px);
     }
 }
 

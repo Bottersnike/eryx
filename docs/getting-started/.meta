@@ -7,4 +7,5 @@ children:
   - filesystem
   - tasks
   - documentation
+  - standard-library
   - what-next

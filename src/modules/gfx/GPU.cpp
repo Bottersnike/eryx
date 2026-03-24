@@ -75,8 +75,10 @@ bool createWindowSurface(LuaWindow* lua_window) {
 
 #else
     // Linux: prefer Wayland, fall back to X11
-    void* wayland_display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
-    void* wayland_surface = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
+    void* wayland_display =
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_DISPLAY_POINTER, nullptr);
+    void* wayland_surface =
+        SDL_GetPointerProperty(props, SDL_PROP_WINDOW_WAYLAND_SURFACE_POINTER, nullptr);
 
     WGPUSurfaceSourceWaylandSurface wayland_src = {};
     WGPUSurfaceSourceXlibWindow xlib_src = {};
@@ -88,10 +90,13 @@ bool createWindowSurface(LuaWindow* lua_window) {
         wayland_src.surface = wayland_surface;
         surface_desc.nextInChain = (const WGPUChainedStruct*)&wayland_src;
     } else {
-        void* x11_display = SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
-        uint64_t x11_window = (uint64_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
+        void* x11_display =
+            SDL_GetPointerProperty(props, SDL_PROP_WINDOW_X11_DISPLAY_POINTER, nullptr);
+        uint64_t x11_window =
+            (uint64_t)SDL_GetNumberProperty(props, SDL_PROP_WINDOW_X11_WINDOW_NUMBER, 0);
         if (!x11_display || !x11_window) {
-            std::cerr << "No suitable Linux window system found (tried Wayland and X11)" << std::endl;
+            std::cerr << "No suitable Linux window system found (tried Wayland and X11)"
+                      << std::endl;
             return false;
         }
         xlib_src.chain.next = nullptr;
@@ -877,11 +882,9 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
     }
 
     // Ensure MSAA texture matches window size
-    if (!ctx.msaa_texture ||
-        (width > 0 && height > 0 &&
-         ((int)wgpuTextureGetWidth(ctx.msaa_texture) != width ||
-          (int)wgpuTextureGetHeight(ctx.msaa_texture) != height))) {
-
+    if (!ctx.msaa_texture || (width > 0 && height > 0 &&
+                              ((int)wgpuTextureGetWidth(ctx.msaa_texture) != width ||
+                               (int)wgpuTextureGetHeight(ctx.msaa_texture) != height))) {
         if (ctx.msaa_view) wgpuTextureViewRelease(ctx.msaa_view);
         if (ctx.msaa_texture) wgpuTextureRelease(ctx.msaa_texture);
 
@@ -891,7 +894,7 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
         desc.size = { (uint32_t)width, (uint32_t)height, 1 };
         desc.format = ctx.surface_format;
         desc.mipLevelCount = 1;
-        desc.sampleCount = 4; // MSAA x4
+        desc.sampleCount = 4;  // MSAA x4
 
         ctx.msaa_texture = wgpuDeviceCreateTexture(ctx.device, &desc);
         ctx.msaa_view = createTextureView(ctx.msaa_texture);
@@ -917,7 +920,8 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
 
     // Close the last batch's vertex count
     if (!ctx.draw_batches.empty()) {
-        ctx.draw_batches.back().vertex_count = ctx.vertex_queue.size() - ctx.draw_batches.back().vertex_start;
+        ctx.draw_batches.back().vertex_count =
+            ctx.vertex_queue.size() - ctx.draw_batches.back().vertex_start;
     }
 
     // Chunking structure
@@ -934,13 +938,15 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
     const size_t MAX_VERTS_PER_CHUNK = 50000;
 
     if (!ctx.draw_batches.empty()) {
-        chunks.push_back({nullptr, nullptr, 0, 0, ctx.draw_batches[0].vertex_start, ctx.draw_batches[0].index_start});
+        chunks.push_back({ nullptr, nullptr, 0, 0, ctx.draw_batches[0].vertex_start,
+                           ctx.draw_batches[0].index_start });
         size_t current_verts = 0;
 
         for (size_t i = 0; i < ctx.draw_batches.size(); ++i) {
             const auto& batch = ctx.draw_batches[i];
-            if (current_verts + batch.vertex_count > MAX_VERTS_PER_CHUNK && chunks.back().end_batch_exclusive > chunks.back().start_batch) {
-                chunks.push_back({nullptr, nullptr, i, i, batch.vertex_start, batch.index_start});
+            if (current_verts + batch.vertex_count > MAX_VERTS_PER_CHUNK &&
+                chunks.back().end_batch_exclusive > chunks.back().start_batch) {
+                chunks.push_back({ nullptr, nullptr, i, i, batch.vertex_start, batch.index_start });
                 current_verts = 0;
             }
             chunks.back().end_batch_exclusive++;
@@ -951,8 +957,10 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
     // Create and Upload Buffers
     for (auto& chunk : chunks) {
         size_t last_batch_idx = chunk.end_batch_exclusive - 1;
-        size_t chunk_vertex_end = ctx.draw_batches[last_batch_idx].vertex_start + ctx.draw_batches[last_batch_idx].vertex_count;
-        size_t chunk_index_end = ctx.draw_batches[last_batch_idx].index_start + ctx.draw_batches[last_batch_idx].index_count;
+        size_t chunk_vertex_end = ctx.draw_batches[last_batch_idx].vertex_start +
+                                  ctx.draw_batches[last_batch_idx].vertex_count;
+        size_t chunk_index_end = ctx.draw_batches[last_batch_idx].index_start +
+                                 ctx.draw_batches[last_batch_idx].index_count;
 
         size_t v_count = chunk_vertex_end - chunk.vertex_start;
         size_t i_count = chunk_index_end - chunk.index_start;
@@ -963,7 +971,8 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
             v_desc.usage = WGPUBufferUsage_Vertex | WGPUBufferUsage_CopyDst;
             v_desc.mappedAtCreation = false;
             chunk.vBuf = wgpuDeviceCreateBuffer(ctx.device, &v_desc);
-            wgpuQueueWriteBuffer(ctx.queue, chunk.vBuf, 0, &ctx.vertex_queue[chunk.vertex_start], v_count * sizeof(GPUVertex));
+            wgpuQueueWriteBuffer(ctx.queue, chunk.vBuf, 0, &ctx.vertex_queue[chunk.vertex_start],
+                                 v_count * sizeof(GPUVertex));
         }
         if (i_count > 0) {
             WGPUBufferDescriptor i_desc = {};
@@ -971,7 +980,8 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
             i_desc.usage = WGPUBufferUsage_Index | WGPUBufferUsage_CopyDst;
             i_desc.mappedAtCreation = false;
             chunk.iBuf = wgpuDeviceCreateBuffer(ctx.device, &i_desc);
-            wgpuQueueWriteBuffer(ctx.queue, chunk.iBuf, 0, &ctx.index_queue[chunk.index_start], i_count * sizeof(uint32_t));
+            wgpuQueueWriteBuffer(ctx.queue, chunk.iBuf, 0, &ctx.index_queue[chunk.index_start],
+                                 i_count * sizeof(uint32_t));
         }
     }
 
@@ -996,16 +1006,16 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
             (use_post && lua_window->offscreen_view) ? lua_window->offscreen_view : surface_view;
 
         if (!ctx.msaa_view) {
-             // Skip rendering if MSAA view is missing (e.g. invalid size)
-             // This avoids pipeline mismatch crashes
-             wgpuCommandEncoderRelease(encoder);
-             wgpuTextureViewRelease(surface_view);
-             wgpuTextureRelease(surface_texture.texture);
-             return "";
+            // Skip rendering if MSAA view is missing (e.g. invalid size)
+            // This avoids pipeline mismatch crashes
+            wgpuCommandEncoderRelease(encoder);
+            wgpuTextureViewRelease(surface_view);
+            wgpuTextureRelease(surface_texture.texture);
+            return "";
         }
 
         color_attachment.loadOp = WGPULoadOp_Clear;
-        color_attachment.storeOp = WGPUStoreOp_Discard; // Don't keep MSAA data
+        color_attachment.storeOp = WGPUStoreOp_Discard;  // Don't keep MSAA data
         color_attachment.clearValue = WGPUColor{ 0.1f, 0.1f, 0.1f, 1.0f };
         color_attachment.depthSlice = WGPU_DEPTH_SLICE_UNDEFINED;
 
@@ -1020,13 +1030,17 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
             if (!chunk.vBuf || !chunk.iBuf) continue;
 
             size_t last_batch_idx = chunk.end_batch_exclusive - 1;
-            size_t chunk_vertex_end = ctx.draw_batches[last_batch_idx].vertex_start + ctx.draw_batches[last_batch_idx].vertex_count;
+            size_t chunk_vertex_end = ctx.draw_batches[last_batch_idx].vertex_start +
+                                      ctx.draw_batches[last_batch_idx].vertex_count;
             size_t v_count = chunk_vertex_end - chunk.vertex_start;
-            size_t chunk_index_end = ctx.draw_batches[last_batch_idx].index_start + ctx.draw_batches[last_batch_idx].index_count;
+            size_t chunk_index_end = ctx.draw_batches[last_batch_idx].index_start +
+                                     ctx.draw_batches[last_batch_idx].index_count;
             size_t i_count = chunk_index_end - chunk.index_start;
 
-            wgpuRenderPassEncoderSetVertexBuffer(render_pass, 0, chunk.vBuf, 0, v_count * sizeof(GPUVertex));
-            wgpuRenderPassEncoderSetIndexBuffer(render_pass, chunk.iBuf, WGPUIndexFormat_Uint32, 0, i_count * sizeof(uint32_t));
+            wgpuRenderPassEncoderSetVertexBuffer(render_pass, 0, chunk.vBuf, 0,
+                                                 v_count * sizeof(GPUVertex));
+            wgpuRenderPassEncoderSetIndexBuffer(render_pass, chunk.iBuf, WGPUIndexFormat_Uint32, 0,
+                                                i_count * sizeof(uint32_t));
 
             for (size_t i = chunk.start_batch; i < chunk.end_batch_exclusive; ++i) {
                 const auto& batch = ctx.draw_batches[i];
@@ -1089,7 +1103,8 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
 
                 // Bind texture group
                 setBindGroupTexture(ctx, batch.texture_view);
-                wgpuRenderPassEncoderSetBindGroup(render_pass, 0, ctx.current_bind_group, 0, nullptr);
+                wgpuRenderPassEncoderSetBindGroup(render_pass, 0, ctx.current_bind_group, 0,
+                                                  nullptr);
 
                 wgpuRenderPassEncoderDrawIndexed(render_pass, batch.index_count, 1,
                                                  batch.index_start - chunk.index_start,
@@ -1109,12 +1124,10 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
     // --- Pass 2: Post Processing ---
     if (use_post && lua_window->offscreen_view) {
         // Create full screen quad buffers
-        GPUVertex quad_verts[] = {
-             { -1.0f, -1.0f, 0.0f, 1.0f, 0xFFFFFFFF },
-             { 1.0f, -1.0f, 1.0f, 1.0f, 0xFFFFFFFF },
-             { 1.0f, 1.0f, 1.0f, 0.0f, 0xFFFFFFFF },
-             { -1.0f, 1.0f, 0.0f, 0.0f, 0xFFFFFFFF }
-        };
+        GPUVertex quad_verts[] = { { -1.0f, -1.0f, 0.0f, 1.0f, 0xFFFFFFFF },
+                                   { 1.0f, -1.0f, 1.0f, 1.0f, 0xFFFFFFFF },
+                                   { 1.0f, 1.0f, 1.0f, 0.0f, 0xFFFFFFFF },
+                                   { -1.0f, 1.0f, 0.0f, 0.0f, 0xFFFFFFFF } };
         uint32_t quad_inds[] = { 0, 1, 2, 0, 2, 3 };
 
         WGPUBufferDescriptor v_desc = {};
@@ -1197,7 +1210,8 @@ std::string renderGPUQueue(LuaWindow* lua_window) {
             wgpuRenderPassEncoderSetBindGroup(render_pass, 0, ctx.current_bind_group, 0, nullptr);
 
             wgpuRenderPassEncoderSetVertexBuffer(render_pass, 0, vBuf, 0, sizeof(quad_verts));
-            wgpuRenderPassEncoderSetIndexBuffer(render_pass, iBuf, WGPUIndexFormat_Uint32, 0, sizeof(quad_inds));
+            wgpuRenderPassEncoderSetIndexBuffer(render_pass, iBuf, WGPUIndexFormat_Uint32, 0,
+                                                sizeof(quad_inds));
 
             wgpuRenderPassEncoderDrawIndexed(render_pass, 6, 1, 0, 0, 0);
         }

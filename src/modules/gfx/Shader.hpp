@@ -2,7 +2,6 @@
 #include "GPU.hpp"
 #include "pch.hpp"
 
-
 extern const char* SHADER_METATABLE;
 
 struct alignas(16) Uniforms {
@@ -29,8 +28,8 @@ struct LuaShader {
     WGPUBindGroup bind_group = nullptr;               // Group 1 (System)
     WGPUBuffer uniform_buffer = nullptr;
 
-    WGPUBindGroupLayout user_bind_group_layout = nullptr; // Group 2 (User)
-    WGPUBindGroup user_bind_group = nullptr;              // Group 2 (User)
+    WGPUBindGroupLayout user_bind_group_layout = nullptr;  // Group 2 (User)
+    WGPUBindGroup user_bind_group = nullptr;               // Group 2 (User)
     WGPUBuffer user_uniform_buffer = nullptr;
 
     Uniforms uniform_data = {};

@@ -99,10 +99,12 @@ local function funcToMoonwave(f: any): { [string]: any }
 		function_type = functionType,
 		tags = tags,
 		since = if f.parsedDoc then f.parsedDoc.since else nil,
-		deprecated = if f.parsedDoc and f.parsedDoc.deprecated then {
-			version = f.parsedDoc.deprecated.version,
-			description = f.parsedDoc.deprecated.description,
-		} else nil,
+		deprecated = if f.parsedDoc and f.parsedDoc.deprecated
+			then {
+				version = f.parsedDoc.deprecated.version,
+				description = f.parsedDoc.deprecated.description,
+			}
+			else nil,
 		source = {
 			line = if f.location then f.location.start.line else 0,
 			path = "",

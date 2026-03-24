@@ -1,7 +1,8 @@
 #include "Shader.hpp"
-#include <vector>
-#include <string>
+
 #include <iostream>
+#include <string>
+#include <vector>
 
 const char* SHADER_METATABLE = "Shader";
 
@@ -65,7 +66,7 @@ struct Uniforms {
         int len = (int)lua_objlen(L, 3);
 
         for (int i = 1; i <= len; i++) {
-            lua_rawgeti(L, 3, i); // Push item
+            lua_rawgeti(L, 3, i);  // Push item
             if (lua_istable(L, -1)) {
                 lua_getfield(L, -1, "name");
                 std::string u_name = luaL_checkstring(L, -1);
@@ -83,7 +84,8 @@ struct Uniforms {
                 }
 
                 // Align current offset
-                size_t padding = (current_offset % align == 0) ? 0 : (align - (current_offset % align));
+                size_t padding =
+                    (current_offset % align == 0) ? 0 : (align - (current_offset % align));
                 current_offset += padding;
 
                 UserUniform u;
@@ -97,7 +99,7 @@ struct Uniforms {
 
                 current_offset += size;
             }
-            lua_pop(L, 1); // Pop item
+            lua_pop(L, 1);  // Pop item
         }
 
         // Final padding to 16 bytes (uniform buffer requirement)
@@ -111,7 +113,7 @@ struct Uniforms {
 
             shader->user_uniform_data.resize(current_offset, 0);
         } else {
-             uniforms_wgsl = ""; // No fields found
+            uniforms_wgsl = "";  // No fields found
         }
     }
 
@@ -198,7 +200,6 @@ void shader_lib_register(lua_State* L) {
     lua_setfield(L, -2, "Set");
 
     lua_pop(L, 1);
-
 
     // Create gfx library extensions for shaders
     lua_getglobal(L, "gfx");

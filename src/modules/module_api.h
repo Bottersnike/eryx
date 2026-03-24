@@ -24,14 +24,18 @@ typedef struct {
 // share the same link unit.  Suppress the export; the entrypoint function
 // (luauopen_*) is the only symbol the embed table needs.
 #ifdef ERYX_EMBED
-#define LUAU_MODULE_EXPORT   extern "C"   /* no dllexport, but keep C linkage */
-#define LUAU_MODULE_INFO()   /* suppressed in embed mode */
+#define LUAU_MODULE_EXPORT extern "C" /* no dllexport, but keep C linkage */
+#define LUAU_MODULE_INFO()            /* suppressed in embed mode */
 #else
 #ifdef _WIN32
-#define LUAU_MODULE_EXPORT   extern "C" __declspec(dllexport)
-#define LUAU_MODULE_INFO()   extern "C" __declspec(dllexport) const LuauModuleInfo* luau_module_info() { return &INFO; }
+#define LUAU_MODULE_EXPORT extern "C" __declspec(dllexport)
+#define LUAU_MODULE_INFO() \
+    extern "C" __declspec(dllexport) const LuauModuleInfo* luau_module_info() { return &INFO; }
 #else
-#define LUAU_MODULE_EXPORT   extern "C" __attribute__((visibility("default")))
-#define LUAU_MODULE_INFO()   extern "C" __attribute__((visibility("default"))) const LuauModuleInfo* luau_module_info() { return &INFO; }
+#define LUAU_MODULE_EXPORT extern "C" __attribute__((visibility("default")))
+#define LUAU_MODULE_INFO()                                                                       \
+    extern "C" __attribute__((visibility("default"))) const LuauModuleInfo* luau_module_info() { \
+        return &INFO;                                                                            \
+    }
 #endif
 #endif

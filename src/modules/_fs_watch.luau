@@ -15,7 +15,11 @@ export type WatchHandle = {
 --- `filename` is the name of the changed file (may be nil on some platforms).
 --- Set `recursive` to `true` to watch subdirectories (supported on Windows
 --- and macOS; on Linux each subdirectory needs its own watcher).
-function _fs_watch.create(path: string, recursive: boolean, callback: (eventType: string, filename: string?) -> ()): WatchHandle
+function _fs_watch.create(
+	path: string,
+	recursive: boolean,
+	callback: (eventType: string, filename: string?) -> ()
+): WatchHandle
 	return nil :: any
 end
 

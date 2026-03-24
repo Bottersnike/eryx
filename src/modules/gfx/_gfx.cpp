@@ -22,7 +22,6 @@
 #include "Texture.hpp"
 #include "Window.hpp"
 
-
 // ---------------------------------------------------------------------------
 // Forward-declare the C functions we want to expose to Luau.
 // These are defined in the respective .cpp files which are compiled into

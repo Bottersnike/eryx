@@ -26,12 +26,12 @@
 // Platform socket compatibility (mirrors _socket.hpp)
 // ---------------------------------------------------------------------------
 #ifndef _WIN32
-#include <sys/socket.h>
 #include <netdb.h>
+#include <sys/socket.h>
 #include <unistd.h>
 using SOCKET = int;
-#define INVALID_SOCKET  (-1)
-#define SOCKET_ERROR    (-1)
+#define INVALID_SOCKET (-1)
+#define SOCKET_ERROR (-1)
 #define sock_fd_close(fd) close(fd)
 #else
 #define sock_fd_close(fd) closesocket(fd)
@@ -53,13 +53,11 @@ using SOCKET = int;
 #include "mbedtls/x509_crt.h"
 #include "mbedtls/x509_csr.h"
 
-
 // mbedTLS 4.0: RNG is handled internally via PSA Crypto
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
 #include "psa/crypto.h"
-
 
 // ---------------------------------------------------------------------------
 // Module metadata
@@ -107,7 +105,7 @@ struct LuaSSLSocket {
     int ctx_ref;         // LUA_REGISTRYINDEX ref to keep ctx alive
     bool connected;
     std::string hostname;
-    lua_State* L;        // stored for dtor cleanup (lua_unref)
+    lua_State* L;  // stored for dtor cleanup (lua_unref)
 };
 
 static LuaSSLSocket* check_sslsocket(lua_State* L, int idx) {
@@ -143,7 +141,10 @@ static int mbedtls_lua_error(lua_State* L, const char* prefix, int ret) {
 
 static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
     const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) { luaL_error(L, "ssl: server sent no certificate"); return -1; }
+    if (!peer) {
+        luaL_error(L, "ssl: server sent no certificate");
+        return -1;
+    }
 
     PCCERT_CONTEXT pCert = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
                                                         peer->raw.p, (DWORD)peer->raw.len);
@@ -154,23 +155,28 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 
     HCERTSTORE hStore =
         CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, nullptr);
-    if (!hStore) { CertFreeCertificateContext(pCert); luaL_error(L, "ssl: CertOpenStore failed"); return -1; }
+    if (!hStore) {
+        CertFreeCertificateContext(pCert);
+        luaL_error(L, "ssl: CertOpenStore failed");
+        return -1;
+    }
 
     for (const mbedtls_x509_crt* c = peer; c != nullptr; c = c->next) {
-        CertAddEncodedCertificateToStore(hStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                                         c->raw.p, (DWORD)c->raw.len,
-                                         CERT_STORE_ADD_USE_EXISTING, nullptr);
+        CertAddEncodedCertificateToStore(hStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, c->raw.p,
+                                         (DWORD)c->raw.len, CERT_STORE_ADD_USE_EXISTING, nullptr);
     }
 
     CERT_CHAIN_PARA chainPara{};
     chainPara.cbSize = sizeof(chainPara);
     PCCERT_CHAIN_CONTEXT pChainCtx = nullptr;
     BOOL chainOk = CertGetCertificateChain(nullptr, pCert, nullptr, hStore, &chainPara,
-                                           CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT,
-                                           nullptr, &pChainCtx);
+                                           CERT_CHAIN_REVOCATION_CHECK_CHAIN_EXCLUDE_ROOT, nullptr,
+                                           &pChainCtx);
     if (!chainOk || !pChainCtx) {
-        CertCloseStore(hStore, 0); CertFreeCertificateContext(pCert);
-        luaL_error(L, "ssl: CertGetCertificateChain failed (%lu)", GetLastError()); return -1;
+        CertCloseStore(hStore, 0);
+        CertFreeCertificateContext(pCert);
+        luaL_error(L, "ssl: CertGetCertificateChain failed (%lu)", GetLastError());
+        return -1;
     }
 
     int wlen = MultiByteToWideChar(CP_UTF8, 0, hostname, -1, nullptr, 0);
@@ -187,8 +193,8 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
     CERT_CHAIN_POLICY_STATUS policyStatus{};
     policyStatus.cbSize = sizeof(policyStatus);
 
-    BOOL policyOk = CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, pChainCtx,
-                                                     &policyPara, &policyStatus);
+    BOOL policyOk = CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, pChainCtx, &policyPara,
+                                                     &policyStatus);
     delete[] whostname;
     CertFreeCertificateChain(pChainCtx);
     CertCloseStore(hStore, 0);
@@ -203,21 +209,26 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 }
 
 #elif defined(__APPLE__)
-#include <Security/Security.h>
 #include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
 
 static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
     const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) { luaL_error(L, "ssl: server sent no certificate"); return -1; }
+    if (!peer) {
+        luaL_error(L, "ssl: server sent no certificate");
+        return -1;
+    }
 
     // Build a CFArray of SecCertificateRef from the DER chain
-    CFMutableArrayRef certs =
-        CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
+    CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
     for (const mbedtls_x509_crt* c = peer; c != nullptr; c = c->next) {
         CFDataRef der = CFDataCreate(kCFAllocatorDefault, c->raw.p, (CFIndex)c->raw.len);
         SecCertificateRef cert = SecCertificateCreateWithData(kCFAllocatorDefault, der);
         CFRelease(der);
-        if (cert) { CFArrayAppendValue(certs, cert); CFRelease(cert); }
+        if (cert) {
+            CFArrayAppendValue(certs, cert);
+            CFRelease(cert);
+        }
     }
 
     // Create a trust object with the SSL server policy and hostname
@@ -262,17 +273,21 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
     // Probe well-known CA bundle paths (same set as curl/Python)
     static const char* const candidates[] = {
-        "/etc/ssl/certs/ca-certificates.crt",           // Debian, Ubuntu, Arch
-        "/etc/pki/tls/certs/ca-bundle.crt",             // RHEL, Fedora, CentOS
-        "/etc/ssl/ca-bundle.pem",                       // OpenSUSE
-        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem", // RHEL 7+
-        "/etc/ssl/cert.pem",                            // Alpine, some others
+        "/etc/ssl/certs/ca-certificates.crt",                 // Debian, Ubuntu, Arch
+        "/etc/pki/tls/certs/ca-bundle.crt",                   // RHEL, Fedora, CentOS
+        "/etc/ssl/ca-bundle.pem",                             // OpenSUSE
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",  // RHEL 7+
+        "/etc/ssl/cert.pem",                                  // Alpine, some others
         nullptr,
     };
     const char* bundle = nullptr;
     for (int i = 0; candidates[i]; ++i) {
         FILE* f = fopen(candidates[i], "rb");
-        if (f) { fclose(f); bundle = candidates[i]; break; }
+        if (f) {
+            fclose(f);
+            bundle = candidates[i];
+            break;
+        }
     }
     if (!bundle) {
         luaL_error(L, "ssl: no system CA bundle found (install ca-certificates)");
@@ -280,21 +295,25 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
     }
 
     const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) { luaL_error(L, "ssl: server sent no certificate"); return -1; }
+    if (!peer) {
+        luaL_error(L, "ssl: server sent no certificate");
+        return -1;
+    }
 
     mbedtls_x509_crt ca;
     mbedtls_x509_crt_init(&ca);
     int ret = mbedtls_x509_crt_parse_file(&ca, bundle);
     if (ret < 0) {
         mbedtls_x509_crt_free(&ca);
-        char err[256]; mbedtls_strerror(ret, err, sizeof(err));
+        char err[256];
+        mbedtls_strerror(ret, err, sizeof(err));
         luaL_error(L, "ssl: failed to load CA bundle %s: %s", bundle, err);
         return -1;
     }
 
     uint32_t flags = 0;
-    ret = mbedtls_x509_crt_verify((mbedtls_x509_crt*)peer, &ca, nullptr, hostname,
-                                   &flags, nullptr, nullptr);
+    ret = mbedtls_x509_crt_verify((mbedtls_x509_crt*)peer, &ca, nullptr, hostname, &flags, nullptr,
+                                  nullptr);
     mbedtls_x509_crt_free(&ca);
 
     if (ret != 0 || flags != 0) {
@@ -386,8 +405,20 @@ static int ssl_create_server_context(lua_State* L) {
     const char* password = luaL_optstring(L, 3, nullptr);
 
     // Check files exist before calling mbedTLS (which gives cryptic errors)
-    { FILE* f = fopen(certfile, "rb"); if (!f) luaL_error(L, "ssl: certificate file not found: %s", certfile); else fclose(f); }
-    { FILE* f = fopen(keyfile, "rb"); if (!f) luaL_error(L, "ssl: private key file not found: %s", keyfile); else fclose(f); }
+    {
+        FILE* f = fopen(certfile, "rb");
+        if (!f)
+            luaL_error(L, "ssl: certificate file not found: %s", certfile);
+        else
+            fclose(f);
+    }
+    {
+        FILE* f = fopen(keyfile, "rb");
+        if (!f)
+            luaL_error(L, "ssl: private key file not found: %s", keyfile);
+        else
+            fclose(f);
+    }
 
     LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
     new (ctx) LuaSSLContext();
@@ -437,8 +468,10 @@ static int sslctx_load_verify_locations(lua_State* L) {
     int ret = mbedtls_x509_crt_parse_file(&ctx->cacert, cafile);
     if (ret < 0) {
         FILE* f = fopen(cafile, "rb");
-        if (!f) luaL_error(L, "ssl: CA file not found: %s", cafile);
-        else fclose(f);
+        if (!f)
+            luaL_error(L, "ssl: CA file not found: %s", cafile);
+        else
+            fclose(f);
         return mbedtls_lua_error(L, "load_verify_locations", ret);
     }
 

@@ -39,11 +39,14 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 	-- ── Module description detection ─────────────────────────────────────
 	local moduleDescription: string? = nil
 	local moduleBlockIdx: number? = nil
-	if #commentBlocks > 0 and result.comments and #result.comments > 0 and result.comments[1].location.start.line == 1 then
+	if
+		#commentBlocks > 0
+		and result.comments
+		and #result.comments > 0
+		and result.comments[1].location.start.line == 1
+	then
 		local first = commentBlocks[1]
-		local firstStat = if result.root.body and #result.root.body > 0
-			then result.root.body[1]
-			else nil
+		local firstStat = if result.root.body and #result.root.body > 0 then result.root.body[1] else nil
 		local firstStatLine = if firstStat then firstStat.location.start.line else nil
 
 		if firstStatLine == nil or firstStatLine > first.endLine + 1 then
@@ -260,7 +263,10 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 					if tbl.props then
 						typeMembers = {}
 						for _, prop in tbl.props do
-							table.insert(typeMembers :: { FuncDoc }, members.buildMember(prop, findMemberDoc, stat.name))
+							table.insert(
+								typeMembers :: { FuncDoc },
+								members.buildMember(prop, findMemberDoc, stat.name)
+							)
 						end
 					end
 				end
@@ -272,7 +278,10 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 					if tbl.props then
 						metamethods = {}
 						for _, prop in tbl.props do
-							table.insert(metamethods :: { FuncDoc }, members.buildMember(prop, findMemberDoc, stat.name))
+							table.insert(
+								metamethods :: { FuncDoc },
+								members.buildMember(prop, findMemberDoc, stat.name)
+							)
 						end
 					end
 				end
@@ -320,7 +329,10 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 			typeSignatureParts = tableParts
 		end
 
-		local kind: "class" | "table" | "alias" = if implTable or isInlineClass then "class" elseif typeMembers then "table" else "alias"
+		local kind: "class" | "table" | "alias" = if implTable or isInlineClass
+			then "class"
+			elseif typeMembers then "table"
+			else "alias"
 
 		local typeDoc: TypeDoc = {
 			name = stat.name,
@@ -329,7 +341,9 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 			doc = if parsed then parsed.body else doc,
 			signatureFull = if typeMembers and #typeMembers > 0
 				then typePrefix .. members.buildTableSignatureFull(typeMembers :: { FuncDoc })
-				elseif not implTable and not isInlineClass and aliasedType then typePrefix .. td.describeTypeFull(aliasedType)
+				elseif not implTable and not isInlineClass and aliasedType then typePrefix .. td.describeTypeFull(
+					aliasedType
+				)
 				else nil,
 			signatureParts = typeSignatureParts,
 			location = stat.location,
@@ -357,7 +371,6 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 
 		if stat.type == "StatTypeAlias" then
 			processTypeAlias(stat :: luau.StatTypeAlias, doc)
-
 		elseif stat.type == "StatFunction" then
 			local funcStat = stat :: luau.StatFunction
 			local fname: string? = nil
@@ -372,14 +385,12 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 				end
 			end
 			processFunction(fname or "<anonymous>", owner, funcStat.func, stat.location, doc)
-
 		elseif stat.type == "StatLocalFunction" then
 			local localFunc = stat :: luau.StatLocalFunction
 			local fname = localFunc.name and localFunc.name.name or "<anonymous>"
 			if returnedRoots[fname] then
 				processFunction(fname, nil, localFunc.func, stat.location, doc)
 			end
-
 		elseif stat.type == "StatLocal" then
 			local localStat = stat :: luau.StatLocal
 			if localStat.vars and localStat.values then
@@ -391,7 +402,13 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 					end
 
 					if val.type == "ExprFunction" and varName and returnedRoots[varName] then
-						processFunction(varName, nil, val :: luau.ExprFunction, stat.location, if i == 1 then doc else nil)
+						processFunction(
+							varName,
+							nil,
+							val :: luau.ExprFunction,
+							stat.location,
+							if i == 1 then doc else nil
+						)
 						continue
 					end
 
@@ -409,7 +426,6 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 					end
 				end
 			end
-
 		elseif stat.type == "StatAssign" then
 			local assignStat = stat :: luau.StatAssign
 			if assignStat.vars and assignStat.values then
@@ -439,7 +455,13 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 						local ownerPath = if var.type == "ExprIndexName"
 							then exprToPath((var :: luau.ExprIndexName).expr)
 							else nil
-						processFunction(name, ownerPath, val :: luau.ExprFunction, stat.location, if i == 1 then doc else nil)
+						processFunction(
+							name,
+							ownerPath,
+							val :: luau.ExprFunction,
+							stat.location,
+							if i == 1 then doc else nil
+						)
 						continue
 					end
 
@@ -452,8 +474,11 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 							local call = val :: luau.ExprCall
 							if call.func and call.func.type == "ExprIndexName" then
 								local idx = call.func :: luau.ExprIndexName
-								if idx.index == "freeze" and idx.expr.type == "ExprGlobal"
-									and (idx.expr :: luau.ExprGlobal).name == "table" then
+								if
+									idx.index == "freeze"
+									and idx.expr.type == "ExprGlobal"
+									and (idx.expr :: luau.ExprGlobal).name == "table"
+								then
 									if call.args and #call.args >= 1 and call.args[1].type == "ExprTable" then
 										tableExpr = call.args[1] :: luau.ExprTable
 									end
@@ -478,17 +503,26 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 								local itemDoc = findDocComment(item.value.location.start.line)
 
 								if item.value.type == "ExprFunction" then
-									processFunction(keyName :: string, ownerPath, item.value :: luau.ExprFunction, item.value.location, itemDoc)
+									processFunction(
+										keyName :: string,
+										ownerPath,
+										item.value :: luau.ExprFunction,
+										item.value.location,
+										itemDoc
+									)
 								else
 									local litVal = extractLiteralValue(item.value)
 									if litVal then
-										table.insert(constants, {
-											name = keyName :: string,
-											value = litVal,
-											groupTitle = nil,
-											doc = inlineComments[item.value.location.start.line],
-											owner = ownerPath,
-										} :: ConstDoc)
+										table.insert(
+											constants,
+											{
+												name = keyName :: string,
+												value = litVal,
+												groupTitle = nil,
+												doc = inlineComments[item.value.location.start.line],
+												owner = ownerPath,
+											} :: ConstDoc
+										)
 									end
 								end
 							end
@@ -499,13 +533,16 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 					if val then
 						local valStr = extractLiteralValue(val :: luau.AstExpr)
 						if valStr then
-							table.insert(constants, {
-								name = name,
-								value = valStr,
-								groupTitle = if i == 1 then doc else nil,
-								doc = inlineComments[line],
-								owner = cowner,
-							} :: ConstDoc)
+							table.insert(
+								constants,
+								{
+									name = name,
+									value = valStr,
+									groupTitle = if i == 1 then doc else nil,
+									doc = inlineComments[line],
+									owner = cowner,
+								} :: ConstDoc
+							)
 						end
 					end
 				end
@@ -531,6 +568,27 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 		end
 	end
 	functions = remainingFunctions
+
+	-- Merge fields from a separate `Fields` type into the class TypeDoc when
+	-- `classFieldsType` references a named type that holds the instance fields.
+	local typeByName: { [string]: TypeDoc } = {}
+	for _, t in typeDocs do
+		typeByName[t.name] = t
+	end
+	for _, t in typeDocs do
+		if t.classFieldsType then
+			local fieldsType = typeByName[t.classFieldsType]
+			if fieldsType and fieldsType.members and #fieldsType.members > 0 then
+				-- Ensure the target has a members table to receive merged fields
+				if not t.members then
+					t.members = {}
+				end
+				for _, m in fieldsType.members do
+					table.insert(t.members, m)
+				end
+			end
+		end
+	end
 
 	-- ── Detect primary export ────────────────────────────────────────────
 	local returnedNamesList: { string } = {}

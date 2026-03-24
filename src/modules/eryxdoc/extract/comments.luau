@@ -36,7 +36,11 @@ local function unindent(text: string): string
 
 	for i, line in ipairs(lines) do
 		local remove = 0
-		while remove < n and remove < #line and (line:sub(remove + 1, remove + 1) == " " or line:sub(remove + 1, remove + 1) == "\t") do
+		while
+			remove < n
+			and remove < #line
+			and (line:sub(remove + 1, remove + 1) == " " or line:sub(remove + 1, remove + 1) == "\t")
+		do
 			remove += 1
 		end
 		lines[i] = line:sub(remove + 1)

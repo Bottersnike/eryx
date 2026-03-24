@@ -179,9 +179,46 @@
 
 	## Built-in Filters
 
-	| Filter   | Description |
-	|----------|-------------|
-	| `length` | Returns `#tbl` for tables, or `string.len` for everything else. |
+	### String Filters
+
+	| Filter       | Description |
+	|--------------|-------------|
+	| `length`     | Returns `#tbl` for tables, or `string.len` for everything else. |
+	| `upper`      | Converts to uppercase. |
+	| `lower`      | Converts to lowercase. |
+	| `trim`       | Strips leading and trailing whitespace. |
+	| `capitalize` | Capitalizes the first letter, lowercases the rest. |
+	| `title`      | Capitalizes the first letter of each word. |
+	| `replace`    | Replaces occurrences using `replace_from` and `replace_to` context variables. |
+
+	### Collection Filters
+
+	| Filter    | Description |
+	|-----------|-------------|
+	| `first`   | Returns the first element of an array. |
+	| `last`    | Returns the last element of an array. |
+	| `join`    | Joins array elements with `join_separator` (default `", "`). |
+	| `reverse` | Reverses an array or string. |
+	| `keys`    | Returns the keys of a table as an array. |
+	| `values`  | Returns the values of a table as an array. |
+	| `sort`    | Returns a sorted copy of an array (lexicographic). |
+
+	### Numeric Filters
+
+	| Filter  | Description |
+	|---------|-------------|
+	| `abs`   | Returns the absolute value. |
+	| `round` | Rounds to the nearest integer. |
+	| `floor` | Rounds down. |
+	| `ceil`  | Rounds up. |
+
+	### Utility Filters
+
+	| Filter    | Description |
+	|-----------|-------------|
+	| `default` | Returns `default_value` from context if value is nil/false (defaults to `""`). |
+	| `json`    | Encodes the value as a JSON string. |
+	| `type`    | Returns the Luau type name of the value. |
 
 	## Error Handling
 
@@ -227,7 +264,6 @@ local template = {}
 
 -- Built-in filter functions available in every template.
 -- Custom filters passed to `evaluate` are merged on top of these.
--- TODO: Add more builtins
 local BUILTIN_FILTERS: { [string]: (any, { [string]: any }) -> any } = {
 	length = function(val: any): number
 		if val == nil then
@@ -241,6 +277,139 @@ local BUILTIN_FILTERS: { [string]: (any, { [string]: any }) -> any } = {
 		else
 			return 0
 		end
+	end,
+
+	-- String filters
+	upper = function(val: any): string
+		return string.upper(tostring(val))
+	end,
+	lower = function(val: any): string
+		return string.lower(tostring(val))
+	end,
+	trim = function(val: any): string
+		local s = tostring(val)
+		return (s:match("^%s*(.-)%s*$")) or s
+	end,
+	capitalize = function(val: any): string
+		local s = tostring(val)
+		if #s == 0 then
+			return s
+		end
+		return string.upper(s:sub(1, 1)) .. string.lower(s:sub(2))
+	end,
+	replace = function(val: any, ctx: { [string]: any }): string
+		-- Usage: {{ value | replace }}
+		-- Requires `replace_from` and `replace_to` in context.
+		local s = tostring(val)
+		local from = ctx["replace_from"]
+		local to = ctx["replace_to"]
+		if from == nil then
+			return s
+		end
+		return (s:gsub(tostring(from), tostring(to or "")))
+	end,
+	title = function(val: any): string
+		local s = tostring(val)
+		return (
+			s:gsub("(%a)([%w_']*)", function(first: string, rest: string)
+				return string.upper(first) .. string.lower(rest)
+			end)
+		)
+	end,
+
+	-- Collection filters
+	first = function(val: any): any
+		if type(val) == "table" then
+			return val[1]
+		end
+		return nil
+	end,
+	last = function(val: any): any
+		if type(val) == "table" then
+			return val[#val]
+		end
+		return nil
+	end,
+	join = function(val: any, ctx: { [string]: any }): string
+		if type(val) ~= "table" then
+			return tostring(val)
+		end
+		local sep = if ctx["join_separator"] ~= nil then tostring(ctx["join_separator"]) else ", "
+		local parts = {}
+		for _, v in val do
+			table.insert(parts, tostring(v))
+		end
+		return table.concat(parts, sep)
+	end,
+	reverse = function(val: any): any
+		if type(val) == "table" then
+			local result = {}
+			for i = #val, 1, -1 do
+				table.insert(result, val[i])
+			end
+			return result
+		elseif type(val) == "string" then
+			return string.reverse(val)
+		end
+		return val
+	end,
+	keys = function(val: any): { string }
+		if type(val) ~= "table" then
+			return {}
+		end
+		local result = {}
+		for k in val do
+			table.insert(result, k)
+		end
+		return result
+	end,
+	values = function(val: any): { any }
+		if type(val) ~= "table" then
+			return {}
+		end
+		local result = {}
+		for _, v in val do
+			table.insert(result, v)
+		end
+		return result
+	end,
+	sort = function(val: any): { any }
+		if type(val) ~= "table" then
+			return {}
+		end
+		local result = table.clone(val)
+		table.sort(result, function(a: any, b: any)
+			return tostring(a) < tostring(b)
+		end)
+		return result
+	end,
+
+	-- Numeric filters
+	abs = function(val: any): number
+		return math.abs(tonumber(val) or 0)
+	end,
+	round = function(val: any): number
+		return math.round(tonumber(val) or 0)
+	end,
+	floor = function(val: any): number
+		return math.floor(tonumber(val) or 0)
+	end,
+	ceil = function(val: any): number
+		return math.ceil(tonumber(val) or 0)
+	end,
+
+	-- Utility filters
+	default = function(val: any, ctx: { [string]: any }): any
+		if val == nil or val == false then
+			return if ctx["default_value"] ~= nil then ctx["default_value"] else ""
+		end
+		return val
+	end,
+	json = function(val: any): string
+		return json.encode(val)
+	end,
+	type = function(val: any): string
+		return type(val)
 	end,
 }
 

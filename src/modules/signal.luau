@@ -161,7 +161,7 @@ end
 function Signal.disconnectAll<T...>(self: Signal<T...>)
 	local node = self._head
 	while node do
-		local next = node._next;  -- Semicolon for disambiguation
+		local next = node._next; -- Semicolon for disambiguation
 		(node :: any).connected = false
 		node._next = nil
 		node._prev = nil

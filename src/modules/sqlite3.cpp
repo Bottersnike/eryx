@@ -1,11 +1,11 @@
 // sqlite3.cpp – SQLite3 module for Luau
 // Wraps the SQLite amalgamation to provide embedded relational database access.
 
+#include "sqlite3.h"
+
 #include <cmath>
 #include <cstring>
 #include <string>
-
-#include "sqlite3.h"
 
 #include "lua.h"
 #include "lualib.h"
@@ -20,7 +20,7 @@ LUAU_MODULE_INFO()
 
 // ── Metatable names ───────────────────────────────────────────────────────────
 
-static const char* MT_DATABASE  = "SqliteDatabase";
+static const char* MT_DATABASE = "SqliteDatabase";
 static const char* MT_STATEMENT = "SqliteStatement";
 
 // ── Userdata structs ──────────────────────────────────────────────────────────
@@ -31,7 +31,7 @@ struct LuaDatabase {
 
 struct LuaStatement {
     sqlite3_stmt* stmt;
-    sqlite3* db; // keep reference to parent db for error messages
+    sqlite3* db;  // keep reference to parent db for error messages
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -89,13 +89,13 @@ static void bind_value(lua_State* L, sqlite3_stmt* stmt, int param, int idx) {
             break;
         }
         default:
-            luaL_error(L, "unsupported type for SQLite parameter %d: %s",
-                       param, luaL_typename(L, idx));
+            luaL_error(L, "unsupported type for SQLite parameter %d: %s", param,
+                       luaL_typename(L, idx));
             return;
     }
     if (rc != SQLITE_OK) {
-        luaL_error(L, "sqlite3_bind failed for parameter %d: %s",
-                   param, sqlite3_errmsg(sqlite3_db_handle(stmt)));
+        luaL_error(L, "sqlite3_bind failed for parameter %d: %s", param,
+                   sqlite3_errmsg(sqlite3_db_handle(stmt)));
     }
 }
 
@@ -120,7 +120,7 @@ static void push_column(lua_State* L, sqlite3_stmt* stmt, int col) {
             break;
         case SQLITE_TEXT:
             lua_pushlstring(L, (const char*)sqlite3_column_text(stmt, col),
-                           (size_t)sqlite3_column_bytes(stmt, col));
+                            (size_t)sqlite3_column_bytes(stmt, col));
             break;
         case SQLITE_BLOB: {
             int len = sqlite3_column_bytes(stmt, col);
@@ -313,6 +313,54 @@ static int db_changes(lua_State* L) {
     return 1;
 }
 
+// db:transaction(fn) -> ...results
+// Wraps fn() in BEGIN/COMMIT, rolling back on error.
+static int db_transaction(lua_State* L) {
+    LuaDatabase* ud = check_db(L, 1);
+    check_db_open(L, ud);
+    luaL_checktype(L, 2, LUA_TFUNCTION);
+
+    // BEGIN
+    char* errmsg = nullptr;
+    int rc = sqlite3_exec(ud->db, "BEGIN", nullptr, nullptr, &errmsg);
+    if (rc != SQLITE_OK) {
+        std::string err = "sqlite3 BEGIN failed: ";
+        if (errmsg) {
+            err += errmsg;
+            sqlite3_free(errmsg);
+        }
+        luaL_error(L, "%s", err.c_str());
+    }
+
+    // Call the user function with the database as its argument
+    lua_pushvalue(L, 2);                 // push fn
+    lua_pushvalue(L, 1);                 // push db (self)
+    int top_before = lua_gettop(L) - 2;  // stack top before fn + db
+    int status = lua_pcall(L, 1, LUA_MULTRET, 0);
+
+    if (status != 0) {
+        // ROLLBACK on error
+        sqlite3_exec(ud->db, "ROLLBACK", nullptr, nullptr, nullptr);
+        lua_error(L);  // re-raise the error from pcall
+        return 0;
+    }
+
+    // COMMIT on success
+    rc = sqlite3_exec(ud->db, "COMMIT", nullptr, nullptr, &errmsg);
+    if (rc != SQLITE_OK) {
+        sqlite3_exec(ud->db, "ROLLBACK", nullptr, nullptr, nullptr);
+        std::string err = "sqlite3 COMMIT failed: ";
+        if (errmsg) {
+            err += errmsg;
+            sqlite3_free(errmsg);
+        }
+        luaL_error(L, "%s", err.c_str());
+    }
+
+    // Return whatever the function returned
+    return lua_gettop(L) - top_before;
+}
+
 static int db_index(lua_State* L) {
     // Fall through to metatable for methods
     lua_getmetatable(L, 1);
@@ -355,7 +403,7 @@ static int stmt_bind(lua_State* L) {
     sqlite3_clear_bindings(ud->stmt);
     bind_args(L, ud->stmt, 2);
 
-    lua_pushvalue(L, 1); // return self
+    lua_pushvalue(L, 1);  // return self
     return 1;
 }
 
@@ -462,6 +510,8 @@ LUAU_MODULE_EXPORT int luauopen_sqlite3(lua_State* L) {
     lua_setfield(L, -2, "lastInsertId");
     lua_pushcfunction(L, db_changes, "changes");
     lua_setfield(L, -2, "changes");
+    lua_pushcfunction(L, db_transaction, "transaction");
+    lua_setfield(L, -2, "transaction");
     lua_pop(L, 1);
 
     // -- SqliteStatement metatable --

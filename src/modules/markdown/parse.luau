@@ -34,10 +34,8 @@
 ]=]
 local parse = {}
 
-
 --- A plain text run.
 export type TextNode = { type: "text", content: string }
-
 
 --- Inline code span (`` `code` ``).
 export type CodeNode = { type: "code", content: string }
@@ -45,18 +43,14 @@ export type CodeNode = { type: "code", content: string }
 --- Raw inline HTML (`<span>...</span>`).
 export type HtmlNode = { type: "html", content: string }
 
-
 --- Bold text (`**...**` or `__...__`).
 export type BoldNode = { type: "bold", children: { InlineNode } }
-
 
 --- Italic text (`*...*` or `_..._`).
 export type ItalicNode = { type: "italic", children: { InlineNode } }
 
-
 --- Bold and italic simultaneously (`***...***` or `___...___`).
 export type BoldItalicNode = { type: "bold_italic", children: { InlineNode } }
-
 
 --- Strikethrough text (`~~...~~`).
 export type StrikethroughNode = { type: "strikethrough", children: { InlineNode } }
@@ -282,22 +276,22 @@ local function parseInline(s: string, from: number, to: number): { InlineNode }
 			end
 		end
 
-	-- ── Inline HTML: <tag ...> or <!-- comment -->; take raw until '>' ─
-	if ch == "<" then
-		local close = string.find(s, ">", pos, true)
-		if close and close <= to then
-			-- Heuristic: accept when it looks like a tag/comment/doctype
-			local after = string.sub(s, pos + 1, pos + 1)
-			if after:match("[A-Za-z!/\?]") then
-				pushText(nodes, s, seg, pos - 1)
-				local raw = string.sub(s, pos, close)
-				table.insert(nodes, { type = "html" :: "html", content = raw })
-				pos = close + 1
-				seg = pos
-				continue
+		-- ── Inline HTML: <tag ...> or <!-- comment -->; take raw until '>' ─
+		if ch == "<" then
+			local close = string.find(s, ">", pos, true)
+			if close and close <= to then
+				-- Heuristic: accept when it looks like a tag/comment/doctype
+				local after = string.sub(s, pos + 1, pos + 1)
+				if after:match("[A-Za-z!/?]") then
+					pushText(nodes, s, seg, pos - 1)
+					local raw = string.sub(s, pos, close)
+					table.insert(nodes, { type = "html" :: "html", content = raw })
+					pos = close + 1
+					seg = pos
+					continue
+				end
 			end
 		end
-	end
 
 		-- ── Bold+italic: *** or ___ ───────────────────────────────────
 		if three == "***" or three == "___" then

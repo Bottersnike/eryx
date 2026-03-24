@@ -33,9 +33,10 @@ export type WebViewHandle = {
 	--- @param html -- The HTML string to display.
 	navigateToString: (self: WebViewHandle, html: string) -> (),
 
-	--- Sends a string message to the web content. Received via `window.chrome.webview.addEventListener('message', ...)` in JavaScript.
-	--- @param message -- The message string to post.
-	postMessage: (self: WebViewHandle, message: string) -> (),
+	--- Sends data to the web content. Received via `window.chrome.webview.addEventListener('message', ...)` in JavaScript.
+	--- @param event -- The event category.
+	--- @param data -- The data to send.
+	postMessage: (self: WebViewHandle, event: string, data: { [any]: any }) -> (),
 
 	--- Executes a JavaScript snippet inside the webview. Fire-and-forget; does not return a result.
 	--- @param script -- The JavaScript code to execute.
@@ -70,7 +71,7 @@ export type WebViewHandle = {
 
 	--- Registers a callback for messages sent from web content via `window.chrome.webview.postMessage(...)`.
 	--- @param callback -- Called with the message string each time a message is received.
-	onMessage: (self: WebViewHandle, callback: (message: string) -> ()) -> (),
+	onMessage: (self: WebViewHandle, callback: (event: string, data: { [any]: any }) -> ()) -> (),
 
 	--- Registers a callback invoked when the user attempts to close the window (e.g. clicks the X button).
 	--- While a callback is set, the default close is suppressed; call `handle:destroy()` from the callback to actually close the window.

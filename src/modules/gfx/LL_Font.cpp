@@ -1,4 +1,5 @@
 #include "LL_Font.hpp"
+
 #include "Window.hpp"
 
 // Get a glyph bitmap from a font
@@ -28,8 +29,7 @@ GlyphBitmap getGlyphBitmap(FT_Face face, char c) {
 }
 
 // Build glyph atlas from a FreeType font
-bool buildGlyphAtlas(GlyphAtlas& atlas, FT_Face face, int atlas_width,
-                     int atlas_height) {
+bool buildGlyphAtlas(GlyphAtlas& atlas, FT_Face face, int atlas_width, int atlas_height) {
     if (!face) return false;
 
     // Clear old atlas

@@ -28,14 +28,13 @@ static const char* ZIPREADER_MT = "ZipReader";
 
 struct ZipReader {
     void* handle;
-    int   buf_ref; // LUA_REGISTRYINDEX ref keeping the buffer alive
-    bool  closed;
+    int buf_ref;  // LUA_REGISTRYINDEX ref keeping the buffer alive
+    bool closed;
 };
 
 static ZipReader* check_reader(lua_State* L, int idx = 1) {
     ZipReader* rd = (ZipReader*)luaL_checkudata(L, idx, ZIPREADER_MT);
-    if (rd->closed)
-        luaL_error(L, "ZipReader is closed");
+    if (rd->closed) luaL_error(L, "ZipReader is closed");
     return rd;
 }
 
@@ -76,7 +75,7 @@ static int l_reader_list(lua_State* L) {
 
 // reader:read(name) -> buffer?
 static int l_reader_read(lua_State* L) {
-    ZipReader* rd  = check_reader(L);
+    ZipReader* rd = check_reader(L);
     const char* name = luaL_checkstring(L, 2);
 
     if (mz_zip_reader_locate_entry(rd->handle, name, 0) != MZ_OK) {
@@ -89,8 +88,7 @@ static int l_reader_read(lua_State* L) {
     int64_t sz = info ? info->uncompressed_size : 0;
 
     int32_t err = mz_zip_reader_entry_open(rd->handle);
-    if (err != MZ_OK)
-        luaL_error(L, "ZipReader:read: failed to open entry (%d)", err);
+    if (err != MZ_OK) luaL_error(L, "ZipReader:read: failed to open entry (%d)", err);
 
     void* buf = lua_newbuffer(L, (size_t)sz);
     mz_zip_reader_entry_read(rd->handle, buf, (int32_t)sz);
@@ -127,9 +125,9 @@ static int l_open(lua_State* L) {
     int buf_ref = lua_ref(L, 1);
 
     ZipReader* rd = (ZipReader*)lua_newuserdata(L, sizeof(ZipReader));
-    rd->handle  = mz_zip_reader_create();
+    rd->handle = mz_zip_reader_create();
     rd->buf_ref = buf_ref;
-    rd->closed  = false;
+    rd->closed = false;
 
     // copy=0: minizip points directly into the Lua buffer (no duplication).
     int32_t err = mz_zip_reader_open_buffer(rd->handle, (const uint8_t*)data, (int32_t)len, 0);
@@ -270,7 +268,7 @@ static int l_pack(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
 
     uint16_t method = MZ_COMPRESS_METHOD_DEFLATE;
-    int16_t  level  = MZ_COMPRESS_LEVEL_DEFAULT;
+    int16_t level = MZ_COMPRESS_LEVEL_DEFAULT;
 
     if (lua_istable(L, 2)) {
         lua_getfield(L, 2, "method");
@@ -279,8 +277,7 @@ static int l_pack(lua_State* L) {
         lua_pop(L, 1);
 
         lua_getfield(L, 2, "level");
-        if (lua_isnumber(L, -1))
-            level = (int16_t)lua_tointeger(L, -1);
+        if (lua_isnumber(L, -1)) level = (int16_t)lua_tointeger(L, -1);
         lua_pop(L, 1);
     }
 
@@ -312,10 +309,10 @@ static int l_pack(lua_State* L) {
 
             if (file_data) {
                 mz_zip_file file_info{};
-                file_info.filename           = lua_tostring(L, -2);
+                file_info.filename = lua_tostring(L, -2);
                 file_info.compression_method = method;
-                file_info.zip64              = MZ_ZIP64_AUTO;
-                file_info.flag               = MZ_ZIP_FLAG_UTF8;
+                file_info.zip64 = MZ_ZIP64_AUTO;
+                file_info.flag = MZ_ZIP_FLAG_UTF8;
                 mz_zip_writer_add_buffer(writer, file_data, (int32_t)data_len, &file_info);
             }
         }
@@ -326,13 +323,12 @@ static int l_pack(lua_State* L) {
     mz_zip_writer_delete(&writer);
 
     const void* out_buf = nullptr;
-    int32_t     out_len = 0;
+    int32_t out_len = 0;
     mz_stream_mem_get_buffer(mem_stream, &out_buf);
     mz_stream_mem_get_buffer_length(mem_stream, &out_len);
 
     void* result = lua_newbuffer(L, out_len > 0 ? (size_t)out_len : 0);
-    if (out_buf && out_len > 0)
-        memcpy(result, out_buf, (size_t)out_len);
+    if (out_buf && out_len > 0) memcpy(result, out_buf, (size_t)out_len);
 
     mz_stream_close(mem_stream);
     mz_stream_mem_delete(&mem_stream);
@@ -347,10 +343,10 @@ LUAU_MODULE_EXPORT int luauopen_zip(lua_State* L) {
     luaL_newmetatable(L, ZIPREADER_MT);
 
     static const luaL_Reg reader_methods[] = {
-        {"list",  l_reader_list},
-        {"read",  l_reader_read},
-        {"close", l_reader_close},
-        {nullptr, nullptr},
+        { "list", l_reader_list },
+        { "read", l_reader_read },
+        { "close", l_reader_close },
+        { nullptr, nullptr },
     };
     lua_newtable(L);
     for (const luaL_Reg* m = reader_methods; m->name; m++) {
@@ -359,32 +355,29 @@ LUAU_MODULE_EXPORT int luauopen_zip(lua_State* L) {
     }
     lua_setfield(L, -2, "__index");
 
-    lua_pushcfunction(L, l_reader_close,    "__gc");  // close and __gc are identical
+    lua_pushcfunction(L, l_reader_close, "__gc");  // close and __gc are identical
     lua_setfield(L, -2, "__gc");
     lua_pushcfunction(L, l_reader_tostring, "__tostring");
     lua_setfield(L, -2, "__tostring");
 
-    lua_pop(L, 1); // pop metatable
+    lua_pop(L, 1);  // pop metatable
 
     // Module table
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {
-        {"open",   l_open},
-        {"isZip", l_is_zip},
-        {"list",   l_list},
-        {"unpack", l_unpack},
-        {"read",   l_read},
-        {"pack",   l_pack},
-        {nullptr, nullptr},
+        { "open", l_open }, { "isZip", l_is_zip }, { "list", l_list },   { "unpack", l_unpack },
+        { "read", l_read }, { "pack", l_pack },    { nullptr, nullptr },
     };
     for (const luaL_Reg* f = fns; f->name; f++) {
         lua_pushcfunction(L, f->func, f->name);
         lua_setfield(L, -2, f->name);
     }
 
-    lua_pushinteger(L, MZ_COMPRESS_METHOD_STORE);   lua_setfield(L, -2, "METHOD_STORE");
-    lua_pushinteger(L, MZ_COMPRESS_METHOD_DEFLATE); lua_setfield(L, -2, "METHOD_DEFLATE");
+    lua_pushinteger(L, MZ_COMPRESS_METHOD_STORE);
+    lua_setfield(L, -2, "METHOD_STORE");
+    lua_pushinteger(L, MZ_COMPRESS_METHOD_DEFLATE);
+    lua_setfield(L, -2, "METHOD_DEFLATE");
 
     return 1;
 }

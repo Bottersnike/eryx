@@ -86,14 +86,23 @@ export type RsaLib = {
 	get_key_bits: (pem: string) -> number,
 }
 
+export type RandomLib = {
+	randint: (n: number) -> number,
+	choice: (tbl: { any }) -> any,
+	bits: (n: number) -> number,
+	bytes: (n: number) -> buffer,
+	hex: (n: number) -> string,
+}
+
 local _crypto = {}
-_crypto.hash     = {} :: HashLib
-_crypto.hmac     = {} :: HmacLib
-_crypto.aes      = {} :: CipherLib
+_crypto.hash = {} :: HashLib
+_crypto.hmac = {} :: HmacLib
+_crypto.aes = {} :: CipherLib
 _crypto.camellia = {} :: CamelliaLib
-_crypto.des      = {} :: DesLib
+_crypto.des = {} :: DesLib
 _crypto.chacha20 = {} :: ChaCha20Lib
-_crypto.kdf      = {} :: KdfLib
-_crypto.rsa      = {} :: RsaLib
+_crypto.kdf = {} :: KdfLib
+_crypto.rsa = {} :: RsaLib
+_crypto.random = {} :: RandomLib
 
 return _crypto

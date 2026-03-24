@@ -176,8 +176,8 @@ int particles_Draw(lua_State* L) {
         uint32_t color = HsvaToArgb(h, s, v, a);
 
         if (particles->tex) {
-            queueTexturedQuad(lua_window, nullptr, particles->tex, p.x - size / 2, p.y - size / 2, size, size,
-                              0.0, 0.0, 1.0, 1.0, color);
+            queueTexturedQuad(lua_window, nullptr, particles->tex, p.x - size / 2, p.y - size / 2,
+                              size, size, 0.0, 0.0, 1.0, 1.0, color);
 
         } else {
             queueFilledCircle(lua_window, p.x, p.y, size, color);

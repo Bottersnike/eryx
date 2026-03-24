@@ -40,7 +40,7 @@ export type FuncDoc = {
 	name: string,
 	doc: string?,
 	location: luau.Location,
-	params: { string }?,   -- nil for properties; {"name: type", ...} for callables
+	params: { string }?, -- nil for properties; {"name: type", ...} for callables
 	returnStr: string?,
 	parsedDoc: ParsedDoc?,
 	yields: boolean,

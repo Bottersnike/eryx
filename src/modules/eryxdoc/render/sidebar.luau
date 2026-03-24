@@ -72,7 +72,11 @@ end
 
 -- Group modules by prefix hierarchy for sidebar navigation.
 -- `stripPrefix` is the root prefix to strip from display (e.g. "@eryx").
-local function buildSidebarModuleTree(modules: { [string]: modules.ModuleInfo }, activePage: string?, stripPrefix: string?): { SidebarEntry }
+local function buildSidebarModuleTree(
+	modules: { [string]: modules.ModuleInfo },
+	activePage: string?,
+	stripPrefix: string?
+): { SidebarEntry }
 	local tree: TTree = {}
 
 	local function splitParts(qname: string): { string }
@@ -138,20 +142,28 @@ type ANode = {
 -- Global counter used to stamp insertion order on tree nodes.
 local insertionCounter = 0
 
-local function toArticleSidebar(tree: { [string]: ANode }, activePage: string?, folderTitles: { [string]: string }?): ({ ArticleSidebarEntry }, boolean)
+local function toArticleSidebar(
+	tree: { [string]: ANode },
+	activePage: string?,
+	folderTitles: { [string]: string }?
+): ({ ArticleSidebarEntry }, boolean)
 	local result: { ArticleSidebarEntry } = {}
 	local anyActive = false
 
 	for stem, node in pairs(tree) do
 		local hasChildren = next(node.children) ~= nil
 		local isActive = node.name ~= nil and node.name == activePage
-		if isActive then anyActive = true end
+		if isActive then
+			anyActive = true
+		end
 
 		local children: { ArticleSidebarEntry }? = nil
 		local childActive = false
 		if hasChildren then
 			children, childActive = toArticleSidebar(node.children, activePage, folderTitles)
-			if childActive then anyActive = true end
+			if childActive then
+				anyActive = true
+			end
 		end
 
 		-- Resolve display name: article title > folder title from .meta > stem
@@ -163,7 +175,7 @@ local function toArticleSidebar(tree: { [string]: ANode }, activePage: string?, 
 			isActive = isActive,
 			isOpen = isActive or childActive,
 			children = children,
-		};
+		}
 		-- Carry insertion order for sorting
 		(entry :: any)._order = node.insertionOrder
 		table.insert(result, entry)
@@ -250,9 +262,7 @@ local function buildSidebarArticleSections(
 
 		if hasChildren then
 			-- Folder → becomes a titled section
-			local title = node.title
-				or (if sectionTitles then sectionTitles[stem] else nil)
-				or formatFolderName(stem)
+			local title = node.title or (if sectionTitles then sectionTitles[stem] else nil) or formatFolderName(stem)
 			local entries, _ = toArticleSidebar(node.children, activePage, folderTitles)
 			table.insert(sections, { title = title, entries = entries })
 		else
@@ -263,7 +273,7 @@ local function buildSidebarArticleSections(
 				sitePath = node.sitePath,
 				isActive = isActive,
 				isOpen = isActive,
-			};
+			}
 			(entry :: any)._order = node.insertionOrder
 			table.insert(topLevel, entry)
 		end

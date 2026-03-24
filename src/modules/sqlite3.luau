@@ -20,6 +20,12 @@ local stmt = db:prepare("INSERT INTO users VALUES (?, ?, ?)")
 stmt:run(2, "Bob", 25)
 stmt:run(3, "Charlie", 35)
 
+-- Transactions: all-or-nothing batch operations
+db:transaction(function(db)
+    db:exec("INSERT INTO users VALUES (?, ?, ?)", 4, "Diana", 28)
+    db:exec("INSERT INTO users VALUES (?, ?, ?)", 5, "Eve", 32)
+end)
+
 db:close()
 ```
 ]=]
@@ -56,7 +62,7 @@ export type Statement = setmetatable<
 
 		--- Convenience: resets, binds parameters, and executes the
 		--- statement discarding any results.  Use for INSERT/UPDATE/DELETE.
-		bun: (self: Statement, ...any) -> (),
+		run: (self: Statement, ...any) -> (),
 	},
 	{
 		__tostring: (self: Statement) -> string,
@@ -100,6 +106,22 @@ export type Database = setmetatable<
 
 		--- Returns the number of rows changed by the last INSERT, UPDATE, or DELETE statement.
 		changes: (self: Database) -> number,
+
+		--[=[
+		Wraps a function in a SQL transaction (BEGIN/COMMIT).
+
+		If `fn` succeeds, the transaction is committed and its return
+		values are forwarded.  If `fn` throws, the transaction is rolled
+		back and the error is re-raised.
+
+		```luau
+		db:transaction(function(db)
+		    db:exec("INSERT INTO users VALUES (?, ?)", 1, "Alice")
+		    db:exec("INSERT INTO users VALUES (?, ?)", 2, "Bob")
+		end)
+		```
+		]=]
+		transaction: <T...>(self: Database, fn: (db: Database) -> T...) -> T...,
 	},
 	{
 		__tostring: (self: Database) -> string,

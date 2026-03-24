@@ -5,11 +5,10 @@
 #include <string>
 #include <vector>
 
-#include "pugixml.hpp"
-
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
+#include "pugixml.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -21,7 +20,7 @@ LUAU_MODULE_INFO()
 // ── Metatable names ───────────────────────────────────────────────────────────
 
 static const char* MT_DOCUMENT = "XmlDocument";
-static const char* MT_NODE     = "XmlNode";
+static const char* MT_NODE = "XmlNode";
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -91,16 +90,26 @@ static LuaXmlDocument* check_doc(lua_State* L, int idx) {
 
 static const char* node_type_name(pugi::xml_node_type t) {
     switch (t) {
-        case pugi::node_null:        return "null";
-        case pugi::node_document:    return "document";
-        case pugi::node_element:     return "element";
-        case pugi::node_pcdata:      return "pcdata";
-        case pugi::node_cdata:       return "cdata";
-        case pugi::node_comment:     return "comment";
-        case pugi::node_pi:          return "pi";
-        case pugi::node_declaration: return "declaration";
-        case pugi::node_doctype:     return "doctype";
-        default:                     return "unknown";
+        case pugi::node_null:
+            return "null";
+        case pugi::node_document:
+            return "document";
+        case pugi::node_element:
+            return "element";
+        case pugi::node_pcdata:
+            return "pcdata";
+        case pugi::node_cdata:
+            return "cdata";
+        case pugi::node_comment:
+            return "comment";
+        case pugi::node_pi:
+            return "pi";
+        case pugi::node_declaration:
+            return "declaration";
+        case pugi::node_doctype:
+            return "doctype";
+        default:
+            return "unknown";
     }
 }
 
@@ -115,8 +124,8 @@ static int xml_parse(lua_State* L) {
 
     pugi::xml_parse_result result = ud->ref->doc->load_buffer(str, len);
     if (!result) {
-        std::string err = std::string("XML parse error: ") + result.description() +
-                          " at offset " + std::to_string(result.offset);
+        std::string err = std::string("XML parse error: ") + result.description() + " at offset " +
+                          std::to_string(result.offset);
         docref_release(ud->ref);
         ud->ref = nullptr;
         luaL_error(L, "%s", err.c_str());
@@ -137,8 +146,8 @@ static int xml_load(lua_State* L) {
 
     pugi::xml_parse_result result = ud->ref->doc->load_file(path);
     if (!result) {
-        std::string err = std::string("XML load error: ") + result.description() +
-                          " at offset " + std::to_string(result.offset);
+        std::string err = std::string("XML load error: ") + result.description() + " at offset " +
+                          std::to_string(result.offset);
         docref_release(ud->ref);
         ud->ref = nullptr;
         luaL_error(L, "%s", err.c_str());
@@ -192,8 +201,10 @@ static int doc_save(lua_State* L) {
     unsigned int flags = pugi::format_default;
     if (lua_isstring(L, 3)) {
         const char* f = lua_tostring(L, 3);
-        if (strcmp(f, "raw") == 0) flags = pugi::format_raw;
-        else if (strcmp(f, "no_declaration") == 0) flags = pugi::format_no_declaration;
+        if (strcmp(f, "raw") == 0)
+            flags = pugi::format_raw;
+        else if (strcmp(f, "no_declaration") == 0)
+            flags = pugi::format_no_declaration;
     }
     std::ostringstream ss;
     ud->ref->doc->save(ss, indent, flags);
@@ -210,8 +221,10 @@ static int doc_savefile(lua_State* L) {
     unsigned int flags = pugi::format_default;
     if (lua_isstring(L, 4)) {
         const char* f = lua_tostring(L, 4);
-        if (strcmp(f, "raw") == 0) flags = pugi::format_raw;
-        else if (strcmp(f, "no_declaration") == 0) flags = pugi::format_no_declaration;
+        if (strcmp(f, "raw") == 0)
+            flags = pugi::format_raw;
+        else if (strcmp(f, "no_declaration") == 0)
+            flags = pugi::format_no_declaration;
     }
     bool ok = ud->ref->doc->save_file(path, indent, flags);
     if (!ok) luaL_error(L, "Failed to save XML file: %s", path);
@@ -342,12 +355,10 @@ static int node_removechild(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
     if (lua_isstring(L, 2)) {
         const char* name = lua_tostring(L, 2);
-        if (!ud->node.remove_child(name))
-            luaL_error(L, "Failed to remove child '%s'", name);
+        if (!ud->node.remove_child(name)) luaL_error(L, "Failed to remove child '%s'", name);
     } else {
         LuaXmlNode* child = check_node(L, 2);
-        if (!ud->node.remove_child(child->node))
-            luaL_error(L, "Failed to remove child node");
+        if (!ud->node.remove_child(child->node)) luaL_error(L, "Failed to remove child node");
     }
     return 0;
 }
@@ -392,13 +403,12 @@ static int node_attr(lua_State* L) {
 static int node_setattr(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
     const char* name = luaL_checkstring(L, 2);
-    const char* val  = luaL_checkstring(L, 3);
+    const char* val = luaL_checkstring(L, 3);
     pugi::xml_attribute attr = ud->node.attribute(name);
     if (attr.empty()) {
         attr = ud->node.append_attribute(name);
     }
-    if (!attr.set_value(val))
-        luaL_error(L, "Failed to set attribute '%s'", name);
+    if (!attr.set_value(val)) luaL_error(L, "Failed to set attribute '%s'", name);
     return 0;
 }
 
@@ -406,8 +416,7 @@ static int node_setattr(lua_State* L) {
 static int node_removeattr(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
     const char* name = luaL_checkstring(L, 2);
-    if (!ud->node.remove_attribute(name))
-        luaL_error(L, "Failed to remove attribute '%s'", name);
+    if (!ud->node.remove_attribute(name)) luaL_error(L, "Failed to remove attribute '%s'", name);
     return 0;
 }
 
@@ -433,8 +442,7 @@ static int node_text(lua_State* L) {
 static int node_settext(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
     const char* val = luaL_checkstring(L, 2);
-    if (!ud->node.text().set(val))
-        luaL_error(L, "Failed to set text");
+    if (!ud->node.text().set(val)) luaL_error(L, "Failed to set text");
     return 0;
 }
 
@@ -550,8 +558,7 @@ static int node_index(lua_State* L) {
 static int node_setname(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
     const char* name = luaL_checkstring(L, 2);
-    if (!ud->node.set_name(name))
-        luaL_error(L, "Failed to set node name");
+    if (!ud->node.set_name(name)) luaL_error(L, "Failed to set node name");
     return 0;
 }
 

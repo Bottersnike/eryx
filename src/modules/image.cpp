@@ -260,7 +260,7 @@ static int image_Resize(lua_State* L) {
         return 0;
     }
     if (height <= 0) {
-        luaL_error(L, "Width cannot be 0 or negative");
+        luaL_error(L, "Height cannot be 0 or negative");
         return 0;
     }
     if (width * height * i->channels > MAX_BUFFER_SIZE) {

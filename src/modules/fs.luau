@@ -70,17 +70,29 @@ local fs = {}
 --- Pure path manipulation (no I/O)
 fs.path = table.freeze({
 	--- Returns the parent directory of the path (`"a/b/c.txt"` -> `"a/b"`).
-	dirname = function(path: string): string return nil :: any end,
+	dirname = function(path: string): string
+		return nil :: any
+	end,
 	--- Returns the filename component of the path (`"a/b/c.txt"` -> `"c.txt"`).
-	basename = function(path: string): string return nil :: any end,
+	basename = function(path: string): string
+		return nil :: any
+	end,
 	--- Returns the filename without its extension (`"a/b/c.txt"` -> `"c"`).
-	stem = function(path: string): string return nil :: any end,
+	stem = function(path: string): string
+		return nil :: any
+	end,
 	--- Returns the file extension including the dot (`"a/b/c.txt"` -> `".txt"`).
-	extension = function(path: string): string return nil :: any end,
+	extension = function(path: string): string
+		return nil :: any
+	end,
 	--- Resolves a path to an absolute, canonical form.
-	canonicalize = function(path: string): string return nil :: any end,
+	canonicalize = function(path: string): string
+		return nil :: any
+	end,
 	--- Joins path segments with the platform separator.
-	join = function(path: string, ...: string): string return nil :: any end,
+	join = function(path: string, ...: string): string
+		return nil :: any
+	end,
 })
 
 --- Opens a file and returns a `File` handle.
@@ -143,7 +155,10 @@ function fs.isSymlink(path: string): boolean
 end
 --- Returns file metadata. Set `followSymlinks` to `false` to inspect the link itself.
 --- The result always includes `isSymlink` regardless of `followSymlinks`.
-function fs.stat(path: string, followSymlinks: boolean?): { size: number?, mtime: number?, isFile: boolean?, isDirectory: boolean?, isSymlink: boolean? }
+function fs.stat(
+	path: string,
+	followSymlinks: boolean?
+): { size: number?, mtime: number?, isFile: boolean?, isDirectory: boolean?, isSymlink: boolean? }
 	return nil :: any
 end
 

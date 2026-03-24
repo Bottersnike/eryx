@@ -1,4 +1,6 @@
+#include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "lua.h"
@@ -1070,6 +1072,108 @@ static int rsa_get_key_bits(lua_State* L) {
     return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Random
+// ---------------------------------------------------------------------------
+
+// Helper: fill buffer with secure random bytes
+static void secure_random_bytes(lua_State* L, void* out, size_t out_len) {
+    psa_status_t st = psa_generate_random((uint8_t*)out, out_len);
+    if (st != PSA_SUCCESS) {
+        push_psa_error(L, "psa_generate_random", st);
+    }
+}
+
+// Helper: generate a 64-bit random value
+static uint64_t secure_random_u64(lua_State* L) {
+    uint64_t v = 0;
+    secure_random_bytes(L, &v, sizeof(v));
+    return v;
+}
+
+// random.randint(N) -> integer in [0, N]
+static int random_randint(lua_State* L) {
+    lua_Integer n = luaL_checkinteger(L, 1);
+    if (n < 0) luaL_error(L, "n must be non-negative");
+    if (n == 0) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    uint64_t bound = (uint64_t)n + 1ULL;
+    uint64_t limit = UINT64_MAX - (UINT64_MAX % bound);
+    while (true) {
+        uint64_t r = secure_random_u64(L);
+        if (r < limit) {
+            lua_pushinteger(L, (lua_Integer)(r % bound));
+            return 1;
+        }
+    }
+}
+
+// random.choice(tbl) -> element
+static int random_choice(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+    lua_Integer len = lua_objlen(L, 1);
+    if (len <= 0) luaL_error(L, "table is empty");
+
+    // choose index in 1..len
+    uint64_t bound = (uint64_t)len;
+    uint64_t limit = UINT64_MAX - (UINT64_MAX % bound);
+    uint64_t idx;
+    while (true) {
+        uint64_t r = secure_random_u64(L);
+        if (r < limit) {
+            idx = (r % bound) + 1;
+            break;
+        }
+    }
+
+    lua_rawgeti(L, 1, (lua_Integer)idx);
+    return 1;
+}
+
+// random.bits(n) -> non-negative integer with n random bits (n <= 64)
+static int random_bits(lua_State* L) {
+    int n = (int)luaL_checkinteger(L, 1);
+    if (n < 0 || n > 64) luaL_error(L, "bits must be between 0 and 64");
+    if (n == 0) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+
+    uint64_t v = secure_random_u64(L);
+    if (n < 64) v &= ((1ULL << n) - 1ULL);
+    lua_pushinteger(L, (lua_Integer)v);
+    return 1;
+}
+
+// random.bytes(n) -> buffer
+static int random_bytes(lua_State* L) {
+    size_t n = (size_t)luaL_checkinteger(L, 1);
+    void* buf = lua_newbuffer(L, n);
+    secure_random_bytes(L, buf, n);
+    return 1;
+}
+
+// random.hex(n) -> hex string of n bytes
+static int random_hex(lua_State* L) {
+    size_t n = (size_t)luaL_checkinteger(L, 1);
+    std::vector<uint8_t> tmp(n);
+    secure_random_bytes(L, tmp.data(), n);
+
+    static const char* hex = "0123456789abcdef";
+    std::string s;
+    s.reserve(n * 2);
+    for (size_t i = 0; i < n; ++i) {
+        s.push_back(hex[(tmp[i] >> 4) & 0xF]);
+        s.push_back(hex[tmp[i] & 0xF]);
+    }
+
+    lua_pushlstring(L, s.c_str(), s.size());
+    return 1;
+}
+
 static void push_rsa_table(lua_State* L) {
     lua_newtable(L);
     lua_pushcfunction(L, rsa_generate_key, "generate_key");
@@ -1136,6 +1240,20 @@ static void push_hash_table(lua_State* L) {
     lua_setfield(L, -2, "sha3_512");
 }
 
+static void push_random_table(lua_State* L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, random_randint, "randint");
+    lua_setfield(L, -2, "randint");
+    lua_pushcfunction(L, random_choice, "choice");
+    lua_setfield(L, -2, "choice");
+    lua_pushcfunction(L, random_bits, "bits");
+    lua_setfield(L, -2, "bits");
+    lua_pushcfunction(L, random_bytes, "bytes");
+    lua_setfield(L, -2, "bytes");
+    lua_pushcfunction(L, random_hex, "hex");
+    lua_setfield(L, -2, "hex");
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -1150,6 +1268,9 @@ LUAU_MODULE_EXPORT int luauopen__crypto(lua_State* L) {
 
     push_hmac_table(L);
     lua_setfield(L, -2, "hmac");
+
+    push_random_table(L);
+    lua_setfield(L, -2, "random");
 
     push_aes_table(L);
     lua_setfield(L, -2, "aes");

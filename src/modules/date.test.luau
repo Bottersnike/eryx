@@ -198,16 +198,15 @@ suite:test("fromIso: fixed offset is preserved as zone string", function()
 	test.expect(dt.offset):toBe(3600)
 end)
 suite:test("fromIso: invalid string throws", function()
-	test.expect(function() date.fromIso("not a date") end):toError()
+	test.expect(function()
+		date.fromIso("not a date")
+	end):toError()
 end)
 
 -- ── fromFields ───────────────────────────────────────────────────────────────
 
 suite:test("fromFields: fields round-trip", function()
-	local dt = date.fromFields(
-		{ year = 2024, month = 3, day = 15, hour = 10, minute = 30, second = 45 },
-		"UTC"
-	)
+	local dt = date.fromFields({ year = 2024, month = 3, day = 15, hour = 10, minute = 30, second = 45 }, "UTC")
 	test.expect(dt.year):toBe(2024)
 	test.expect(dt.month):toBe(3)
 	test.expect(dt.day):toBe(15)

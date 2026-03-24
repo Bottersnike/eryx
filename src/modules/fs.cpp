@@ -2,7 +2,6 @@
 
 #include <filesystem>
 
-
 #ifdef _WIN32
 #include <io.h>
 #else
@@ -1051,7 +1050,7 @@ LUAU_MODULE_EXPORT int luauopen_fs(lua_State* L) {
     lua_setfield(L, -2, "__index");
 
     lua_setreadonly(L, -1, true);  // Freeze metatable
-    lua_pop(L, 1);  // pop File metatable
+    lua_pop(L, 1);                 // pop File metatable
 
     // -- Module table --
     lua_newtable(L);

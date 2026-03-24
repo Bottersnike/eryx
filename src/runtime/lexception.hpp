@@ -46,7 +46,8 @@ typedef struct _LuaException {
 LuaException* eryx_get_exception(lua_State* L, int idx);
 
 void eryx_exception_push_keyboard_interrupt(lua_State* L);
-void eryx_exception_push_exception(lua_State* L, const char* type, const char* message, const void* extra);
+void eryx_exception_push_exception(lua_State* L, const char* type, const char* message,
+                                   const void* extra);
 std::string eryx_format_exception(lua_State* L, int idx);
 
 // If the value at the top of the stack is not already a LuaException, replaces it

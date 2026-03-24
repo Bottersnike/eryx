@@ -48,6 +48,7 @@ if(ERYX_USE_CRYPTOGRAPHY)
         src/modules/crypto/rsa.luau
         src/modules/crypto/pem.luau
         src/modules/crypto/asn1.luau
+        src/modules/crypto/random.luau
     )
 endif()
 

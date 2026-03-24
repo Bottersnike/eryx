@@ -153,7 +153,7 @@ static int stdio_readasync(lua_State* L) {
     // Initialize the pipe on first use
     if (!g_asyncStdin.initialized) {
         uv_pipe_init(rt->loop, &g_asyncStdin.pipe, 0);
-        uv_pipe_open(&g_asyncStdin.pipe, 0); // fd 0 = stdin
+        uv_pipe_open(&g_asyncStdin.pipe, 0);  // fd 0 = stdin
         g_asyncStdin.pipe.data = &g_asyncStdin;
         g_asyncStdin.threadRef = LUA_NOREF;
         g_asyncStdin.initialized = true;

@@ -15,7 +15,6 @@ extern "C" {
 #include <fstream>
 
 #include "../vfs.hpp"
-
 #include "embedded_modules.h"
 
 int exception_tostring(lua_State* L) {

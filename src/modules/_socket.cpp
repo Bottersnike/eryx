@@ -52,12 +52,12 @@ static void sock_dtor(void* ud);
 // Platform socket compatibility
 // ---------------------------------------------------------------------------
 #ifdef _WIN32
-#  define sock_errno()             WSAGetLastError()
-#  define sock_is_would_block(e)   ((e) == WSAEWOULDBLOCK)
-#  define sock_is_in_progress(e)   ((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
-#  define sock_would_block()       sock_is_would_block(WSAGetLastError())
-#  define sock_in_progress()       sock_is_in_progress(WSAGetLastError())
-#  define sock_fd_close(fd)        closesocket(fd)
+#define sock_errno() WSAGetLastError()
+#define sock_is_would_block(e) ((e) == WSAEWOULDBLOCK)
+#define sock_is_in_progress(e) ((e) == WSAEWOULDBLOCK || (e) == WSAEINPROGRESS)
+#define sock_would_block() sock_is_would_block(WSAGetLastError())
+#define sock_in_progress() sock_is_in_progress(WSAGetLastError())
+#define sock_fd_close(fd) closesocket(fd)
 static std::string sock_strerror_str(int err) {
     char buf[256];
     FormatMessageA(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, err, 0, buf,
@@ -68,17 +68,17 @@ static std::string sock_strerror_str(int err) {
 }
 static const char* sock_gai_strerror(int rc) { return gai_strerrorA(rc); }
 #else
-#  define sock_errno()             errno
-#  define sock_is_would_block(e)   ((e) == EWOULDBLOCK || (e) == EAGAIN)
-#  define sock_is_in_progress(e)   ((e) == EINPROGRESS || (e) == EWOULDBLOCK)
-#  define sock_would_block()       sock_is_would_block(errno)
-#  define sock_in_progress()       sock_is_in_progress(errno)
-#  define sock_fd_close(fd)        close(fd)
+#define sock_errno() errno
+#define sock_is_would_block(e) ((e) == EWOULDBLOCK || (e) == EAGAIN)
+#define sock_is_in_progress(e) ((e) == EINPROGRESS || (e) == EWOULDBLOCK)
+#define sock_would_block() sock_is_would_block(errno)
+#define sock_in_progress() sock_is_in_progress(errno)
+#define sock_fd_close(fd) close(fd)
 static std::string sock_strerror_str(int err) { return strerror(err); }
 static const char* sock_gai_strerror(int rc) { return gai_strerror(rc); }
-#  define SD_RECEIVE               SHUT_RD
-#  define SD_SEND                  SHUT_WR
-#  define SD_BOTH                  SHUT_RDWR
+#define SD_RECEIVE SHUT_RD
+#define SD_SEND SHUT_WR
+#define SD_BOTH SHUT_RDWR
 #endif
 
 static void

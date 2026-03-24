@@ -1,7 +1,7 @@
 #pragma once
-#include "pch.hpp"
-#include "Texture.hpp"
 #include "Font.hpp"
+#include "Texture.hpp"
+#include "pch.hpp"
 
 void gfx_lib_register(lua_State* L);
 

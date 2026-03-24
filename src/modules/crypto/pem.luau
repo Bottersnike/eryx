@@ -53,9 +53,7 @@ function pem.encode(label: string, data: buffer): string
 	for i = 1, #b64, 64 do
 		table.insert(lines, b64:sub(i, i + 63))
 	end
-	return "-----BEGIN " .. label .. "-----\n"
-		.. table.concat(lines, "\n")
-		.. "\n-----END " .. label .. "-----\n"
+	return "-----BEGIN " .. label .. "-----\n" .. table.concat(lines, "\n") .. "\n-----END " .. label .. "-----\n"
 end
 
 --[=[
@@ -105,12 +103,18 @@ function pem.decodeAll(pemStr: string): { { label: string, data: buffer } }
 	while true do
 		-- Find the next BEGIN header
 		local ls, le, label = pemStr:find("%-%-%-%-%-BEGIN ([^%-%\n]+)%-%-%-%-%-", pos)
-		if not ls then break end
+		if not ls then
+			break
+		end
 
 		-- Skip the newline(s) after the header
 		local bodyStart = le + 1
-		if pemStr:sub(bodyStart, bodyStart) == "\r" then bodyStart += 1 end
-		if pemStr:sub(bodyStart, bodyStart) == "\n" then bodyStart += 1 end
+		if pemStr:sub(bodyStart, bodyStart) == "\r" then
+			bodyStart += 1
+		end
+		if pemStr:sub(bodyStart, bodyStart) == "\n" then
+			bodyStart += 1
+		end
 
 		-- Find the matching END marker
 		local endPos = pemStr:find("%-%-%-%-%-END", bodyStart)
@@ -120,7 +124,7 @@ function pem.decodeAll(pemStr: string): { { label: string, data: buffer } }
 
 		-- Extract and clean the base64 body
 		local b64 = pemStr:sub(bodyStart, endPos - 1):gsub("[\r\n%s]+", "")
-		label = label:match("^%s*(.-)%s*$")  -- trim whitespace
+		label = label:match("^%s*(.-)%s*$") -- trim whitespace
 
 		table.insert(results, { label = label, data = base64.decode(b64) })
 

@@ -423,7 +423,7 @@ function Renderer.renderPage(
 			return html.render(markdown.parse(text), {
 				languages = {
 					["luau"] = highlight.highlightLuau,
-					["sh"] = highlight.highlightShell
+					["sh"] = highlight.highlightShell,
 				},
 				wikiResolver = function(link: string): string
 					return self:_resolveWikiLink(link, currentMod)

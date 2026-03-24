@@ -34,13 +34,13 @@ local json = {}
 
 --- Characters that must be escaped inside a JSON string (RFC 8259 §7).
 local ESCAPE_MAP: { [number]: string } = {
-	[0x22] = '\\"',   -- "
-	[0x5C] = "\\\\",  -- \
-	[0x08] = "\\b",   -- backspace
-	[0x0C] = "\\f",   -- form feed
-	[0x0A] = "\\n",   -- newline
-	[0x0D] = "\\r",   -- carriage return
-	[0x09] = "\\t",   -- tab
+	[0x22] = '\\"', -- "
+	[0x5C] = "\\\\", -- \
+	[0x08] = "\\b", -- backspace
+	[0x0C] = "\\f", -- form feed
+	[0x0A] = "\\n", -- newline
+	[0x0D] = "\\r", -- carriage return
+	[0x09] = "\\t", -- tab
 }
 
 local function encodeString(s: string): string
@@ -288,23 +288,26 @@ local function parseString(s: string, pos: number): (string, number)
 				if code <= 0x7F then
 					table.insert(parts, string.char(code))
 				elseif code <= 0x7FF then
-					table.insert(parts, string.char(
-						0xC0 + bit32.rshift(code, 6),
-						0x80 + bit32.band(code, 0x3F)
-					))
+					table.insert(parts, string.char(0xC0 + bit32.rshift(code, 6), 0x80 + bit32.band(code, 0x3F)))
 				elseif code <= 0xFFFF then
-					table.insert(parts, string.char(
-						0xE0 + bit32.rshift(code, 12),
-						0x80 + bit32.band(bit32.rshift(code, 6), 0x3F),
-						0x80 + bit32.band(code, 0x3F)
-					))
+					table.insert(
+						parts,
+						string.char(
+							0xE0 + bit32.rshift(code, 12),
+							0x80 + bit32.band(bit32.rshift(code, 6), 0x3F),
+							0x80 + bit32.band(code, 0x3F)
+						)
+					)
 				else
-					table.insert(parts, string.char(
-						0xF0 + bit32.rshift(code, 18),
-						0x80 + bit32.band(bit32.rshift(code, 12), 0x3F),
-						0x80 + bit32.band(bit32.rshift(code, 6), 0x3F),
-						0x80 + bit32.band(code, 0x3F)
-					))
+					table.insert(
+						parts,
+						string.char(
+							0xF0 + bit32.rshift(code, 18),
+							0x80 + bit32.band(bit32.rshift(code, 12), 0x3F),
+							0x80 + bit32.band(bit32.rshift(code, 6), 0x3F),
+							0x80 + bit32.band(code, 0x3F)
+						)
+					)
 				end
 				pos += 4
 			else

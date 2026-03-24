@@ -2,6 +2,7 @@
 #include <string>
 #include <unordered_set>
 
+#include "../runtime/lmarshall.hpp"
 #include "module_api.h"
 #include "uv.h"
 
@@ -30,12 +31,215 @@ window.eryx = (() => {
 	const webview = window.chrome.webview;
 	window.chrome.webview = undefined;
 
-	// Safe IPC interface - all messages are {type, data}
+	// -- Binary marshalling constants (must match lmarshall.hpp) --
+	const ETYPE_NULL = 0x00, ETYPE_TRUE = 0x01, ETYPE_FALSE = 0x02,
+		ETYPE_DOUBLE = 0x03, ETYPE_STRING = 0x04, ETYPE_BUFFER = 0x05,
+		ETYPE_VECTOR = 0x06, ETYPE_TABLE = 0x11, ETYPE_TABLE_HASH_DELIM = 0x12;
+
+	// -- Base64 decode --
+	const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	const B64_LUT = new Uint8Array(128);
+	for (let i = 0; i < B64.length; i++) B64_LUT[B64.charCodeAt(i)] = i;
+
+	function b64decode(str) {
+		let n = str.length, pad = 0;
+		if (str[n - 1] === "=") { pad++; if (str[n - 2] === "=") pad++; }
+		const out = new Uint8Array((n * 3 / 4) - pad);
+		let j = 0;
+		for (let i = 0; i < n; i += 4) {
+			const a = B64_LUT[str.charCodeAt(i)],
+				b = B64_LUT[str.charCodeAt(i+1)],
+				c = B64_LUT[str.charCodeAt(i+2)],
+				d = B64_LUT[str.charCodeAt(i+3)];
+			const triple = (a << 18) | (b << 12) | (c << 6) | d;
+			out[j++] = (triple >> 16) & 0xFF;
+			if (j < out.length) out[j++] = (triple >> 8) & 0xFF;
+			if (j < out.length) out[j++] = triple & 0xFF;
+		}
+		return out;
+	}
+
+	// -- Base64 encode --
+	function b64encode(bytes) {
+		let out = "";
+		for (let i = 0; i < bytes.length; i += 3) {
+			const a = bytes[i], b = bytes[i+1] || 0, c = bytes[i+2] || 0;
+			const triple = (a << 16) | (b << 8) | c;
+			out += B64[triple >> 18 & 0x3F];
+			out += B64[triple >> 12 & 0x3F];
+			out += (i+1 < bytes.length) ? B64[triple >> 6 & 0x3F] : "=";
+			out += (i+2 < bytes.length) ? B64[triple & 0x3F] : "=";
+		}
+		return out;
+	}
+
+	// -- Unmarshall (binary -> JS) --
+	function readVarint(buf, pos) {
+		let val = 0, shift = 0;
+		do {
+			if (pos.i >= buf.length) throw new Error("Truncated varint");
+			const byte = buf[pos.i++];
+			val |= (byte & 0x7F) << shift;
+			shift += 7;
+			if (!(byte & 0x80)) break;
+		} while (true);
+		return val;
+	}
+
+	function readValue(buf, pos) {
+		if (pos.i >= buf.length) throw new Error("Truncated data");
+		const tag = buf[pos.i++];
+		switch (tag) {
+			case ETYPE_NULL: return null;
+			case ETYPE_TRUE: return true;
+			case ETYPE_FALSE: return false;
+			case ETYPE_DOUBLE: {
+				if (pos.i + 8 > buf.length) throw new Error("Truncated double");
+				const view = new DataView(buf.buffer, buf.byteOffset + pos.i, 8);
+				pos.i += 8;
+				return view.getFloat64(0, true);
+			}
+			case ETYPE_STRING: {
+				const len = readVarint(buf, pos);
+				if (pos.i + len > buf.length) throw new Error("Truncated string");
+				const str = new TextDecoder().decode(buf.subarray(pos.i, pos.i + len));
+				pos.i += len;
+				return str;
+			}
+			case ETYPE_BUFFER: {
+				const len = readVarint(buf, pos);
+				if (pos.i + len > buf.length) throw new Error("Truncated buffer");
+				const slice = buf.slice(pos.i, pos.i + len);
+				pos.i += len;
+				return slice;
+			}
+			case ETYPE_VECTOR: {
+				const floatCount = 3; // LUA_VECTOR_SIZE default
+				const byteLen = floatCount * 4;
+				if (pos.i + byteLen > buf.length) throw new Error("Truncated vector");
+				const view = new DataView(buf.buffer, buf.byteOffset + pos.i, byteLen);
+				const v = [];
+				for (let j = 0; j < floatCount; j++) v.push(view.getFloat32(j * 4, true));
+				pos.i += byteLen;
+				return v;
+			}
+			case ETYPE_TABLE: return readTable(buf, pos);
+			default: throw new Error("Unknown type tag 0x" + tag.toString(16));
+		}
+	}
+
+	function readTable(buf, pos) {
+		const arrLen = readVarint(buf, pos);
+		const obj = {};
+		// Array part — stored as 1-indexed in Lua, convert to object keys
+		for (let i = 1; i <= arrLen; i++) {
+			obj[i] = readValue(buf, pos);
+		}
+		// Hash delimiter
+		if (pos.i >= buf.length || buf[pos.i] !== ETYPE_TABLE_HASH_DELIM)
+			throw new Error("Expected hash delimiter");
+		pos.i++;
+		// Hash part
+		while (pos.i < buf.length && buf[pos.i] !== ETYPE_TABLE_HASH_DELIM) {
+			const key = readValue(buf, pos);
+			const val = readValue(buf, pos);
+			obj[key] = val;
+		}
+		if (pos.i >= buf.length || buf[pos.i] !== ETYPE_TABLE_HASH_DELIM)
+			throw new Error("Expected closing hash delimiter");
+		pos.i++;
+		return obj;
+	}
+
+	// -- Marshall (JS -> binary) --
+	function writeVarint(out, val) {
+		val = val >>> 0;
+		if (!val) { out.push(0); return; }
+		while (val) {
+			let byte = val & 0x7F;
+			val >>>= 7;
+			if (val) byte |= 0x80;
+			out.push(byte);
+		}
+	}
+
+	function writeDouble(out, num) {
+		const buf = new ArrayBuffer(8);
+		new DataView(buf).setFloat64(0, num, true);
+		const bytes = new Uint8Array(buf);
+		for (let i = 0; i < 8; i++) out.push(bytes[i]);
+	}
+
+	function writeValue(out, val) {
+		if (val === null || val === undefined) {
+			out.push(ETYPE_NULL);
+		} else if (val === true) {
+			out.push(ETYPE_TRUE);
+		} else if (val === false) {
+			out.push(ETYPE_FALSE);
+		} else if (typeof val === "number") {
+			out.push(ETYPE_DOUBLE);
+			writeDouble(out, val);
+		} else if (typeof val === "string") {
+			out.push(ETYPE_STRING);
+			const encoded = new TextEncoder().encode(val);
+			writeVarint(out, encoded.length);
+			for (let i = 0; i < encoded.length; i++) out.push(encoded[i]);
+		} else if (val instanceof Uint8Array) {
+			out.push(ETYPE_BUFFER);
+			writeVarint(out, val.length);
+			for (let i = 0; i < val.length; i++) out.push(val[i]);
+		} else if (Array.isArray(val) && val.length <= 4 && val.every(v => typeof v === "number")) {
+			// Treat small numeric arrays as vectors
+			out.push(ETYPE_VECTOR);
+			const buf = new ArrayBuffer(4 * 3);
+			const view = new DataView(buf);
+			for (let i = 0; i < 3; i++) view.setFloat32(i * 4, val[i] || 0, true);
+			const bytes = new Uint8Array(buf);
+			for (let i = 0; i < bytes.length; i++) out.push(bytes[i]);
+		} else if (typeof val === "object") {
+			writeTable(out, val);
+		} else {
+			throw new Error("Cannot marshall value of type " + typeof val);
+		}
+	}
+
+	function writeTable(out, obj) {
+		out.push(ETYPE_TABLE);
+		// Determine array part: consecutive integer keys starting at 1
+		let arrLen = 0;
+		while (obj.hasOwnProperty(arrLen + 1)) arrLen++;
+		writeVarint(out, arrLen);
+		for (let i = 1; i <= arrLen; i++) writeValue(out, obj[i]);
+		// Hash delimiter
+		out.push(ETYPE_TABLE_HASH_DELIM);
+		// Hash part: everything that isn't an array key
+		const arrKeys = new Set();
+		for (let i = 1; i <= arrLen; i++) arrKeys.add(String(i));
+		for (const key of Object.keys(obj)) {
+			if (arrKeys.has(key)) continue;
+			// Attempt to use numeric key if it parses as a finite number
+			const num = Number(key);
+			if (isFinite(num) && String(num) === key) {
+				writeValue(out, num);
+			} else {
+				writeValue(out, key);
+			}
+			writeValue(out, obj[key]);
+		}
+		out.push(ETYPE_TABLE_HASH_DELIM);
+	}
+
+	// -- Public API --
 	const eryx = {
 		post(type, data) {
 			if (typeof type !== "string") throw new Error("eryx.post: type must be a string");
-			if (data !== undefined && (typeof data !== "object" || data === null || Array.isArray(data))) throw new Error("eryx.post: data must be a plain object");
-			webview.postMessage(JSON.stringify({ type, data: data || {} }));
+			if (data !== undefined && (typeof data !== "object" || data === null || Array.isArray(data)))
+				throw new Error("eryx.post: data must be a plain object");
+			const out = [];
+			writeValue(out, type);
+			writeTable(out, data || {});
+			webview.postMessage(b64encode(new Uint8Array(out)));
 		},
 
 		_handlers: {},
@@ -59,22 +263,28 @@ window.eryx = (() => {
 
 	// Route incoming messages to registered handlers
 	webview.addEventListener("message", function (e) {
-        console.log("Got data", e.data)
-
-		let msg;
+		let buf;
 		try {
-			msg = JSON.parse(e.data);
+			buf = b64decode(e.data);
 		} catch {
 			return;
 		}
-		if (!msg || typeof msg.type !== "string") return;
-		const handlers = eryx._handlers[msg.type];
+		const pos = { i: 0 };
+		let type, data;
+		try {
+			type = readValue(buf, pos);
+			data = readValue(buf, pos);
+		} catch {
+			return;
+		}
+		if (typeof type !== "string") return;
+		const handlers = eryx._handlers[type];
 		if (handlers) {
-			for (const cb of handlers) cb(msg.data || {});
+			for (const cb of handlers) cb(data || {});
 		}
 	});
 
-	return eryx
+	return eryx;
 })();
 )V0G0N";
 
@@ -276,142 +486,6 @@ static int wv_navigate_to_string(lua_State* L) {
 }
 
 // handle:postMessage(msg)
-enum {
-    ETYPE_NULL = 0x00,
-    ETYPE_TRUE = 0x01,
-    ETYPE_FALSE = 0x02,
-    ETYPE_DOUBLE = 0x03,
-    ETYPE_STRING = 0x04,
-    ETYPE_BUFFER = 0x05,
-
-    ETYPE_TABLE = 0x11,
-    ETYPE_TABLE_HASH_DELIM = 0x12,
-};
-static void encode_varint(std::vector<uint8_t>& data, unsigned int val) {
-    if (!val) {
-        data.push_back(0);
-        return;
-    }
-    while (val) {
-        uint8_t byte = val & 0x7F;
-        val >>= 7;
-        if (val) byte |= 0x80;
-        data.push_back(byte);
-    }
-}
-static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, int visited);
-static void encode_lua_value(lua_State* L, int idx, std::vector<uint8_t>& data, int visited) {
-    switch ((lua_Type)lua_type(L, idx)) {
-        case LUA_TNIL:
-            data.push_back(ETYPE_NULL);
-            break;
-        case LUA_TBOOLEAN:
-            if (lua_toboolean(L, idx))
-                data.push_back(ETYPE_TRUE);
-            else
-                data.push_back(ETYPE_FALSE);
-            break;
-        case LUA_TNUMBER: {
-            lua_Number k = lua_tonumber(L, idx);
-            data.push_back(ETYPE_DOUBLE);
-            auto ptr = reinterpret_cast<const uint8_t*>(&k);
-            data.insert(data.end(), ptr, ptr + sizeof(double));
-            break;
-        }
-        case LUA_TSTRING: {
-            const char* s = lua_tostring(L, idx);
-            data.push_back(ETYPE_STRING);
-            encode_varint(data, strlen(s));
-            if (strlen(s)) data.insert(data.end(), s, s + strlen(s));
-            break;
-        }
-        case LUA_TBUFFER: {
-            size_t nBuffer;
-            const void* buf = lua_tobuffer(L, idx, &nBuffer);
-            data.push_back(ETYPE_BUFFER);
-            encode_varint(data, nBuffer);
-            if (nBuffer) data.insert(data.end(), (uint8_t*)buf, (uint8_t*)buf + nBuffer);
-            break;
-        }
-        case LUA_TTABLE:
-            // TODO: Use visited
-            encode_lua_table(L, idx, data, visited);
-            break;
-
-        case LUA_TUSERDATA:
-        case LUA_TLIGHTUSERDATA:
-            luaL_error(L, "Cannot exchange userdata in IPC transactions");
-            break;
-        case LUA_TFUNCTION:
-            luaL_error(L, "Cannot exchange functions in IPC transactions");
-            break;
-        case LUA_TTHREAD:
-            luaL_error(L, "Cannot exchange functions in IPC transactions");
-            break;
-        case LUA_TVECTOR:
-            luaL_error(
-                L, "Cannot exchange vectors in IPC transactions. Use an array of numbers instead");
-            break;
-
-        // These aren't "real" values, but they're present to satisfy enum checks
-        case LUA_TPROTO:
-        case LUA_TUPVAL:
-        case LUA_TDEADKEY:
-            luaL_error(L, "Something has gone fatally wrong with your Luau runtime.");
-            break;
-    }
-}
-static int already_seen(lua_State* L, int t, int visited) {
-    lua_pushvalue(L, t);
-    lua_rawget(L, visited);
-    int seen = !lua_isnil(L, -1);
-    lua_pop(L, 1);
-    return seen;
-}
-static void mark_seen(lua_State* L, int t, int visited) {
-    lua_pushvalue(L, t);
-    lua_pushboolean(L, 1);
-    lua_rawset(L, visited);
-}
-static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, int visited) {
-    if (already_seen(L, idx, visited)) {
-        luaL_error(L, "Cannot exchange recursive tables in IPC transactions");
-        return;
-    }
-    mark_seen(L, idx, visited);
-
-    data.push_back(ETYPE_TABLE);
-
-    // Array part
-    lua_Integer n = lua_objlen(L, idx);
-    encode_varint(data, n);
-    for (lua_Integer i = 1; i <= n; i++) {
-        lua_rawgeti(L, idx, i);
-        if (!lua_isnil(L, -1)) {
-            encode_lua_value(L, -1, data, visited);
-        }
-
-        lua_pop(L, 1);
-    }
-    // Hash part
-    data.push_back(ETYPE_TABLE_HASH_DELIM);
-    lua_pushnil(L);
-    while (lua_next(L, idx) != 0) {
-        // Skip array keys we already printed
-        if (lua_type(L, -2) == LUA_TNUMBER) {
-            lua_Number k = lua_tonumber(L, -2);
-            if (k >= 1 && k <= n && (lua_Integer)k == k) {
-                lua_pop(L, 1);
-                continue;
-            }
-        }
-
-        encode_lua_value(L, -2, data, visited);
-        encode_lua_value(L, -1, data, visited);
-        lua_pop(L, 1);
-    }
-    data.push_back(ETYPE_TABLE_HASH_DELIM);
-}
 static const char b64_table[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 std::string base64_encode(const uint8_t* data, size_t len) {
     std::string out;
@@ -432,6 +506,32 @@ std::string base64_encode(const uint8_t* data, size_t len) {
 
     return out;
 }
+static std::vector<uint8_t> base64_decode(const char* str, size_t len) {
+    static const uint8_t lut[128] = {
+        0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,
+        0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  62,
+        0,  0,  0,  63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 0,  0,  0,  0,  0,  0,  0,  0,
+        1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+        23, 24, 25, 0,  0,  0,  0,  0,  0,  26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38,
+        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 0,  0,  0,  0,  0,
+    };
+    size_t pad = 0;
+    if (len > 0 && str[len - 1] == '=') {
+        pad++;
+        if (len > 1 && str[len - 2] == '=') pad++;
+    }
+    std::vector<uint8_t> out;
+    out.reserve((len * 3 / 4) - pad);
+    for (size_t i = 0; i + 3 < len; i += 4) {
+        uint32_t a = lut[(unsigned char)str[i]], b = lut[(unsigned char)str[i + 1]],
+                 c = lut[(unsigned char)str[i + 2]], d = lut[(unsigned char)str[i + 3]];
+        uint32_t triple = (a << 18) | (b << 12) | (c << 6) | d;
+        out.push_back((triple >> 16) & 0xFF);
+        if (str[i + 2] != '=') out.push_back((triple >> 8) & 0xFF);
+        if (str[i + 3] != '=') out.push_back(triple & 0xFF);
+    }
+    return out;
+}
 static int wv_post_message(lua_State* L) {
     auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
     if (!wh->alive) {
@@ -444,14 +544,8 @@ static int wv_post_message(lua_State* L) {
     }
 
     std::vector<uint8_t> data;
-    lua_newtable(L);
-    int visited = lua_gettop(L);
-    // Argument 2 first, which we now know is a string
-    encode_lua_value(L, 2, data, visited);
-    // Then argument 3, which is a table
-    encode_lua_table(L, 3, data, visited);
-    // Then remove our visitor tracker
-    lua_pop(L, 1);
+    eryx_marshall(L, 2, data);  // message type (string)
+    eryx_marshall(L, 3, data);  // message data (table)
 
     std::string msg = base64_encode(data.data(), data.size());
     std::wstring wmsg = utf8_to_wide(msg.c_str());
@@ -1055,16 +1149,23 @@ static int wv_create(lua_State* L) {
                                         args->TryGetWebMessageAsString(&wmsg);
                                         std::string msg = wide_to_utf8(wmsg.get());
 
+                                        // Decode base64 -> binary -> Lua values
+                                        std::vector<uint8_t> bin =
+                                            base64_decode(msg.c_str(), msg.size());
+
                                         lua_State* GL = wh->rt->GL;
                                         lua_State* TL = lua_newthread(GL);
 
                                         lua_getref(GL, wh->messageCallbackRef);
                                         lua_xmove(GL, TL, 1);
-                                        lua_pushstring(TL, msg.c_str());
+
+                                        // Unmarshall type (string) and data (table) onto TL
+                                        size_t pos = eryx_unmarshall(TL, bin.data(), bin.size());
+                                        eryx_unmarshall(TL, bin.data() + pos, bin.size() - pos);
 
                                         int ref = lua_ref(GL, -1);
                                         lua_pop(GL, 1);
-                                        eryx_push_thread(wh->rt, ref, 1, false);
+                                        eryx_push_thread(wh->rt, ref, 2, false);
 
                                         return S_OK;
                                     })

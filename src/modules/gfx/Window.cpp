@@ -454,8 +454,8 @@ int window_DrawTexture(lua_State* L) {
     }
 
     // Queue textured quad for GPU rendering (whole texture, no scaling)
-    queueTexturedQuad(lua_window, nullptr, texture, pos[0], pos[1], size[0], size[1], uv[0], uv[1], uv[2],
-                      uv[3], tint);
+    queueTexturedQuad(lua_window, nullptr, texture, pos[0], pos[1], size[0], size[1], uv[0], uv[1],
+                      uv[2], uv[3], tint);
 
     return 0;
 }
@@ -664,8 +664,8 @@ int window_DrawGlyphAtlas(lua_State* L) {
     }
 
     if (font->atlas.gpu_view) {
-        queueTexturedQuad(lua_window, font->atlas.gpu_view, nullptr, pos[0], pos[1], size[0], size[1], 0.0f,
-                          0.0f, 1.0f, 1.0f, 0xFFFFFFFF);
+        queueTexturedQuad(lua_window, font->atlas.gpu_view, nullptr, pos[0], pos[1], size[0],
+                          size[1], 0.0f, 0.0f, 1.0f, 1.0f, 0xFFFFFFFF);
 
         lua_pushboolean(L, true);
     } else {

@@ -1061,7 +1061,12 @@ function HttpServer._readRequest(self: HttpServer, sock: any, remoteAddr: string
 	}
 end
 
-function HttpServer._handleConnection(self: HttpServer, client_sock: any, remoteAddr: string, remotePort: number): boolean
+function HttpServer._handleConnection(
+	self: HttpServer,
+	client_sock: any,
+	remoteAddr: string,
+	remotePort: number
+): boolean
 	local request = self:_readRequest(client_sock, remoteAddr, remotePort)
 	if not request then
 		return false

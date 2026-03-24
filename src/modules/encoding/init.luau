@@ -33,4 +33,3 @@ return {
 	json = require("@self/json"),
 	yaml = require("@self/yaml"),
 }
-

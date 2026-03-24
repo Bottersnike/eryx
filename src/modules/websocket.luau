@@ -308,13 +308,16 @@ type WebSocketFields = {
 export type WebSocket = typeof(setmetatable({} :: WebSocketFields, WebSocket))
 
 function WebSocket._new(sock: any, isClient: boolean): WebSocket
-	return setmetatable({
-		_sock = sock,
-		_isClient = isClient,
-		_closed = false,
-		_closeSent = false,
-		_closeReceived = false,
-	} :: WebSocketFields, WebSocket)
+	return setmetatable(
+		{
+			_sock = sock,
+			_isClient = isClient,
+			_closed = false,
+			_closeSent = false,
+			_closeReceived = false,
+		} :: WebSocketFields,
+		WebSocket
+	)
 end
 
 --[=[
@@ -748,11 +751,7 @@ export type UpgradeOptions = {
 	@param options Optional upgrade settings (e.g. sub-protocol selection).
 	@return WebSocket? -- The upgraded WebSocket, or `nil` if the request is not a WebSocket upgrade.
 ]=]
-local function upgrade(
-	request: http.ServerRequest,
-	response: http.ServerResponse,
-	options: UpgradeOptions?
-): WebSocket?
+local function upgrade(request: http.ServerRequest, response: http.ServerResponse, options: UpgradeOptions?): WebSocket?
 	local opts = options or {} :: UpgradeOptions
 
 	-- Validate required upgrade headers - return nil for non-upgrade requests.
@@ -807,7 +806,7 @@ local function upgrade(
 	-- Mark the response as finished and upgraded so the HTTP server
 	-- does not send additional data or close the socket.
 	response._headersSent = true
-	response._finished = true;
+	response._finished = true
 	(response :: any)._upgraded = true
 
 	return WebSocket._new(sock, false)

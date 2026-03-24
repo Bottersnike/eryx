@@ -1010,6 +1010,8 @@ static int l_config(lua_State* L) {
 
     // TODO: THIS!
 
+    luaL_error(L, "Oops I forgot to finish implementing this!");
+
     // const char* path = luaL_checkstring(L, 1);
     // auto resolved = resolve_module(L, path);
 

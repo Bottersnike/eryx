@@ -74,7 +74,16 @@ local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) ->
 			signature = sig,
 			signatureFull = signatures.buildFull(prop.name, params, retStr, parsed, ownerName, isMethod),
 			signatureParts = signatures.buildParts(prop.name, pNames, pTypeParts, retParts, ownerName, isMethod),
-			signatureMeta = signatures.buildMeta(prop.name, pNames, pTypeNodes, fn.returnTypes, ownerName, isMethod, nil, parsed),
+			signatureMeta = signatures.buildMeta(
+				prop.name,
+				pNames,
+				pTypeNodes,
+				fn.returnTypes,
+				ownerName,
+				isMethod,
+				nil,
+				parsed
+			),
 			params = params,
 			returnStr = retStr,
 			doc = memberDoc,

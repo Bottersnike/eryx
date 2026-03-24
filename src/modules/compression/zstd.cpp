@@ -1,10 +1,11 @@
+#include "zstd.h"
+
 #include <cstring>
 #include <vector>
 
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "zstd.h"
 #include "zdict.h"
 
 static const LuauModuleInfo INFO = {
@@ -21,8 +22,7 @@ LUAU_MODULE_INFO()
 static void* decompress_known_size(lua_State* L, const void* src, size_t srcLen, size_t outLen) {
     void* out = lua_newbuffer(L, outLen);
     size_t ret = ZSTD_decompress(out, outLen, src, srcLen);
-    if (ZSTD_isError(ret))
-        luaL_error(L, "zstd: decompress failed: %s", ZSTD_getErrorName(ret));
+    if (ZSTD_isError(ret)) luaL_error(L, "zstd: decompress failed: %s", ZSTD_getErrorName(ret));
     return out;
 }
 
@@ -61,8 +61,7 @@ static int l_compress(lua_State* L) {
     std::vector<char> tmp(bound);
 
     size_t ret = ZSTD_compress(tmp.data(), bound, src, srcLen, level);
-    if (ZSTD_isError(ret))
-        luaL_error(L, "zstd: compress failed: %s", ZSTD_getErrorName(ret));
+    if (ZSTD_isError(ret)) luaL_error(L, "zstd: compress failed: %s", ZSTD_getErrorName(ret));
 
     void* out = lua_newbuffer(L, ret);
     memcpy(out, tmp.data(), ret);
@@ -114,7 +113,7 @@ static int l_frame_content_size(lua_State* L) {
 // ---------------------------------------------------------------------------
 static int l_compress_with_dict(lua_State* L) {
     size_t srcLen = 0, dictLen = 0;
-    const void* src  = luaL_checkbuffer(L, 1, &srcLen);
+    const void* src = luaL_checkbuffer(L, 1, &srcLen);
     const void* dict = luaL_checkbuffer(L, 2, &dictLen);
     int level = (int)luaL_optinteger(L, 3, ZSTD_CLEVEL_DEFAULT);
 
@@ -122,7 +121,10 @@ static int l_compress_with_dict(lua_State* L) {
     if (!cdict) luaL_error(L, "zstd: failed to create CDict");
 
     ZSTD_CCtx* cctx = ZSTD_createCCtx();
-    if (!cctx) { ZSTD_freeCDict(cdict); luaL_error(L, "zstd: failed to create CCtx"); }
+    if (!cctx) {
+        ZSTD_freeCDict(cdict);
+        luaL_error(L, "zstd: failed to create CCtx");
+    }
 
     size_t bound = ZSTD_compressBound(srcLen);
     std::vector<char> tmp(bound);
@@ -144,14 +146,17 @@ static int l_compress_with_dict(lua_State* L) {
 // ---------------------------------------------------------------------------
 static int l_decompress_with_dict(lua_State* L) {
     size_t srcLen = 0, dictLen = 0;
-    const void* src  = luaL_checkbuffer(L, 1, &srcLen);
+    const void* src = luaL_checkbuffer(L, 1, &srcLen);
     const void* dict = luaL_checkbuffer(L, 2, &dictLen);
 
     ZSTD_DDict* ddict = ZSTD_createDDict(dict, dictLen);
     if (!ddict) luaL_error(L, "zstd: failed to create DDict");
 
     ZSTD_DCtx* dctx = ZSTD_createDCtx();
-    if (!dctx) { ZSTD_freeDDict(ddict); luaL_error(L, "zstd: failed to create DCtx"); }
+    if (!dctx) {
+        ZSTD_freeDDict(ddict);
+        luaL_error(L, "zstd: failed to create DCtx");
+    }
 
     unsigned long long cs = ZSTD_getFrameContentSize(src, srcLen);
     std::vector<char> tmp;
@@ -195,8 +200,7 @@ static int l_train_dictionary(lua_State* L) {
     size_t capacity = (size_t)luaL_checkinteger(L, 2);
 
     int n = (int)lua_objlen(L, 1);
-    if (n == 0)
-        luaL_error(L, "zstd: train_dictionary requires at least one sample");
+    if (n == 0) luaL_error(L, "zstd: train_dictionary requires at least one sample");
 
     std::vector<size_t> sizes(n);
     std::vector<uint8_t> all;
@@ -212,9 +216,8 @@ static int l_train_dictionary(lua_State* L) {
     }
 
     std::vector<char> dict(capacity);
-    size_t dictSize = ZDICT_trainFromBuffer(
-        dict.data(), capacity,
-        all.data(), sizes.data(), (unsigned)n);
+    size_t dictSize =
+        ZDICT_trainFromBuffer(dict.data(), capacity, all.data(), sizes.data(), (unsigned)n);
 
     if (ZDICT_isError(dictSize))
         luaL_error(L, "zstd: train_dictionary failed: %s", ZDICT_getErrorName(dictSize));
@@ -232,14 +235,14 @@ LUAU_MODULE_EXPORT int luauopen_zstd(lua_State* L) {
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {
-        {"compress",              l_compress},
-        {"decompress",            l_decompress},
-        {"compressBound",        l_compress_bound},
-        {"frameContentSize",    l_frame_content_size},
-        {"compressWithDict",    l_compress_with_dict},
-        {"decompressWithDict",  l_decompress_with_dict},
-        {"trainDictionary",      l_train_dictionary},
-        {nullptr, nullptr},
+        { "compress", l_compress },
+        { "decompress", l_decompress },
+        { "compressBound", l_compress_bound },
+        { "frameContentSize", l_frame_content_size },
+        { "compressWithDict", l_compress_with_dict },
+        { "decompressWithDict", l_decompress_with_dict },
+        { "trainDictionary", l_train_dictionary },
+        { nullptr, nullptr },
     };
     for (const luaL_Reg* f = fns; f->name; f++) {
         lua_pushcfunction(L, f->func, f->name);
@@ -247,9 +250,12 @@ LUAU_MODULE_EXPORT int luauopen_zstd(lua_State* L) {
     }
 
     // Compression level constants
-    lua_pushinteger(L, ZSTD_minCLevel());    lua_setfield(L, -2, "CLEVEL_MIN");
-    lua_pushinteger(L, ZSTD_maxCLevel());    lua_setfield(L, -2, "CLEVEL_MAX");
-    lua_pushinteger(L, ZSTD_CLEVEL_DEFAULT); lua_setfield(L, -2, "CLEVEL_DEFAULT");
+    lua_pushinteger(L, ZSTD_minCLevel());
+    lua_setfield(L, -2, "CLEVEL_MIN");
+    lua_pushinteger(L, ZSTD_maxCLevel());
+    lua_setfield(L, -2, "CLEVEL_MAX");
+    lua_pushinteger(L, ZSTD_CLEVEL_DEFAULT);
+    lua_setfield(L, -2, "CLEVEL_DEFAULT");
 
     return 1;
 }

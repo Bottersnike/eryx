@@ -27,9 +27,9 @@ static void ensureBatch(GPURenderContext& ctx, WGPUTextureView texture_view,
 }
 
 // Queue a textured quad for rendering
-void queueTexturedQuad(LuaWindow* lua_window, WGPUTextureView texture_view,  LuaTexture* texture, float x, float y,
-                       float w, float h, float uv_x, float uv_y, float uv_w, float uv_h,
-                       uint32_t color) {
+void queueTexturedQuad(LuaWindow* lua_window, WGPUTextureView texture_view, LuaTexture* texture,
+                       float x, float y, float w, float h, float uv_x, float uv_y, float uv_w,
+                       float uv_h, uint32_t color) {
     // Check if texture is in cache
     if (texture_view == nullptr) {
         GPURenderContext& ctx = lua_window->gpu_context;

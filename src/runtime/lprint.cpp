@@ -18,16 +18,36 @@ static void print_escaped_string(const char* s, size_t len) {
     putchar('"');
     for (size_t i = 0; i < len; i++) {
         switch (s[i]) {
-            case '\a':  printf("\\a"); break;
-            case '\b':  printf("\\b"); break;
-            case '\f':  printf("\\f"); break;
-            case '\n':  printf("\\n"); break;
-            case '\r':  printf("\\r"); break;
-            case '\t':  printf("\\t"); break;
-            case '\v':  printf("\\v"); break;
-            case '\\': printf("\\\\"); break;
-            case '"':   printf("\\\""); break;
-            case '\0':  printf("\\0"); break;
+            case '\a':
+                printf("\\a");
+                break;
+            case '\b':
+                printf("\\b");
+                break;
+            case '\f':
+                printf("\\f");
+                break;
+            case '\n':
+                printf("\\n");
+                break;
+            case '\r':
+                printf("\\r");
+                break;
+            case '\t':
+                printf("\\t");
+                break;
+            case '\v':
+                printf("\\v");
+                break;
+            case '\\':
+                printf("\\\\");
+                break;
+            case '"':
+                printf("\\\"");
+                break;
+            case '\0':
+                printf("\\0");
+                break;
             default:
                 if ((unsigned char)s[i] < 0x20) {
                     printf("\\x%02x", (unsigned char)s[i]);

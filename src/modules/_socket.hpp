@@ -1,24 +1,24 @@
 #pragma once
 
 #ifndef _WIN32
-#include <sys/socket.h>
-#include <sys/types.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
+
 #include <cerrno>
 using SOCKET = int;
 #define INVALID_SOCKET (-1)
-#define SOCKET_ERROR   (-1)
+#define SOCKET_ERROR (-1)
 #endif
 
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-
 
 static const char* SOCKET_METATABLE = "Socket";
 

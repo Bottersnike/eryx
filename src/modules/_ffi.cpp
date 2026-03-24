@@ -23,9 +23,9 @@
 
 #include "Luau/TypeArena.h"
 #include "dyncall.h"
-#include "module_api.h"
 #include "lua.h"
 #include "lualib.h"
+#include "module_api.h"
 
 // ---------------------------------------------------------------------------
 // Module metadata
@@ -348,7 +348,8 @@ int ffi_lib_getFunction(lua_State* L) {
         }
     }
 
-    LuaForeignFunction* ffunc = (LuaForeignFunction*)lua_newuserdatadtor(L, sizeof(LuaForeignFunction), ffi_func_dtor);
+    LuaForeignFunction* ffunc =
+        (LuaForeignFunction*)lua_newuserdatadtor(L, sizeof(LuaForeignFunction), ffi_func_dtor);
     new (ffunc) LuaForeignFunction();
 
     ffunc->name = name;
@@ -384,7 +385,7 @@ static void ffi_func_dtor(void* ud) {
 }
 
 int ffi_func_call(lua_State* L) {
-    //puts("Call time");
+    // puts("Call time");
     LuaForeignFunction* ffunc =
         (LuaForeignFunction*)luaL_checkudata(L, 1, FOREIGN_FUNCTION_METATABLE);
 
@@ -397,14 +398,14 @@ int ffi_func_call(lua_State* L) {
     // printf("%d %d\n", num_args, ffunc->args.size());
 
     // Make a dyncall VM for this call
-    //puts("New VM");
+    // puts("New VM");
     static DCCallVM* vm = NULL;
     if (!vm) vm = dcNewCallVM(4096);
-    //puts("Reset");
+    // puts("Reset");
     dcReset(vm);
 
-    //puts("Load arg");
-    // Load in arguments
+    // puts("Load arg");
+    //  Load in arguments
     void** needs_freed = (void**)malloc(sizeof(void*) * num_args);
     memset(needs_freed, 0, sizeof(void*) * num_args);
     // printf("Arg: %d\n", num_args);
@@ -438,15 +439,15 @@ int ffi_func_call(lua_State* L) {
         }
 
         if (arg->indirectionLevels > 0) {
-            //puts("Passing pointer");
-            //printf("%p\n", value);
-            // printf("%p\n", *(void**)value);
-            // pValue points to a void*, so we dereference it to get the address
+            // puts("Passing pointer");
+            // printf("%p\n", value);
+            //  printf("%p\n", *(void**)value);
+            //  pValue points to a void*, so we dereference it to get the address
             dcArgPointer(vm, value);
-            //puts("Done");
+            // puts("Done");
         } else {
-            //puts("Passing value as-is");
-            // Push by value based on kind
+            // puts("Passing value as-is");
+            //  Push by value based on kind
             switch (arg->kind) {
                 case FFI_T_VOID:
                     dcFree(vm);
@@ -488,19 +489,19 @@ int ffi_func_call(lua_State* L) {
         }
     }
 
-    //puts("Ret alloc time");
+    // puts("Ret alloc time");
 
     // Allocate size for return
     void* rc;
     if (ffunc->ret.indirectionLevels == 0) {
         rc = malloc(ffunc->ret.size);
-        //printf("Allocated %d byte buffer\n", ffunc->ret.size);
+        // printf("Allocated %d byte buffer\n", ffunc->ret.size);
     } else {
         rc = malloc(sizeof(void*));
-        //printf("Allocated pointer (%d %p)\n", sizeof(void*), rc);
+        // printf("Allocated pointer (%d %p)\n", sizeof(void*), rc);
     }
 
-    //puts("Making call");
+    // puts("Making call");
     if (ffunc->ret.indirectionLevels > 0) {
         rc = dcCallPointer(vm, (void*)ffunc->pFunc);
     } else {
@@ -531,30 +532,31 @@ int ffi_func_call(lua_State* L) {
                 break;
         }
     }
-    //puts("Call done");
-    // if (ffunc->ret.indirectionLevels == 0) {
-    //     printf("<<<<< %d bytes returned: ", ffunc->ret.size);
-    //     for (int i = 0; i < ffunc->ret.size; i++) {
-    //         printf("%02x ", ((uint8_t*)&rc)[i]);
-    //     }
-    // } else {
-    //     printf("<<<<< Pointer returned: ");
-    //     for (int i = 0; i < sizeof(void*); i++) {
-    //         printf("%02x ", ((uint8_t*)&rc)[i]);
-    //     }
-    // }
-    //puts("");
+    // puts("Call done");
+    //  if (ffunc->ret.indirectionLevels == 0) {
+    //      printf("<<<<< %d bytes returned: ", ffunc->ret.size);
+    //      for (int i = 0; i < ffunc->ret.size; i++) {
+    //          printf("%02x ", ((uint8_t*)&rc)[i]);
+    //      }
+    //  } else {
+    //      printf("<<<<< Pointer returned: ");
+    //      for (int i = 0; i < sizeof(void*); i++) {
+    //          printf("%02x ", ((uint8_t*)&rc)[i]);
+    //      }
+    //  }
+    // puts("");
 
-    //puts("Free 1");
+    // puts("Free 1");
 
     for (int i = 0; i < num_args; i++) {
         if (needs_freed[i]) free(needs_freed[i]);
     }
 
-    //puts("Free 2");
+    // puts("Free 2");
 
     // 5. Wrap the result in a LuaForeignValue
-    LuaForeignValue* res = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
+    LuaForeignValue* res =
+        (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     // if (ffunc->ret.indirectionLevels == 0) {
     res->pValue = rc;
     res->ownsValue = 1;
@@ -574,7 +576,7 @@ int ffi_func_call(lua_State* L) {
     luaL_getmetatable(L, FOREIGN_VALUE_METATABLE);
     lua_setmetatable(L, -2);
 
-    //puts("Returning now");
+    // puts("Returning now");
 
     return 1;
 }
@@ -588,7 +590,8 @@ static int ffi_loadLibrary(lua_State* L) {
                    get_win32_error(GetLastError()).c_str());
     }
 
-    LuaForeignLibrary* flib = (LuaForeignLibrary*)lua_newuserdatadtor(L, sizeof(LuaForeignLibrary), ffi_lib_dtor);
+    LuaForeignLibrary* flib =
+        (LuaForeignLibrary*)lua_newuserdatadtor(L, sizeof(LuaForeignLibrary), ffi_lib_dtor);
     new (flib) LuaForeignLibrary();
 
     flib->filename = szLibrary;
@@ -617,7 +620,8 @@ int ffi_type_tostring(lua_State* L) {
 int ffi_type_pointer(lua_State* L) {
     LuaForeignType* ftype = (LuaForeignType*)luaL_checkudata(L, 1, FOREIGN_TYPE_METATABLE);
 
-    LuaForeignType* ftype_pointer = (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
+    LuaForeignType* ftype_pointer =
+        (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
     new (ftype_pointer) LuaForeignType();
 
     ftype_pointer->kind = ftype->kind;
@@ -727,7 +731,8 @@ int ffi_type_call(lua_State* L) {
                     "then generate a pointer to it.");
     }
 
-    LuaForeignValue* fvalue = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
+    LuaForeignValue* fvalue =
+        (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     new (fvalue) LuaForeignValue();
 
     fvalue->type.indirectionLevels = ftype->indirectionLevels;
@@ -754,7 +759,8 @@ int ffi_type_call(lua_State* L) {
 int ffi_value_pointer(lua_State* L) {
     LuaForeignValue* fvalue = (LuaForeignValue*)luaL_checkudata(L, 1, FOREIGN_VALUE_METATABLE);
 
-    LuaForeignValue* new_fvalue = (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
+    LuaForeignValue* new_fvalue =
+        (LuaForeignValue*)lua_newuserdatadtor(L, sizeof(LuaForeignValue), ffi_value_dtor);
     new (new_fvalue) LuaForeignValue();
 
     new_fvalue->type.indirectionLevels = fvalue->type.indirectionLevels + 1;
@@ -770,7 +776,8 @@ int ffi_value_pointer(lua_State* L) {
 }
 
 static void push_ffi_type(lua_State* L, ffi_type_kind kind, size_t size) {
-    LuaForeignType* ftype = (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
+    LuaForeignType* ftype =
+        (LuaForeignType*)lua_newuserdatadtor(L, sizeof(LuaForeignType), ffi_type_dtor);
     new (ftype) LuaForeignType();
 
     ftype->kind = kind;

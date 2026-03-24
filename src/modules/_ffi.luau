@@ -177,7 +177,7 @@ _ffi.char = nil :: ForeignType
 --- Null-terminated C string (`const char*`).
 _ffi.str = nil :: ForeignType
 --- Unsigned 8-bit integer.
-_ffi.u8  = nil :: ForeignType
+_ffi.u8 = nil :: ForeignType
 --- Unsigned 16-bit integer.
 _ffi.u16 = nil :: ForeignType
 --- Unsigned 32-bit integer.
@@ -185,7 +185,7 @@ _ffi.u32 = nil :: ForeignType
 --- Unsigned 64-bit integer.
 _ffi.u64 = nil :: ForeignType
 --- Signed 8-bit integer.
-_ffi.i8  = nil :: ForeignType
+_ffi.i8 = nil :: ForeignType
 --- Signed 16-bit integer.
 _ffi.i16 = nil :: ForeignType
 --- Signed 32-bit integer.

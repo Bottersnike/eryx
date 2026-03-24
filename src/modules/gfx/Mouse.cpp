@@ -2,7 +2,6 @@
 
 #include <SDL3/SDL_mouse.h>
 
-
 // mouse.available() -> boolean
 int mouse_available(lua_State* L) {
     lua_pushboolean(L, SDL_HasMouse());
@@ -21,7 +20,8 @@ int mouse_getPosition(lua_State* L) {
     return 2;
 }
 
-// mouse.getButtons() -> {left: boolean, right: boolean, middle: boolean, side1: boolean, side2: boolean}
+// mouse.getButtons() -> {left: boolean, right: boolean, middle: boolean, side1: boolean, side2:
+// boolean}
 int mouse_getButtons(lua_State* L) {
     SDL_MouseButtonFlags buttons = SDL_GetMouseState(NULL, NULL);
 

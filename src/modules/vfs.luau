@@ -66,7 +66,6 @@ end
 --- Sets VFS isolation mode. When disabled, VFS scripts can fall through
 --- to the real filesystem (relative to the exe directory) for requires
 --- and config resolution.
-function vfs.setIsolated(isolated: boolean)
-end
+function vfs.setIsolated(isolated: boolean) end
 
 return table.freeze(vfs)

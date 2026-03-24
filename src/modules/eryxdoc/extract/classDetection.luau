@@ -16,7 +16,11 @@ local function detectClassPattern(aliasedType: luau.AstType): (string?, string?,
 		if expr and expr.type == "ExprCall" then
 			local call = expr :: luau.ExprCall
 			local func = call.func
-			local isSetmetatable = (func and func.type == "ExprGlobal" and (func :: luau.ExprGlobal).name == "setmetatable")
+			local isSetmetatable = (
+				func
+				and func.type == "ExprGlobal"
+				and (func :: luau.ExprGlobal).name == "setmetatable"
+			)
 			if isSetmetatable and call.args and #call.args >= 2 then
 				local arg1 = call.args[1]
 				local fieldsName: string? = nil

@@ -199,14 +199,7 @@ function html.blockNodeToHtml(node: parse.BlockNode, config: MarkdownRenderConfi
 	elseif node.type == "table" then
 		local function renderCell(cell: parse.TableCellNode, tag: string): string
 			local alignAttr = if #cell.align > 0 then ' style="text-align:' .. cell.align .. '"' else ""
-			return "<"
-				.. tag
-				.. alignAttr
-				.. ">"
-				.. html.inlineNodesToHtml(cell.children, config)
-				.. "</"
-				.. tag
-				.. ">"
+			return "<" .. tag .. alignAttr .. ">" .. html.inlineNodesToHtml(cell.children, config) .. "</" .. tag .. ">"
 		end
 
 		local function renderRow(row: parse.TableRowNode, ctag: string): string

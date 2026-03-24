@@ -173,7 +173,7 @@ static int os_platform(lua_State* L) {
 #elif defined(__linux__)
     lua_pushstring(L, "linux");
 #else
-    lus_pushnil(L);
+    lua_pushnil(L);
 #endif
     return 1;
 }

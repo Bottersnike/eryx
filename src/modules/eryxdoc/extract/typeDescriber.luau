@@ -7,7 +7,11 @@ local luau = require("@eryx/luau")
 local types = require("./types")
 type SignaturePart = types.SignaturePart
 
-local function tp(text: string, typeRef: boolean?, kind: ("type" | "param" | "punct" | "keyword" | "name" | "plain")?): SignaturePart
+local function tp(
+	text: string,
+	typeRef: boolean?,
+	kind: ("type" | "param" | "punct" | "keyword" | "name" | "plain")?
+): SignaturePart
 	return { text = text, typeRef = typeRef, kind = kind or (if typeRef then "type" else nil) }
 end
 
@@ -51,7 +55,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 			table.insert(parts, tp(">", false, "punct"))
 		end
 		return parts
-
 	elseif node.type == "TypeTable" then
 		local tbl = node :: luau.TypeTable
 		if tbl.indexer then
@@ -87,7 +90,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 		end
 		table.insert(parts, tp(" }", false, "punct"))
 		return parts
-
 	elseif node.type == "TypeFunction" then
 		local fn = node :: luau.TypeFunction
 		local parts: { SignaturePart } = { tp("(", false, "punct"), tp("(", false, "punct") }
@@ -112,7 +114,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 		end
 		table.insert(parts, tp(")", false, "punct"))
 		return parts
-
 	elseif node.type == "TypeUnion" then
 		local u = node :: luau.TypeUnion
 		if #u.types == 2 and u.types[2] and u.types[2].type == "TypeOptional" then
@@ -136,7 +137,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 			table.insert(parts, tp("?", false, "punct"))
 		end
 		return parts
-
 	elseif node.type == "TypeIntersection" then
 		local inter = node :: luau.TypeIntersection
 		local parts: { SignaturePart } = {}
@@ -147,7 +147,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 			tpExtend(parts, describer.describeTypeParts(t))
 		end
 		return parts
-
 	elseif node.type == "TypeOptional" then
 		return { tp("?", false, "punct") }
 	elseif node.type == "TypeSingletonBool" then
@@ -159,7 +158,6 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 		tpExtend(parts, describer.describeTypeParts((node :: luau.TypeGroup).inner))
 		table.insert(parts, tp(")", false, "punct"))
 		return parts
-
 	elseif node.type == "TypePackExplicit" then
 		local pack = node :: luau.TypePackExplicit
 		if pack.types then
@@ -187,12 +185,10 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 			return parts
 		end
 		return { tp("()", false, "punct") }
-
 	elseif node.type == "TypePackVariadic" then
 		local parts = { tp("...", false, "punct") }
 		tpExtend(parts, describer.describeTypeParts((node :: luau.TypePackVariadic).variadicType))
 		return parts
-
 	elseif node.type == "TypePackGeneric" then
 		return { tp((node :: luau.TypePackGeneric).name .. "...", false, "type") }
 	end

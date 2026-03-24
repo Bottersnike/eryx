@@ -28,7 +28,6 @@
 #include "runtime/lrequire.hpp"
 #include "vfs.hpp"
 
-
 #ifdef ERYX_EMBED
 // Generated tables - defined in embedded_modules.cpp / embedded_sources.cpp
 extern const EmbeddedNativeModule g_embedded_native_modules[];

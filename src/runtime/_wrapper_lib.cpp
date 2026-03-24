@@ -5,7 +5,6 @@
 #include "lconfig.hpp"
 #include "lexception.hpp"
 
-
 // Analysis headers (available because LuauShared links Luau.Analysis)
 #include <cstring>
 #include <filesystem>

@@ -224,9 +224,7 @@ local function buildMeta(
 				})
 			end
 		else
-			local desc: string? = if parsedDoc and #parsedDoc.returns > 0
-				then parsedDoc.returns[1].description
-				else nil
+			local desc: string? = if parsedDoc and #parsedDoc.returns > 0 then parsedDoc.returns[1].description else nil
 			table.insert(rets, {
 				type = td.describeType(retNode),
 				typeParts = td.describeTypeParts(retNode),
@@ -382,11 +380,36 @@ local function applySignature(func: FuncDoc, sig: RawFuncSig)
 	func.signature = table.concat(lineParts)
 
 	-- Full multi-line
-	func.signatureFull = buildFull(func.name, func.params :: { string }, func.returnStr, func.parsedDoc, func.owner, func.isMethod, func.generics)
+	func.signatureFull = buildFull(
+		func.name,
+		func.params :: { string },
+		func.returnStr,
+		func.parsedDoc,
+		func.owner,
+		func.isMethod,
+		func.generics
+	)
 
 	-- Structured parts and meta
-	func.signatureParts = buildParts(func.name, sig.paramNames, sig.paramTypeParts, sig.retParts, func.owner, func.isMethod, func.generics)
-	func.signatureMeta = buildMeta(func.name, sig.paramNames, sig.paramTypeNodes, sig.retNode, func.owner, func.isMethod, sig.generics, func.parsedDoc)
+	func.signatureParts = buildParts(
+		func.name,
+		sig.paramNames,
+		sig.paramTypeParts,
+		sig.retParts,
+		func.owner,
+		func.isMethod,
+		func.generics
+	)
+	func.signatureMeta = buildMeta(
+		func.name,
+		sig.paramNames,
+		sig.paramTypeNodes,
+		sig.retNode,
+		func.owner,
+		func.isMethod,
+		sig.generics,
+		func.parsedDoc
+	)
 end
 
 return {

@@ -47,9 +47,9 @@ static const char* COROUTINE_STATUS[] = { "running", "suspended", "normal", "fin
 static lua_State* coerce_to_thread(lua_State* L) {
     if (lua_isfunction(L, 1)) {
         lua_State* TL = lua_newthread(L);
-        lua_xpush(L, TL, 1);   // push function onto new thread
-        lua_remove(L, 1);      // remove original function
-        lua_insert(L, 1);      // put thread at index 1
+        lua_xpush(L, TL, 1);  // push function onto new thread
+        lua_remove(L, 1);     // remove original function
+        lua_insert(L, 1);     // put thread at index 1
         return TL;
     }
     if (lua_isthread(L, 1)) {

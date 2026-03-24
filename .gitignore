@@ -8,9 +8,6 @@
 # clangd
 /.cache/
 
-# Old version of the documentation
-docs_old/
-
 # Test projects that might become official examples down the line
 /lsp/
 /sample/

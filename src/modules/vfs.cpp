@@ -6,7 +6,6 @@
 
 #include "module_api.h"
 
-
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
     .luauVersion = LUAU_GIT_HASH,

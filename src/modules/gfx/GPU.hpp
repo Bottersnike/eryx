@@ -1,8 +1,7 @@
 #pragma once
+#include "LL_Font.hpp"     // IWYU pragma: export
 #include "LL_Texture.hpp"  // IWYU pragma: export
-#include "LL_Font.hpp"  // IWYU pragma: export
 #include "pch.hpp"         // IWYU pragma: export
-
 
 struct LuaShader;
 
@@ -60,7 +59,7 @@ struct GPURenderContext {
 struct GPUTexture {
     WGPUTexture texture = nullptr;
     WGPUTextureView view = nullptr;
-    WGPUBindGroup bind_group = nullptr; // Cache bind group to avoid recreation
+    WGPUBindGroup bind_group = nullptr;  // Cache bind group to avoid recreation
 };
 
 struct LuaWindow;
@@ -75,5 +74,3 @@ bool createWindowSurface(LuaWindow* lua_window);
 bool uploadGlyphAtlas(LuaWindow* lua_window, GlyphAtlas& atlas);
 // Returns error message if failed, empty string if success
 std::string renderGPUQueue(LuaWindow* lua_window);
-
-

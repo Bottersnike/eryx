@@ -2,7 +2,6 @@
 #include "Texture.hpp"
 #include "Window.hpp"
 
-
 // Render queued text using glyph atlas
 void renderQueuedText(LuaWindow* lua_window, GlyphAtlas& atlas, FT_Face face, const char* text,
                       float x, float y, uint32_t color, float* width, float* height);

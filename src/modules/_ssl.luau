@@ -272,10 +272,9 @@ function _ssl.parseCertificate(pem: string): CertificateInfo
 end
 
 --- Verification mode constants
-_ssl.VERIFY_NONE     = 0 :: number
+_ssl.VERIFY_NONE = 0 :: number
 _ssl.VERIFY_REQUIRED = 2 :: number
 
 _ssl.SslContext = {} :: SslContext
 
 return table.freeze(_ssl)
-

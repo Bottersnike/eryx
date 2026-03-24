@@ -2,7 +2,6 @@
 #include "LL_Texture.hpp"
 #include "pch.hpp"  // IWYU pragma: export
 
-
 extern const char* TEXTURE_METATABLE;
 
 // Texture userdata type

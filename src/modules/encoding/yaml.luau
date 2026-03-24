@@ -54,30 +54,46 @@ local function isSequence(t: { [any]: any }): boolean
 end
 
 --- Characters that force a YAML string to be quoted.
-local NEEDS_QUOTE_PATTERN = '[:%#{%}%[%],&*?|%-><!%%@`"\'\n\r\t]'
+local NEEDS_QUOTE_PATTERN = "[:%#{%}%[%],&*?|%-><!%%@`\"'\n\r\t]"
 
 --- YAML keywords that must be quoted when used as scalars.
 local YAML_KEYWORDS: { [string]: boolean } = {
-	["true"] = true, ["false"] = true,
-	["True"] = true, ["False"] = true,
-	["TRUE"] = true, ["FALSE"] = true,
-	["yes"] = true, ["no"] = true,
-	["Yes"] = true, ["No"] = true,
-	["YES"] = true, ["NO"] = true,
-	["on"] = true, ["off"] = true,
-	["On"] = true, ["Off"] = true,
-	["ON"] = true, ["OFF"] = true,
-	["null"] = true, ["Null"] = true, ["NULL"] = true,
+	["true"] = true,
+	["false"] = true,
+	["True"] = true,
+	["False"] = true,
+	["TRUE"] = true,
+	["FALSE"] = true,
+	["yes"] = true,
+	["no"] = true,
+	["Yes"] = true,
+	["No"] = true,
+	["YES"] = true,
+	["NO"] = true,
+	["on"] = true,
+	["off"] = true,
+	["On"] = true,
+	["Off"] = true,
+	["ON"] = true,
+	["OFF"] = true,
+	["null"] = true,
+	["Null"] = true,
+	["NULL"] = true,
 	["~"] = true,
-	[".inf"] = true, [".Inf"] = true, [".INF"] = true,
-	["-.inf"] = true, ["-.Inf"] = true, ["-.INF"] = true,
-	[".nan"] = true, [".NaN"] = true, [".NAN"] = true,
+	[".inf"] = true,
+	[".Inf"] = true,
+	[".INF"] = true,
+	["-.inf"] = true,
+	["-.Inf"] = true,
+	["-.INF"] = true,
+	[".nan"] = true,
+	[".NaN"] = true,
+	[".NAN"] = true,
 }
 
 local function yamlEscapeString(s: string): string
 	-- Use double-quoted style with standard escape sequences
-	local escaped = s
-		:gsub("\\", "\\\\")
+	local escaped = s:gsub("\\", "\\\\")
 		:gsub('"', '\\"')
 		:gsub("\n", "\\n")
 		:gsub("\r", "\\r")
@@ -344,11 +360,11 @@ local function splitLines(s: string): { Line }
 		end
 
 		-- Calculate indent
-		local leading = raw:match("^( *)")
+		local leading = raw:match("^( *)") or ""
 		local indent = #leading
 
 		-- Strip trailing whitespace
-		local text = raw:match("^(.-)%s*$")
+		local text = raw:match("^(.-)%s*$") or ""
 
 		table.insert(lines, { indent = indent, text = text, raw = raw })
 	end
@@ -363,14 +379,14 @@ local function stripComment(s: string): string
 	local i = 1
 	while i <= #s do
 		local c = string.byte(s, i)
-		if c == 0x22 and not inSingle then  -- "
+		if c == 0x22 and not inSingle then -- "
 			inDouble = not inDouble
-		elseif c == 0x27 and not inDouble then  -- '
+		elseif c == 0x27 and not inDouble then -- '
 			inSingle = not inSingle
-		elseif c == 0x23 and not inSingle and not inDouble then  -- #
+		elseif c == 0x23 and not inSingle and not inDouble then -- #
 			-- Must be preceded by whitespace to be a comment
 			if i == 1 or string.byte(s, i - 1) == 0x20 or string.byte(s, i - 1) == 0x09 then
-				return s:sub(1, i - 1):match("^(.-)%s*$")
+				return s:sub(1, i - 1):match("^(.-)%s*$") or ""
 			end
 		end
 		i += 1
@@ -385,14 +401,30 @@ local function resolveScalar(s: string): any
 		return nil
 	end
 	-- boolean
-	if s == "true" or s == "True" or s == "TRUE"
-		or s == "yes" or s == "Yes" or s == "YES"
-		or s == "on" or s == "On" or s == "ON" then
+	if
+		s == "true"
+		or s == "True"
+		or s == "TRUE"
+		or s == "yes"
+		or s == "Yes"
+		or s == "YES"
+		or s == "on"
+		or s == "On"
+		or s == "ON"
+	then
 		return true
 	end
-	if s == "false" or s == "False" or s == "FALSE"
-		or s == "no" or s == "No" or s == "NO"
-		or s == "off" or s == "Off" or s == "OFF" then
+	if
+		s == "false"
+		or s == "False"
+		or s == "FALSE"
+		or s == "no"
+		or s == "No"
+		or s == "NO"
+		or s == "off"
+		or s == "Off"
+		or s == "OFF"
+	then
 		return false
 	end
 	-- special float
@@ -428,17 +460,25 @@ local function parseDoubleQuoted(s: string): string
 	local i = 1
 	while i <= #s do
 		local c = string.byte(s, i)
-		if c == 0x5C then  -- backslash
+		if c == 0x5C then -- backslash
 			i += 1
 			local esc = string.byte(s, i)
-			if esc == 0x6E then      table.insert(parts, "\n")      -- \n
-			elseif esc == 0x74 then  table.insert(parts, "\t")      -- \t
-			elseif esc == 0x72 then  table.insert(parts, "\r")      -- \r
-			elseif esc == 0x5C then  table.insert(parts, "\\")      -- \\
-			elseif esc == 0x22 then  table.insert(parts, '"')       -- \"
-			elseif esc == 0x2F then  table.insert(parts, "/")       -- \/
-			elseif esc == 0x62 then  table.insert(parts, "\b")      -- \b
-			elseif esc == 0x30 then  table.insert(parts, "\0")      -- \0
+			if esc == 0x6E then
+				table.insert(parts, "\n") -- \n
+			elseif esc == 0x74 then
+				table.insert(parts, "\t") -- \t
+			elseif esc == 0x72 then
+				table.insert(parts, "\r") -- \r
+			elseif esc == 0x5C then
+				table.insert(parts, "\\") -- \\
+			elseif esc == 0x22 then
+				table.insert(parts, '"') -- \"
+			elseif esc == 0x2F then
+				table.insert(parts, "/") -- \/
+			elseif esc == 0x62 then
+				table.insert(parts, "\b") -- \b
+			elseif esc == 0x30 then
+				table.insert(parts, "\0") -- \0
 			elseif esc == 0x78 then
 				-- \xHH
 				local hex = s:sub(i + 1, i + 2)
@@ -457,14 +497,14 @@ end
 
 --- Parse a single-quoted scalar (only '' is an escape for a literal ').
 local function parseSingleQuoted(s: string): string
-	return s:gsub("''", "'")
+	return s:gsub("''", "'") or ""
 end
 
 --- Try to extract a quoted string starting at position `pos` in `s`.
 --- Returns (content, restOfString) or nil if not a quoted string.
 local function tryQuoted(s: string): (string?, string?)
 	local first = string.byte(s, 1)
-	if first == 0x22 then  -- double quote
+	if first == 0x22 then -- double quote
 		-- Find matching close quote (handling escapes)
 		local i = 2
 		while i <= #s do
@@ -480,7 +520,7 @@ local function tryQuoted(s: string): (string?, string?)
 			end
 		end
 		error("Unterminated double-quoted string")
-	elseif first == 0x27 then  -- single quote
+	elseif first == 0x27 then -- single quote
 		local closePos = s:find("'", 2, true)
 		-- Handle escaped single quotes ('')
 		while closePos and closePos < #s and string.byte(s, closePos + 1) == 0x27 do
@@ -498,7 +538,7 @@ end
 
 type ParseState = {
 	lines: { Line },
-	pos: number,   -- current line index (1-based)
+	pos: number, -- current line index (1-based)
 	anchors: { [string]: any },
 }
 
@@ -727,11 +767,11 @@ parseFlow = function(s: string, pos: number): (any, number)
 	end
 
 	local b = string.byte(s, pos)
-	if b == 0x5B then  -- [
+	if b == 0x5B then -- [
 		return parseFlowSequence(s, pos)
-	elseif b == 0x7B then  -- {
+	elseif b == 0x7B then -- {
 		return parseFlowMapping(s, pos)
-	elseif b == 0x22 then  -- double quote
+	elseif b == 0x22 then -- double quote
 		local i = pos + 1
 		while i <= #s do
 			local c = string.byte(s, i)
@@ -745,7 +785,7 @@ parseFlow = function(s: string, pos: number): (any, number)
 			end
 		end
 		error("Unterminated double-quoted string in flow")
-	elseif b == 0x27 then  -- single quote
+	elseif b == 0x27 then -- single quote
 		local closePos = s:find("'", pos + 1, true)
 		while closePos and closePos < #s and string.byte(s, closePos + 1) == 0x27 do
 			closePos = s:find("'", closePos + 2, true)
@@ -760,7 +800,7 @@ parseFlow = function(s: string, pos: number): (any, number)
 		local start = pos
 		while pos <= #s do
 			local c = string.byte(s, pos)
-			if c == 0x2C or c == 0x5D or c == 0x7D then  -- , ] }
+			if c == 0x2C or c == 0x5D or c == 0x7D then -- , ] }
 				break
 			end
 			-- Colon followed by space or end is a mapping indicator
@@ -861,8 +901,8 @@ local function parseBlockSequence(state: ParseState, seqIndent: number): { any }
 					-- This is a mapping starting on the dash line
 					-- Parse as a mapping with this as first entry
 					local mapping: { [string]: any } = {}
-					local key = after:sub(1, colonPos - 1):match("^(.-)%s*$")
-					local val = after:sub(colonPos + 2):match("^%s*(.*)")
+					local key = after:sub(1, colonPos - 1):match("^(.-)%s*$") or ""
+					local val = after:sub(colonPos + 2):match("^%s*(.*)") or ""
 					val = stripComment(val)
 
 					if val == "" then
@@ -888,10 +928,16 @@ local function parseBlockSequence(state: ParseState, seqIndent: number): { any }
 					local mapIndent = seqIndent + 2
 					while state.pos <= #state.lines do
 						skipBlanks(state)
-						if state.pos > #state.lines then break end
+						if state.pos > #state.lines then
+							break
+						end
 						local nextLine = state.lines[state.pos]
-						if nextLine.indent < mapIndent then break end
-						if nextLine.indent ~= mapIndent then break end
+						if nextLine.indent < mapIndent then
+							break
+						end
+						if nextLine.indent ~= mapIndent then
+							break
+						end
 
 						local mapText = nextLine.text:sub(nextLine.indent + 1)
 						local mKey, mRest
@@ -904,10 +950,10 @@ local function parseBlockSequence(state: ParseState, seqIndent: number): { any }
 						else
 							local cp = mapText:find(": ")
 							if cp then
-								mKey = mapText:sub(1, cp - 1):match("^(.-)%s*$")
-								mRest = mapText:sub(cp + 2):match("^%s*(.*)")
+								mKey = mapText:sub(1, cp - 1):match("^(.-)%s*$") or ""
+								mRest = mapText:sub(cp + 2):match("^%s*(.*)") or ""
 							elseif mapText:sub(-1) == ":" then
-								mKey = mapText:sub(1, -2):match("^(.-)%s*$")
+								mKey = mapText:sub(1, -2):match("^(.-)%s*$") or ""
 								mRest = ""
 							else
 								break
@@ -959,11 +1005,17 @@ local function parseBlockMapping(state: ParseState, mapIndent: number): { [strin
 
 	while state.pos <= #state.lines do
 		skipBlanks(state)
-		if state.pos > #state.lines then break end
+		if state.pos > #state.lines then
+			break
+		end
 
 		local line = state.lines[state.pos]
-		if line.indent < mapIndent then break end
-		if line.indent ~= mapIndent then break end
+		if line.indent < mapIndent then
+			break
+		end
+		if line.indent ~= mapIndent then
+			break
+		end
 
 		local text = line.text:sub(line.indent + 1)
 
@@ -991,10 +1043,10 @@ local function parseBlockMapping(state: ParseState, mapIndent: number): { [strin
 			-- Plain key: find ": " or trailing ":"
 			local colonSpace = text:find(": ")
 			if colonSpace then
-				key = text:sub(1, colonSpace - 1):match("^(.-)%s*$")
-				rest = text:sub(colonSpace + 2):match("^%s*(.*)")
+				key = text:sub(1, colonSpace - 1):match("^(.-)%s*$") or ""
+				rest = text:sub(colonSpace + 2):match("^%s*(.*)") or ""
 			elseif text:sub(-1) == ":" then
-				key = text:sub(1, -2):match("^(.-)%s*$")
+				key = text:sub(1, -2):match("^(.-)%s*$") or ""
 				rest = ""
 			else
 				-- Not a mapping line
@@ -1014,7 +1066,7 @@ local function parseBlockMapping(state: ParseState, mapIndent: number): { [strin
 
 		-- Handle alias
 		if rest:match("^%*(%S+)$") then
-			local aliasName = rest:match("^%*(%S+)$")
+			local aliasName = rest:match("^%*(%S+)$") or ""
 			local aliasVal = state.anchors[aliasName]
 			if aliasVal == nil then
 				error("Unknown alias: *" .. aliasName)
@@ -1111,15 +1163,17 @@ parseNode = function(state: ParseState, minIndent: number): any
 	-- Handle anchor on standalone scalar
 	if text:match("^&(%S+)%s+(.+)$") then
 		local a, val = text:match("^&(%S+)%s+(.+)$")
-		local qVal, _ = tryQuoted(val)
-		local resolved = if qVal ~= nil then qVal else resolveScalar(stripComment(val))
-		state.anchors[a] = resolved
-		return resolved
+		if a and val then
+			local qVal, _ = tryQuoted(val)
+			local resolved = if qVal ~= nil then qVal else resolveScalar(stripComment(val))
+			state.anchors[a] = resolved
+			return resolved
+		end
 	end
 
 	-- Handle alias
 	if text:match("^%*(%S+)$") then
-		local aliasName = text:match("^%*(%S+)$")
+		local aliasName = text:match("^%*(%S+)$") or ""
 		local aliasVal = state.anchors[aliasName]
 		if aliasVal == nil then
 			error("Unknown alias: *" .. aliasName)
@@ -1182,7 +1236,10 @@ function yaml.decode(str: string): any
 			end
 			skipBlanks(state)
 		end
-		if state.pos <= #state.lines and state.lines[state.pos].text:sub(state.lines[state.pos].indent + 1) == "---" then
+		if
+			state.pos <= #state.lines
+			and state.lines[state.pos].text:sub(state.lines[state.pos].indent + 1) == "---"
+		then
 			state.pos += 1
 			skipBlanks(state)
 		end

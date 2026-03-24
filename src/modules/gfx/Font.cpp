@@ -1,7 +1,7 @@
 #include "Font.hpp"
 
-#include "LuaUtil.hpp"
 #include "LL_Font.hpp"
+#include "LuaUtil.hpp"
 
 const char* FONT_METATABLE = "Font";
 
