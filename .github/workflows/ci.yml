@@ -69,6 +69,7 @@ jobs:
             build/eryx${{ runner.os == 'Windows' && '.exe' || '' }}
             build/EryxShared${{ runner.os == 'Windows' && '.dll' || '.so' }}
             build/modules/
+            build/scripts/
           if-no-files-found: ignore
 
   deploy-docs:
@@ -100,7 +101,7 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "Running eryx doc from repository root using downloaded executable"
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifact\build\eryx.exe'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'artifact\eryx.exe'
           if (Test-Path $exe) {
             & $exe doc
           } else {
