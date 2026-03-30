@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Comment collection and text processing for documentation extraction.
 
 local luau = require("@eryx/luau")
@@ -15,7 +17,7 @@ local function unindent(text: string): string
 	end
 
 	-- Strip leading dashes before spaces
-	for i, line in ipairs(lines) do
+	for i, line in lines do
 		local j = 1
 		while j <= #line and line:sub(j, j) == "-" do
 			j += 1
@@ -34,7 +36,7 @@ local function unindent(text: string): string
 		n += 1
 	end
 
-	for i, line in ipairs(lines) do
+	for i, line in lines do
 		local remove = 0
 		while
 			remove < n

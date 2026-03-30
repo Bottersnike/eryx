@@ -902,6 +902,51 @@ static int l_load(lua_State* L) {
         lua_error(L);
     }
 
+    // Attempt native codegen if we can
+    if (lua_codegen_isSupported()) {
+        Luau::CodeGen::CompilationStats stats = {};
+        Luau::CodeGen::CodeGenCompilationResult res =
+            lua_codegen_compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions, &stats);
+    }
+
+    // Populate _DIR and _FILE
+    std::string dirStr;
+    std::string fileStr;
+    if (chunkname[0] == '@') {
+        std::string p = std::string(chunkname).substr(1);
+        try {
+            std::filesystem::path sp = std::filesystem::path(p);
+            dirStr = sp.parent_path().generic_string();
+            fileStr = sp.generic_string();
+        } catch (...) {
+        }
+    }
+
+    if (!dirStr.empty() || !fileStr.empty()) {
+        lua_newtable(L);  // env
+
+        // env.__index = _G
+        lua_getglobal(L, "_G");
+        lua_setfield(L, -2, "__index");
+
+        lua_newtable(L);                 // metatable
+        lua_getglobal(L, "_G");          // fallback
+        lua_setfield(L, -2, "__index");  // mt.__index = _G
+        lua_setmetatable(L, -2);         // setmetatable(env, mt)
+
+        if (!fileStr.empty()) {
+            lua_pushstring(L, fileStr.c_str());
+            lua_setfield(L, -2, "_FILE");
+        }
+        if (!dirStr.empty()) {
+            lua_pushstring(L, dirStr.c_str());
+            lua_setfield(L, -2, "_DIR");
+        }
+
+        // set as environment for chunk
+        lua_setfenv(L, -2);
+    }
+
     return 1;  // the loaded function
 }
 

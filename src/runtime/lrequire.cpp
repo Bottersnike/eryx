@@ -52,6 +52,191 @@ static void dump_stack(lua_State* L) {
     printf("-------------------------------\n");
 }
 
+// Cache status values stored in a parallel registry table named "_LOADED_STATUS".
+static const int CACHE_STATUS_UNSEEN = 0;
+static const int CACHE_STATUS_LOADING = 1;
+static const int CACHE_STATUS_LOADED = 2;
+static const int CACHE_STATUS_YIELDED = 3;
+
+static void eryx_cache_registry_ensure_status_table(lua_State* L) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_STATUS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_STATUS");
+    }
+}
+
+static int eryx_cache_registry_get_status(lua_State* L, const char* cacheKey) {
+    eryx_cache_registry_ensure_status_table(L);
+    // _LOADED_STATUS is now on top of the stack
+    lua_getfield(L, -1, cacheKey);
+    int status = CACHE_STATUS_UNSEEN;
+    if (!lua_isnil(L, -1) && lua_isnumber(L, -1)) {
+        status = (int)lua_tointeger(L, -1);
+    }
+    lua_pop(L, 2);  // pop value + _LOADED_STATUS
+    return status;
+}
+
+static void eryx_cache_registry_set_status(lua_State* L, const char* cacheKey, int status) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_STATUS");
+
+    // Create the registry, if not present
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_STATUS");
+    }
+
+    lua_pushinteger(L, status);
+    lua_setfield(L, -2, cacheKey);
+    lua_pop(L, 1);  // pop _LOADED_STATUS table
+}
+
+// Store the loader thread (the coroutine actually executing the module)
+static void eryx_cache_registry_set_loader_thread(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_THREADS");
+
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_THREADS");
+    }
+
+    // The loader thread object should be just below the top (at -2)
+    lua_pushvalue(L, -2);
+    lua_setfield(L, -2, cacheKey);
+    lua_pop(L, 1);  // pop _LOADED_THREADS table
+}
+
+static void eryx_cache_registry_clear_loader_thread(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_THREADS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+    lua_pushnil(L);
+    lua_setfield(L, -2, cacheKey);
+    lua_pop(L, 1);
+}
+
+// Waiters: store a list of threads waiting for a module to finish loading
+static void eryx_cache_registry_add_waiter(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    }
+
+    // ensure sub-table for this key
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, -3, cacheKey);
+        // leave the new table on stack
+    }
+
+    // at this point the waiters table for key is on top
+    // append current thread
+    lua_pushthread(L);  // pushes the current thread object
+    size_t len = lua_objlen(L, -2);
+    lua_rawseti(L, -2, (int)len + 1);
+
+    // pop waiters table and _LOADED_WAITERS table
+    lua_pop(L, 2);
+}
+
+static void eryx_cache_registry_wake_waiters(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 2);
+        return;
+    }
+
+    // waiters table is at top
+    size_t len = lua_objlen(L, -1);
+    for (size_t i = 1; i <= len; ++i) {
+        lua_rawgeti(L, -1, (int)i);
+        if (lua_isthread(L, -1)) {
+            lua_State* th = lua_tothread(L, -1);
+            // resume waiter with 0 args; ignore result here
+            int r = lua_resume(th, L, 0);
+            (void)r;
+        }
+        lua_pop(L, 1);
+    }
+
+    // clear the waiters list for this key
+    lua_pushnil(L);
+    lua_setfield(L, -3, cacheKey);
+
+    lua_pop(L, 1);  // pop _LOADED_WAITERS table
+}
+
+/**
+ * @brief Check for a cached module in the registry. Leave it on the Lua stack if found.
+ */
+static bool eryx_cache_registry_check(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
+
+    // Create the registry, if not present
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED");
+    }
+
+    // Check for an existing value in the cache
+    lua_getfield(L, -1, cacheKey);
+    if (!lua_isnil(L, -1)) {
+        lua_remove(L, -2);  // remove _LOADED table, cached value remains
+        return true;
+    }
+
+    lua_pop(L, 2);  // pop nil + _LOADED table
+    return false;
+}
+/**
+ * @brief Cache a module in the registry. Expects the module value to the at the top of the stack.
+ */
+static void eryx_cache_registry_cache(lua_State* L, const char* cacheKey) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
+
+    // Create the registry, if not present
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED");
+    }
+
+    lua_pushvalue(L, -2);           // copy the result
+    lua_setfield(L, -2, cacheKey);  // _LOADED[type:path] = result
+    // Mark this cache key as loaded in the parallel status table
+    eryx_cache_registry_set_status(L, cacheKey, CACHE_STATUS_LOADED);
+
+    // Clear any stored loader thread and wake waiters waiting on this key
+    eryx_cache_registry_clear_loader_thread(L, cacheKey);
+    eryx_cache_registry_wake_waiters(L, cacheKey);
+
+    lua_pop(L, 1);  // pop _LOADED table
+}
+
 typedef struct ErrorParts {
     std::string filename;
     int line;
@@ -150,7 +335,8 @@ ERYX_API bool eryx_load_and_prepare_script(lua_State* L, const std::string sourc
 }
 
 ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytecode,
-                                          const std::string& chunkName) {
+                                          const std::string& chunkName,
+                                          const std::string& cacheKey) {
     // Make a new state for loading this module
     lua_State* GL = lua_mainthread(L);
     lua_checkstack(GL, 1);
@@ -241,7 +427,19 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
             ok = true;
         }
     } else if (status == LUA_YIELD) {
-        lua_pushfstring(ML, "Module %s cannot yield\n", chunkName.c_str());
+        // Mark this module as yielded and record the loader thread so it can
+        // be resumed later when the module finishes its async work.
+        eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_YIELDED);
+
+        // The thread object for ML was moved onto L earlier and should be
+        // positioned just below the result on the stack; stash it in the
+        // registry so other code can find and resume it.
+        eryx_cache_registry_set_loader_thread(L, cacheKey.c_str());
+
+        // Indicate to the caller that the module yielded. We return -1 as a
+        // sentinel; the caller (`eryx_lua_require`) will add the current
+        // require() coroutine to the waiters list and yield.
+        return -1;
     } else {
         // Any runtime error. Leave it on the stack where it is
     }
@@ -349,13 +547,13 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
 
         // remove ML thread from L stack
         lua_remove(L, -2);
-    }
 
-    return 1;
+        return 1;
+    }
 }
 
 ERYX_API int eryx_execute_module_script(lua_State* L, const std::string source,
-                                        const std::string& chunkName) {
+                                        const std::string& chunkName, const std::string& cacheKey) {
     // Compile bytecode from source
     Luau::CompileOptions opts;
     opts.optimizationLevel = 2;
@@ -364,7 +562,7 @@ ERYX_API int eryx_execute_module_script(lua_State* L, const std::string source,
 
     std::string bytecode = Luau::compile(source, opts);
 
-    return eryx_execute_module_bytecode(L, bytecode, chunkName);
+    return eryx_execute_module_bytecode(L, bytecode, chunkName, cacheKey);
 }
 
 #ifdef ERYX_EMBED
@@ -468,6 +666,7 @@ static int eryx_require_native(lua_State* L, const char* szLibrary) {
 #endif
 
 ERYX_API int eryx_lua_require(lua_State* L) {
+    // auto __start = lua_clock();
     std::string path_str = luaL_checkstring(L, 1);
 
     auto resolved = eryx_resolve_module(L, path_str);
@@ -475,25 +674,24 @@ ERYX_API int eryx_lua_require(lua_State* L) {
         luaL_error(L, "Unable to locate %s", path_str.c_str());
     }
 
+    // printf("Resolution %s took %f\n", path_str.c_str(), lua_clock() - __start);
+    // __start = lua_clock();
+
     // Build a cache key that includes the type so different module types
     // with the same path don't collide (e.g. "@file:path" vs "@@eryx:path").
     std::string cacheKey = std::to_string(resolved->type) + ":" + resolved->path;
 
-    // Check the _LOADED registry for a cached result
-    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_pushvalue(L, -1);
-        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED");
-    }
-    // Check for an existing value in the cache
-    lua_getfield(L, -1, cacheKey.c_str());
-    if (!lua_isnil(L, -1)) {
-        lua_remove(L, -2);  // remove _LOADED table, cached value remains
+    // First, check if we have a fully loaded version of this module ready
+    if (eryx_cache_registry_check(L, cacheKey.c_str())) {
+        // printf("Using cache for %s took %f\n", cacheKey.c_str(), lua_clock() - __start);
         return 1;
     }
-    lua_pop(L, 2);  // pop nil + _LOADED table
+    // If it's still loading (not yielded), that's cyclic
+    if (eryx_cache_registry_get_status(L, cacheKey.c_str()) == CACHE_STATUS_LOADING) {
+        luaL_error(L, "cyclic dependency detected");
+    }
+    // Finally, mark it as loading
+    eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_LOADING);
 
     int nret = 0;
     std::string chunkName;
@@ -524,7 +722,7 @@ ERYX_API int eryx_lua_require(lua_State* L) {
                                    std::istreambuf_iterator<char>());
 
                 chunkName = "@" + resolved->path;
-                nret = eryx_execute_module_script(L, source, chunkName);
+                nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
             }
             break;
         }
@@ -536,7 +734,7 @@ ERYX_API int eryx_lua_require(lua_State* L) {
             }
             std::string source(reinterpret_cast<const char*>(data.data()), data.size());
             chunkName = CHUNK_PREFIX_VFS + resolved->path;
-            nret = eryx_execute_module_script(L, source, chunkName);
+            nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
             break;
         }
 
@@ -547,7 +745,7 @@ ERYX_API int eryx_lua_require(lua_State* L) {
             if (scripts) {
                 for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
                     if (strcmp(m->modulePath, resolved->path.c_str()) == 0) {
-                        nret = eryx_execute_module_script(L, m->source, chunkName);
+                        nret = eryx_execute_module_script(L, m->source, chunkName, cacheKey);
                         found = true;
                         break;
                     }
@@ -594,19 +792,19 @@ ERYX_API int eryx_lua_require(lua_State* L) {
     }
 
     if (nret != 1) {
+        // If the module yielded during loading, the executor returned -1 as
+        // a sentinel. In that case, register the current coroutine as a
+        // waiter and yield; it will be resumed when the module finishes.
+        if (nret == -1) {
+            eryx_cache_registry_add_waiter(L, cacheKey.c_str());
+            return lua_yield(L, 0);
+        }
+
         luaL_error(L, "%s didn't return exactly one value (%d)", chunkName.c_str(), nret);
     }
 
-    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
-    if (lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        lua_newtable(L);
-        lua_pushvalue(L, -1);
-        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED");
-    }
-    lua_pushvalue(L, -2);                   // copy the result
-    lua_setfield(L, -2, cacheKey.c_str());  // _LOADED[type:path] = result
-    lua_pop(L, 1);                          // pop _LOADED table
+    eryx_cache_registry_cache(L, cacheKey.c_str());
+    eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_LOADED);
 
     return nret;
 }

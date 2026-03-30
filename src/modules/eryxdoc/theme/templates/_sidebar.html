@@ -81,7 +81,7 @@
         {% if item.children then %}
             <li class="sidebar-group"><strong>{{item.label | escape}}</strong></li>
             {% for _, child in item.children do %}
-                <li{% if child.indent then %} class="toc-indent"{% end %}><a class="sidebar-link" href="{{child.link}}">{{ child.label | escape }}</a></li>
+                <li{% if child.indent then %} class="toc-indent"{% end %}><a class="sidebar-link{% if child.level then %} level-{{child.level}}{% end %}" href="{{child.link}}">{{ child.label | escape }}</a></li>
             {% end %}
         {% else %}
             <li><a class="sidebar-link" href="{{item.link}}">{{ item.label | escape }}</a></li>

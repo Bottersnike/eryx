@@ -1,4 +1,15 @@
-add_luau_script_module(http src/modules/http.luau)
+add_luau_script_module(http/
+    src/modules/http/init.luau
+    src/modules/http/body.luau
+    src/modules/http/cookies.luau
+    src/modules/http/multipart.luau
+    src/modules/http/request.luau
+    src/modules/http/util.luau
+    src/modules/http/CookieJar.luau
+    src/modules/http/HttpConnection.luau
+    src/modules/http/HttpServer.luau
+    src/modules/http/ServerResponse.luau
+)
 add_luau_script_module(encoding/
     src/modules/encoding/init.luau
     src/modules/encoding/base64.luau
@@ -14,11 +25,43 @@ add_luau_script_module(template/
     src/modules/template/init.luau
     src/modules/template/parser.luau
 )
+
 add_luau_script_module(markdown/
     src/modules/markdown/init.luau
-    src/modules/markdown/parse.luau
+    src/modules/markdown/parseBlock.luau
+    src/modules/markdown/parseInline.luau
+    src/modules/markdown/types.luau
     src/modules/markdown/html.luau
+    src/modules/markdown/entities.luau
+    src/modules/markdown/util.luau
+    src/modules/markdown/tabUtil.luau
+    src/modules/markdown/htmlRenderer.luau
 )
+add_luau_script_module(markdown/extensions/
+    src/modules/markdown/extensions/admonition.luau
+    src/modules/markdown/extensions/footnote.luau
+    src/modules/markdown/extensions/footnoteInline.luau
+    src/modules/markdown/extensions/table.luau
+    src/modules/markdown/extensions/tabs.luau
+    src/modules/markdown/extensions/strikethrough.luau
+    src/modules/markdown/extensions/wikilink.luau
+    src/modules/markdown/extensions/colour.luau
+)
+add_luau_script_module(markdown/rules/
+    src/modules/markdown/rules/init.luau
+    src/modules/markdown/rules/atxHeading.luau
+    src/modules/markdown/rules/blockQuote.luau
+    src/modules/markdown/rules/codeBlock.luau
+    src/modules/markdown/rules/codeFence.luau
+    src/modules/markdown/rules/html.luau
+    src/modules/markdown/rules/orderedList.luau
+    src/modules/markdown/rules/setextHeading.luau
+    src/modules/markdown/rules/thematicBreak.luau
+    src/modules/markdown/rules/unorderedList.luau
+    src/modules/markdown/rules/autolink.luau
+    src/modules/markdown/rules/inlineHtml.luau
+)
+
 add_luau_script_module(pprint src/modules/pprint.luau)
 add_luau_script_module(argparse src/modules/argparse.luau)
 add_luau_script_module(mime src/modules/mime.luau)

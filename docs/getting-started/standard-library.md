@@ -1,112 +1,183 @@
 # The Standard Library
 
+The standard library is the core selling point for Eryx. Each available library is categorised into one of the following statuses:
+
+| Status          | Meaning                                                                               |
+| --------------- | ------------------------------------------------------------------------------------- |
+| Complete        | The library is complete and fully usable                                              |
+| Mostly complete | The library is mature but not complete, but what is present is usable                 |
+| Partial         | The library is partially complete, but what is present is usable                      |
+| Unusable        | The library is in an early stage of development, and is not expected to work properly |
+| Planned         | The library does not exist yet                                                        |
+
 ## Core language features
 
-- [[luau]]: Access to luau language features (analysis, compiling)
-- [[task]]: Concurrency helpers
-- [[exception]]: Exception formatting and helpers
-- [[_ffi]]: Low-level foreign function interfaces
-- _PLANNED_ Marshall
+| Library             | Status                | Description                                            |
+| ------------------- | --------------------- | ------------------------------------------------------ |
+| [[@eryx/luau]]      | Partial[^luau]        | Access to luau language features (analysis, compiling) |
+| [[@eryx/task]]      | Complete              | Concurrency helpers                                    |
+| [[@eryx/exception]] | Complete              | Exception formatting and helpers                       |
+| [[@eryx/_ffi]]      | Win32, Partial[^_ffi] | Low-level foreign function interfaces                  |
+| Marshall            | Planned               | Binary-encoded format of Luau objects                  |
+
+[^luau]: Not all AST nodes are fully exposed properly. Some bindings missing
+
+[^_ffi]: Currently only supports Windows, and likely has GC-related problems
 
 ## Development utilities
 
-- [[pprint]]: Data pretty-printer
-- [[test]]: Unit testing framework
-- [[eryxdoc]]: Documentation generation engine
-- [[signal]]: Provides signals that can be subscribed to
-- [[date]]: Dates and times with timezone support
-- _PLANNED_ Logging
-- _PLANNED_ Retry helpers
-- _PLANNED_ Caching (LRU)?
+| Library           | Status                   | Description                                |
+| ----------------- | ------------------------ | ------------------------------------------ |
+| [[@eryx/pprint]]  | Complete                 | Data pretty-printer                        |
+| [[@eryx/test]]    | Complete                 | Unit testing framework                     |
+| [[@eryx/eryxdoc]] | Complete                 | Documentation generation engine            |
+| [[@eryx/signal]]  | Mostly complete[^signal] | Provides signals that can be subscribed to |
+| [[@eryx/date]]    | Mostly complete[^date]   | Dates and times with timezone support      |
+| Logging           | Planned                  | Structured logging utilities               |
+| Retry helpers     | Planned                  | Helpers for retrying failed actions        |
+| Caching (LRU)?    | Planned                  | Function result caching                    |
+
+[^date]: Relative time formats ("2 hours ago") are missing
+
+[^signal]: Missing any form of error propagation from handlers
 
 ## Text processing
 
-- [[regex]]: Regular expression support (PCRE2)
-- _PLANNED_ Wrapping
-- _PLANNED_ Un-indenting
-- _PLANNED_ Diffing
+| Library         | Status   | Description                        |
+| --------------- | -------- | ---------------------------------- |
+| [[@eryx/regex]] | Complete | Regular expression support (PCRE2) |
+| Text utils      | Planned  | Wrapping, un-indenting, diffing    |
 
 ## Command-line interface
 
-- [[stdio]]: Standard input and output interact
-- [[argparse]]: Command-line option parser
-- _PLANNED_ Curses? Maybe? Or just our own TUI
+| Library                            | Status                  | Description                        |
+| ---------------------------------- | ----------------------- | ---------------------------------- |
+| [[@eryx/stdio]]                    | Mostly complete[^stdio] | Standard input and output interact |
+| [[@eryx/argparse]]                 | Partial                 | Command-line option parser         |
+| Curses? Maybe? Or just our own TUI | Planned                 | Basic terminal UI functionality    |
+
+[^stdio]: Missing raw mode, line terminators, streaming
 
 ## I/O and OS operations
 
-- [[os]]: OS interactions
-- [[fs]]: Filesystem operations
-- [[vfs]]: Virtual filesystem operations
-- [[fs_watch]]: High level filesystem water bindings
-- [[_fs_watch]]: Low level interface consumed by `fs_watch`
-- _PLANNED_ Glob
-- _PLANNED_ Temp files
-- _PLANNED_ Windows registry
+| Library             | Status                | Description                                            |
+| ------------------- | --------------------- | ------------------------------------------------------ |
+| [[@eryx/os]]        | Mostly complete[^os]  | OS interactions                                        |
+| [[@eryx/fs]]        | Mostly complete[^fs]  | Filesystem operations                                  |
+| [[@eryx/vfs]]       | Mostly complete[^vfs] | Virtual filesystem operations                          |
+| [[@eryx/fs_watch]]  | Complete              | High level filesystem water bindings                   |
+| [[@eryx/_fs_watch]] | Complete              | Low level interface consumed by `fs_watch`             |
+| Glob                | Planned               | Filesystem search using globs                          |
+| Temp files          | Planned               | Creation and management of temporary files and folders |
+| Windows registry    | Planned               | Access to the Windows registry                         |
+
+[^os]: No OS signals, no users/groups, no resource limits, no forking
+
+[^fs]: No access to permissions, potentially other missing features
+
+[^vfs]: Module not sufficiently tested to be confidently complete
 
 ## Networking
 
-- [[http]]: HTTP client and server
-- [[net]]: Basic TCP client and server
-- [[websocket]]: Websocket client and server
-- [[mime]]: MIME format detection **INCOMPLETE**
-- [[_socket]]: Low level BSD-style socket interface
-- [[_ssl]]: Low level SSL interface to be used with `_socket`
-- _PLANNED_ UUID
-- _PLANNED_ RPC (RCON, JSON-RPC, XML-RPC)
-- _PLANNED_ Email
-- _PLANNED_ FTP
-- _PLANNED_ IMAP
-- _PLANNED_ SMTP
+| Library             | Status              | Description                                       |
+| ------------------- | ------------------- | ------------------------------------------------- |
+| [[@eryx/http]]      | Partial[^http]      | HTTP client and server                            |
+| [[@eryx/net]]       | Partial[^net]       | Basic TCP client and server                       |
+| [[@eryx/websocket]] | Partial[^websocket] | Websocket client and server                       |
+| [[@eryx/mime]]      | Unusable[^mime]     | MIME format detection                             |
+| [[@eryx/_socket]]   | Complete            | Low level BSD-style socket interface              |
+| [[@eryx/_ssl]]      | Complete            | Low level SSL interface to be used with `_socket` |
+| UUID                | Planned             | Creation and manipulation of UUIDs                |
+| RPC                 | Planned             | RCON, JSON-RPC, XML-RPC                           |
+| Email               | Planned             |                                                   |
+| FTP                 | Planned             | Support for the FTP protocol                      |
+| IMAP                | Planned             | Support for the IMAP protocol                     |
+| SMTP                | Planned             | Support for the SMTP protocol                     |
+| JWT                 | Planned             | Creation and manipulation of JWTs                 |
+
+[^http]: No connection polling, has issues with multiple simultaneous clients
+
+[^net]: No UDP, no IPv6, no socket options, no concurrent server patterns
+
+[^websocket]: Immature implementation lacking many features. Not sufficient tested
+
+[^mime]: No sufficient tested. Supports only a limited number of features. Some heuristics likely broken
 
 ## Databases
 
-- [[sqlite3]]: Bindings for SQLite3 databases
+| Library           | Status   | Description                    |
+| ----------------- | -------- | ------------------------------ |
+| [[@eryx/sqlite3]] | Complete | Bindings for SQLite3 databases |
 
 ## Encoding
 
-- [[encoding/base64]]: Base64 encoding and decoding
-- [[encoding/base85]]: Base85 encoding and decoding
-- [[encoding/base32]]: Base32 encoding and decoding
-- [[encoding/hex]]: HEX encoding and decoding
-- [[encoding/url]]: URL-escape encoding and decoding
-- [[encoding/csv]]: CSV parser and writer
-- [[encoding/json]]: JSON parser and writer
-- [[encoding/xml]]: XML parser and writer
-- [[encoding/yaml]]: YAML parser and writer
-- _PLANNED_ TOML
+| Library                   | Status                 | Description                      |
+| ------------------------- | ---------------------- | -------------------------------- |
+| [[@eryx/encoding/base64]] | Complete               | Base64 encoding and decoding     |
+| [[@eryx/encoding/base85]] | Complete               | Base85 encoding and decoding     |
+| [[@eryx/encoding/base32]] | Complete               | Base32 encoding and decoding     |
+| [[@eryx/encoding/hex]]    | Complete               | HEX encoding and decoding        |
+| [[@eryx/encoding/url]]    | Complete               | URL-escape encoding and decoding |
+| [[@eryx/encoding/csv]]    | Complete               | CSV parser and writer            |
+| [[@eryx/encoding/json]]   | Complete               | JSON parser and writer           |
+| [[@eryx/encoding/xml]]    | Complete               | XML parser and writer            |
+| [[@eryx/encoding/yaml]]   | Mostly complete[^yaml] | YAML parser and writer           |
+| TOML                      | Planned                | TOML parser and writer           |
+
+[^yaml]: Subset of YAML 1.2
 
 ## Compression
 
-- [[compression/brotli]]: Brotli compression and decompression
-- [[compression/bzip2]]: BZip2 compression and decompression
-- [[compression/gzip]]: GZip compression and decompression
-- [[compression/zlib]]: Zlib compression and decompression
-- [[compression/zstd]]: Brotli compression and decompression
-- [[compression/zip]]: Zip file manipulation
+| Library                      | Status                | Description                          |
+| ---------------------------- | --------------------- | ------------------------------------ |
+| [[@eryx/compression/brotli]] | Complete              | Brotli compression and decompression |
+| [[@eryx/compression/bzip2]]  | Complete              | BZip2 compression and decompression  |
+| [[@eryx/compression/gzip]]   | Complete              | GZip compression and decompression   |
+| [[@eryx/compression/zlib]]   | Complete              | Zlib compression and decompression   |
+| [[@eryx/compression/zstd]]   | Complete              | Brotli compression and decompression |
+| [[@eryx/compression/zip]]    | Mostly complete[^zip] | Zip file manipulation                |
+
+[^zip]: Limited interface for manipulating ZIP files
 
 ## Cryptography
 
-- [[crypto/aes]]: AES ciphers
-- [[crypto/camellia]]: Camellia ciphers
-- [[crypto/chacha20]]: ChaCha20 ciphers
-- [[crypto/des]]: 3DES ciphers
-- [[crypto/rsa]]: RSA ciphers
-- [[crypto/hash]]: Various hashing functions
-- [[crypto/hmac]]: HMAC generation
-- [[crypto/kdf]]: Key derivation functions
-- [[crypto/pem]]: PEM/DER format support
-- [[crypto/random]]: Secure random number and data generator
-- [[crypto/asn1]]: ASN1 format support **INCOMPLETE**
+| Library                   | Status          | Description                             |
+| ------------------------- | --------------- | --------------------------------------- |
+| [[@eryx/crypto/aes]]      | Complete        | AES ciphers                             |
+| [[@eryx/crypto/camellia]] | Complete        | Camellia ciphers                        |
+| [[@eryx/crypto/chacha20]] | Complete        | ChaCha20 ciphers                        |
+| [[@eryx/crypto/des]]      | Complete        | 3DES ciphers                            |
+| [[@eryx/crypto/rsa]]      | Complete        | RSA ciphers                             |
+| [[@eryx/crypto/hash]]     | Complete        | Various hashing functions               |
+| [[@eryx/crypto/hmac]]     | Complete        | HMAC generation                         |
+| [[@eryx/crypto/kdf]]      | Complete        | Key derivation functions                |
+| [[@eryx/crypto/pem]]      | Complete        | PEM/DER format support                  |
+| [[@eryx/crypto/random]]   | Complete        | Secure random number and data generator |
+| [[@eryx/crypto/asn1]]     | Unusable[^asn1] | ASN1 format support                     |
+| ECC                       | Planned         | ECC ciphers                             |
+
+[^asn1]: Very patchy hand-written code, lacking almost all important ASN1 features
 
 ## Text file formats
 
-- [[markdown]]: Markdown parser
-- [[markdown/html]]: Markdown HTML renderer
-- [[template]]: Templating engine
+| Library            | Status                     | Description       |
+| ------------------ | -------------------------- | ----------------- |
+| [[@eryx/markdown]] | Mostly complete[^markdown] | Markdown parser   |
+| [[@eryx/template]] | Complete                   | Templating engine |
+
+[^markdown]: Extensions not fully featured yet, and some inline parsing bugs present
 
 ## Multimedia and interfaces
 
-- [[webview]]: Create and manipulate native WebView browsers
-- [[webui]]: Wrapper for `webview` proving convenient JS<->Eryx communication
-- [[image]]: Support for various image formats
-- _PLANNED_ Audio
+| Library           | Status                    | Description                                                      |
+| ----------------- | ------------------------- | ---------------------------------------------------------------- |
+| [[@eryx/webview]] | Win32, Unusable[^webview] | Create and manipulate native WebView browsers                    |
+| [[@eryx/webui]]   | Unusable[^webui]          | Wrapper for `webview` proving convenient JS<->Eryx communication |
+| [[@eryx/image]]   | Partial[^image]           | Support for various image formats                                |
+| Audio             | Planned                   | Support for various audio formats                                |
+
+[^webview]: Bare-bones wrapper for WebView2 on windows, but no support for other platforms
+
+[^webui]: Missing most things that make wrapping a webview useful
+
+[^image]: Missing must image manipulation features

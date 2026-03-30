@@ -83,6 +83,75 @@ function zlib.compressBound(len: number): number
 	return nil :: any
 end
 
+--[=[
+	A streaming deflate compressor. Feed data incrementally with `write`,
+	then call `finish` to flush remaining output and close the stream.
+
+	@class Deflate
+]=]
+export type Deflate = {
+	--[=[
+		Compresses a chunk of input data. Returns compressed output (may be empty
+		if zlib is buffering). Use flush constants (FLUSH_SYNC, FLUSH_FULL) to
+		force output.
+		@param data buffer -- input bytes to compress
+		@param flush number? -- flush mode (FLUSH_NO, FLUSH_SYNC, FLUSH_FULL)
+		@return buffer -- compressed output (may be empty)
+	]=]
+	write: (self: Deflate, data: buffer, flush: number?) -> buffer,
+	--[=[
+		Finishes the stream: flushes all remaining data and closes the compressor.
+		@return buffer -- final compressed output
+	]=]
+	finish: (self: Deflate) -> buffer,
+	--[=[
+		Closes the stream without finishing, freeing resources.
+	]=]
+	close: (self: Deflate) -> (),
+}
+
+--[=[
+	A streaming inflate decompressor. Feed compressed chunks with `write`;
+	the second return value indicates when the stream is complete.
+
+	@class Inflate
+]=]
+export type Inflate = {
+	--[=[
+		Decompresses a chunk of compressed data. Returns decompressed output
+		and a boolean indicating whether the stream has ended.
+		@param data buffer -- compressed bytes
+		@return buffer -- decompressed output
+		@return boolean -- true when the stream is fully decompressed
+	]=]
+	write: (self: Inflate, data: buffer) -> (buffer, boolean),
+	--[=[
+		Closes the stream, freeing resources.
+	]=]
+	close: (self: Inflate) -> (),
+}
+
+--[=[
+	Creates a streaming deflate compressor.
+	@param level number? -- compression level
+	@param windowBits number? -- window bits (MAX_WBITS, RAW_WBITS, GZIP_WBITS)
+	@param memLevel number? -- memory level 1..9
+	@param strategy number? -- compression strategy
+	@return Deflate -- the streaming compressor
+]=]
+function zlib.createDeflate(level: number?, windowBits: number?, memLevel: number?, strategy: number?): Deflate
+	return nil :: any
+end
+
+--[=[
+	Creates a streaming inflate decompressor.
+	@param windowBits number? -- window bits (MAX_WBITS, RAW_WBITS, AUTO_WBITS)
+	@return Inflate -- the streaming decompressor
+]=]
+function zlib.createInflate(windowBits: number?): Inflate
+	return nil :: any
+end
+
 --- Compression levels
 zlib.NO_COMPRESSION = 0 :: number
 zlib.BEST_SPEED = 1 :: number
@@ -95,6 +164,12 @@ zlib.STRATEGY_FILTERED = 1 :: number
 zlib.STRATEGY_HUFFMAN_ONLY = 2 :: number
 zlib.STRATEGY_RLE = 3 :: number
 zlib.STRATEGY_FIXED = 4 :: number
+
+--- Flush constants for streaming
+zlib.FLUSH_NO = 0 :: number
+zlib.FLUSH_SYNC = 2 :: number
+zlib.FLUSH_FULL = 3 :: number
+zlib.FLUSH_FINISH = 4 :: number
 
 --- windowBits presets for compressRaw / decompressRaw
 zlib.MAX_WBITS = 15 :: number --- standard zlib

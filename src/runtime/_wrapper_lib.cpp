@@ -816,6 +816,7 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     exception_lib_register(L);
 
     // Register our custom print
+    // TODO: Bring this back once it's not bugged to all hell
     lua_pushcfunction(L, eryx_lua_print, "print");
     lua_setglobal(L, "print");
 

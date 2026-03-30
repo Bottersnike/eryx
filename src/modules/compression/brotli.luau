@@ -46,6 +46,47 @@ brotli.QUALITY_MIN = 0 :: number
 brotli.QUALITY_MAX = 11 :: number
 brotli.QUALITY_DEFAULT = 11 :: number
 
+--[=[
+	A streaming Brotli compressor.
+
+	@class Compressor
+]=]
+export type Compressor = {
+	write: (self: Compressor, data: buffer) -> buffer,
+	flush: (self: Compressor) -> buffer,
+	finish: (self: Compressor) -> buffer,
+	close: (self: Compressor) -> (),
+}
+
+--[=[
+	A streaming Brotli decompressor.
+
+	@class Decompressor
+]=]
+export type Decompressor = {
+	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
+	close: (self: Decompressor) -> (),
+}
+
+--[=[
+	Creates a streaming Brotli compressor.
+	@param quality number? -- 0..11
+	@param lgwin number? -- log2 window size
+	@param mode number? -- MODE_GENERIC/MODE_TEXT/MODE_FONT
+	@return Compressor -- the streaming compressor
+]=]
+function brotli.createCompressor(quality: number?, lgwin: number?, mode: number?): Compressor
+	return nil :: any
+end
+
+--[=[
+	Creates a streaming Brotli decompressor.
+	@return Decompressor -- the streaming decompressor
+]=]
+function brotli.createDecompressor(): Decompressor
+	return nil :: any
+end
+
 --- Window size constants (log2 of bytes, so WINDOW_MAX=24 means 16 MB window)
 brotli.WINDOW_MIN = 10 :: number
 brotli.WINDOW_MAX = 24 :: number

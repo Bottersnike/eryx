@@ -18,6 +18,245 @@ LUAU_MODULE_INFO()
 // Helpers
 // ---------------------------------------------------------------------------
 
+static constexpr size_t MAX_DECOMPRESS_SIZE = 256 * 1024 * 1024;  // 256 MB
+static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;            // 32 KB
+
+// ---------------------------------------------------------------------------
+// Streaming Deflate
+// ---------------------------------------------------------------------------
+
+static const char* MT_DEFLATE = "zlib.Deflate";
+
+struct LuaDeflate {
+    z_stream strm;
+    bool closed;
+};
+
+static void deflate_dtor(void* ud) {
+    auto* d = (LuaDeflate*)ud;
+    if (!d->closed) {
+        deflateEnd(&d->strm);
+        d->closed = true;
+    }
+}
+
+static LuaDeflate* check_deflate(lua_State* L) {
+    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+    if (d->closed) luaL_error(L, "zlib: deflate stream is closed");
+    return d;
+}
+
+// deflate:write(data, flush?) -> buffer
+// flush: FLUSH_NO (0), FLUSH_SYNC (2), FLUSH_FULL (3), FLUSH_FINISH (4)
+static int l_deflate_write(lua_State* L) {
+    auto* d = check_deflate(L);
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+    int flush = (int)luaL_optinteger(L, 3, Z_NO_FLUSH);
+
+    d->strm.next_in = (Bytef*)src;
+    d->strm.avail_in = (uInt)srcLen;
+
+    std::vector<Bytef> out;
+    out.reserve(srcLen < STREAM_CHUNK_SIZE ? STREAM_CHUNK_SIZE : srcLen);
+
+    do {
+        size_t used = out.size();
+        out.resize(used + STREAM_CHUNK_SIZE);
+        d->strm.next_out = out.data() + used;
+        d->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        int ret = deflate(&d->strm, flush);
+        if (ret == Z_STREAM_ERROR) luaL_error(L, "zlib: deflate stream error");
+
+        size_t produced = STREAM_CHUNK_SIZE - d->strm.avail_out;
+        out.resize(used + produced);
+    } while (d->strm.avail_out == 0);
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+// deflate:finish() -> buffer
+// Flushes remaining data and finalizes the stream.
+static int l_deflate_finish(lua_State* L) {
+    auto* d = check_deflate(L);
+
+    d->strm.next_in = nullptr;
+    d->strm.avail_in = 0;
+
+    std::vector<Bytef> out;
+    int ret;
+    do {
+        size_t used = out.size();
+        out.resize(used + STREAM_CHUNK_SIZE);
+        d->strm.next_out = out.data() + used;
+        d->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        ret = deflate(&d->strm, Z_FINISH);
+        if (ret == Z_STREAM_ERROR) luaL_error(L, "zlib: deflate stream error");
+
+        size_t produced = STREAM_CHUNK_SIZE - d->strm.avail_out;
+        out.resize(used + produced);
+    } while (ret != Z_STREAM_END);
+
+    deflateEnd(&d->strm);
+    d->closed = true;
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+// deflate:close()
+static int l_deflate_close(lua_State* L) {
+    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+    if (!d->closed) {
+        deflateEnd(&d->strm);
+        d->closed = true;
+    }
+    return 0;
+}
+
+static int l_deflate_tostring(lua_State* L) {
+    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+    lua_pushfstring(L, "zlib.Deflate(%s)", d->closed ? "closed" : "open");
+    return 1;
+}
+
+// zlib.createDeflate(level?, windowBits?, memLevel?, strategy?) -> Deflate
+static int l_create_deflate(lua_State* L) {
+    int level = (int)luaL_optinteger(L, 1, Z_DEFAULT_COMPRESSION);
+    int windowBits = (int)luaL_optinteger(L, 2, MAX_WBITS);
+    int memLevel = (int)luaL_optinteger(L, 3, 8);
+    int strategy = (int)luaL_optinteger(L, 4, Z_DEFAULT_STRATEGY);
+
+    auto* d = (LuaDeflate*)lua_newuserdatadtor(L, sizeof(LuaDeflate), deflate_dtor);
+    memset(&d->strm, 0, sizeof(z_stream));
+    d->closed = false;
+
+    int ret = deflateInit2(&d->strm, level, Z_DEFLATED, windowBits, memLevel, strategy);
+    if (ret != Z_OK) {
+        d->closed = true;
+        luaL_error(L, "zlib: deflateInit2 failed (%d)", ret);
+    }
+
+    luaL_getmetatable(L, MT_DEFLATE);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Inflate
+// ---------------------------------------------------------------------------
+
+static const char* MT_INFLATE = "zlib.Inflate";
+
+struct LuaInflate {
+    z_stream strm;
+    bool closed;
+    bool finished;
+};
+
+static void inflate_dtor(void* ud) {
+    auto* d = (LuaInflate*)ud;
+    if (!d->closed) {
+        inflateEnd(&d->strm);
+        d->closed = true;
+    }
+}
+
+static LuaInflate* check_inflate(lua_State* L) {
+    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+    if (d->closed) luaL_error(L, "zlib: inflate stream is closed");
+    return d;
+}
+
+// inflate:write(data) -> buffer, finished
+// Returns decompressed output and whether the stream has ended.
+static int l_inflate_write(lua_State* L) {
+    auto* d = check_inflate(L);
+    if (d->finished) luaL_error(L, "zlib: inflate stream already finished");
+
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+
+    d->strm.next_in = (Bytef*)src;
+    d->strm.avail_in = (uInt)srcLen;
+
+    std::vector<Bytef> out;
+    out.reserve(srcLen < STREAM_CHUNK_SIZE ? STREAM_CHUNK_SIZE : srcLen * 2);
+
+    int ret = Z_OK;
+    do {
+        size_t used = out.size();
+        if (used + STREAM_CHUNK_SIZE > MAX_DECOMPRESS_SIZE) {
+            luaL_error(L, "zlib: decompressed size exceeds limit (%d MB)",
+                       (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+        }
+        out.resize(used + STREAM_CHUNK_SIZE);
+        d->strm.next_out = out.data() + used;
+        d->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        ret = inflate(&d->strm, Z_NO_FLUSH);
+        if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR ||
+            ret == Z_NEED_DICT) {
+            luaL_error(L, "zlib: inflate error (%d)", ret);
+        }
+
+        size_t produced = STREAM_CHUNK_SIZE - d->strm.avail_out;
+        out.resize(used + produced);
+
+        if (ret == Z_STREAM_END) {
+            d->finished = true;
+            break;
+        }
+    } while (d->strm.avail_out == 0);
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    lua_pushboolean(L, d->finished);
+    return 2;
+}
+
+// inflate:close()
+static int l_inflate_close(lua_State* L) {
+    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+    if (!d->closed) {
+        inflateEnd(&d->strm);
+        d->closed = true;
+    }
+    return 0;
+}
+
+static int l_inflate_tostring(lua_State* L) {
+    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+    const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
+    lua_pushfstring(L, "zlib.Inflate(%s)", state);
+    return 1;
+}
+
+// zlib.createInflate(windowBits?) -> Inflate
+static int l_create_inflate(lua_State* L) {
+    int windowBits = (int)luaL_optinteger(L, 1, MAX_WBITS);
+
+    auto* d = (LuaInflate*)lua_newuserdatadtor(L, sizeof(LuaInflate), inflate_dtor);
+    memset(&d->strm, 0, sizeof(z_stream));
+    d->closed = false;
+    d->finished = false;
+
+    int ret = inflateInit2(&d->strm, windowBits);
+    if (ret != Z_OK) {
+        d->closed = true;
+        luaL_error(L, "zlib: inflateInit2 failed (%d)", ret);
+    }
+
+    luaL_getmetatable(L, MT_INFLATE);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
 static std::vector<Bytef> inflate_all(lua_State* L, const void* src, size_t srcLen,
                                       int windowBits) {
     z_stream strm{};
@@ -30,7 +269,15 @@ static std::vector<Bytef> inflate_all(lua_State* L, const void* src, size_t srcL
     int ret = Z_OK;
     while (ret != Z_STREAM_END) {
         size_t used = (size_t)strm.total_out;
-        if (used == out.size()) out.resize(out.size() * 2);
+        if (used == out.size()) {
+            size_t newSize = out.size() * 2;
+            if (newSize > MAX_DECOMPRESS_SIZE) {
+                inflateEnd(&strm);
+                luaL_error(L, "zlib: decompressed size exceeds limit (%d MB)",
+                           (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+            }
+            out.resize(newSize);
+        }
         strm.next_out = out.data() + used;
         strm.avail_out = (uInt)(out.size() - used);
         ret = inflate(&strm, Z_NO_FLUSH);
@@ -168,6 +415,50 @@ static int l_compress_bound(lua_State* L) {
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_zlib(lua_State* L) {
+    // Register Deflate metatable
+    luaL_newmetatable(L, MT_DEFLATE);
+    {
+        static const luaL_Reg deflate_methods[] = {
+            { "write", l_deflate_write },
+            { "finish", l_deflate_finish },
+            { "close", l_deflate_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = deflate_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_deflate_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_deflate_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    // Register Inflate metatable
+    luaL_newmetatable(L, MT_INFLATE);
+    {
+        static const luaL_Reg inflate_methods[] = {
+            { "write", l_inflate_write },
+            { "close", l_inflate_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = inflate_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_inflate_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_inflate_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    // Module table
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {
@@ -178,6 +469,8 @@ LUAU_MODULE_EXPORT int luauopen_zlib(lua_State* L) {
         { "adler32", l_adler32 },
         { "crc32", l_crc32 },
         { "compressBound", l_compress_bound },
+        { "createDeflate", l_create_deflate },
+        { "createInflate", l_create_inflate },
         { nullptr, nullptr },
     };
     for (const luaL_Reg* f = fns; f->name; f++) {
@@ -206,6 +499,16 @@ LUAU_MODULE_EXPORT int luauopen_zlib(lua_State* L) {
     lua_setfield(L, -2, "STRATEGY_RLE");
     lua_pushinteger(L, Z_FIXED);
     lua_setfield(L, -2, "STRATEGY_FIXED");
+
+    // Flush constants for streaming
+    lua_pushinteger(L, Z_NO_FLUSH);
+    lua_setfield(L, -2, "FLUSH_NO");
+    lua_pushinteger(L, Z_SYNC_FLUSH);
+    lua_setfield(L, -2, "FLUSH_SYNC");
+    lua_pushinteger(L, Z_FULL_FLUSH);
+    lua_setfield(L, -2, "FLUSH_FULL");
+    lua_pushinteger(L, Z_FINISH);
+    lua_setfield(L, -2, "FLUSH_FINISH");
 
     // window_bits helpers for compress_raw / decompress_raw
     lua_pushinteger(L, MAX_WBITS);

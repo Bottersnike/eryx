@@ -104,11 +104,13 @@ static bool is_legal_name(const char* name) {
 static void print_table(lua_State* L, int index, int visited) {
     index = lua_absindex(L, index);
 
-    if (already_seen(L, index, visited)) {
-        printf("{...}");
-        return;
-    }
-    mark_seen(L, index, visited);
+    // TODO: This recursive broken is totally broken.
+    // TODO: We need to un-mark as seen once we leave a table?
+    // if (already_seen(L, index, visited)) {
+    //     // printf("{...}");
+    //     // return;
+    // }
+    // mark_seen(L, index, visited);
 
     printf("{");
 
@@ -159,9 +161,12 @@ static void print_table(lua_State* L, int index, int visited) {
                 printf("]");
             }
 
-            // printf("[");
-            // print_value(L, -2, visited);
-            // printf("]");
+            // We don't have recursion protection yet, so we can't be printing index!
+            if (strcmp(key, "__index") == 0) {
+                printf(" = ...");
+                lua_pop(L, 2);
+                return;
+            }
         } else {
             printf("[");
             print_value(L, -2, visited);
@@ -230,9 +235,7 @@ static void print_value(lua_State* L, int index, int visited) {
 int eryx_lua_print(lua_State* L) {
     int n = lua_gettop(L);
 
-    // Visited table
-    lua_newtable(L);
-    int visited = lua_gettop(L);
+    // puts("Refusing to print for now :(");
 
     for (int i = 1; i <= n; i++) {
         if (i > 1) printf("\t");
@@ -240,11 +243,13 @@ int eryx_lua_print(lua_State* L) {
         if (lua_type(L, i) == LUA_TSTRING) {
             printf("%s", lua_tostring(L, i));
         } else {
+            // TODO: This recursive checker is totally broken!!
+            lua_newtable(L);
+            int visited = lua_gettop(L);
             print_value(L, i, visited);
+            lua_pop(L, 1);
         }
     }
-
-    lua_pop(L, 1);
 
     printf("\n");
     return 0;

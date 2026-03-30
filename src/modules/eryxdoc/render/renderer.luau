@@ -2,7 +2,9 @@ local fs = require("@eryx/fs")
 local template = require("@eryx/template")
 local sidebar = require("./sidebar")
 local markdown = require("@eryx/markdown")
-local html = require("@eryx/markdown/html")
+
+local wikilinkRuleBuilder = require("@eryx/markdown/extensions/wikilink")
+
 local highlight = require("../parse/highlight")
 local modules = require("../content/modules")
 local Article = require("../content/article")
@@ -13,6 +15,7 @@ type TOCItem = {
 	label: string,
 	link: string,
 	indent: boolean?,
+	level: number?,
 }
 type TOCGroup = {
 	label: string,
@@ -68,6 +71,9 @@ type RendererFields = {
 		index: template.Template,
 		notFound: template.Template?,
 	},
+
+	markdown: markdown.Markdown,
+	currentMod: modules.ModuleInfo?,
 }
 export type Renderer = setmetatable<RendererFields, typeof(Renderer)>
 
@@ -135,9 +141,25 @@ function Renderer.new(
 				then template.compile(fs.openSync(templates.notFound):readSync(), templates.notFound)
 				else nil,
 		},
-	}
 
-	return setmetatable(this, Renderer)
+		currentMod = nil,
+	}
+	setmetatable(this, Renderer)
+	this.markdown = markdown.Markdown.new({
+		extraInlineExtensions = {
+			wikilinkRuleBuilder(function(link: string): string
+				return this:_resolveWikiLink(link, this.currentMod)
+			end),
+		},
+		codeLanguages = {
+			["luau"] = highlight.highlightLuau,
+			["sh"] = highlight.highlightShell,
+		},
+		useCrlf = false,
+		annotateHtml = true,
+	})
+
+	return this
 end
 
 function Renderer._resolveWikiLink(self: Renderer, rawLink: string, currentModule: modules.ModuleInfo?): string
@@ -420,15 +442,29 @@ function Renderer.renderPage(
 		escape = htmlEscapeFilter,
 		markdown = function(text: string, ctx: { [string]: any }): string
 			local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
-			return html.render(markdown.parse(text), {
-				languages = {
-					["luau"] = highlight.highlightLuau,
-					["sh"] = highlight.highlightShell,
-				},
-				wikiResolver = function(link: string): string
-					return self:_resolveWikiLink(link, currentMod)
-				end,
-			})
+			self.currentMod = currentMod
+
+			-- local function wikilinkResolver(link: string): string
+			-- 	return self:_resolveWikiLink(link, currentMod)
+			-- end
+
+			-- local mdConfig: markdown.MarkdownConfig = {
+			-- 	extraInlineExtensions = {
+			-- 		wikilinkRuleBuilder(wikilinkResolver),
+			-- 	},
+			-- 	codeLanguages = {
+			-- 		["luau"] = highlight.highlightLuau,
+			-- 		["sh"] = highlight.highlightShell,
+			-- 	},
+			-- 	useCrlf = false,
+			-- 	annotateHtml = true,
+			-- }
+			-- local start = os.clock()
+			-- local html_ = markdown.renderHtml(markdown.parse(text, mdConfig), mdConfig)
+			local html_ = self.markdown:renderHtml(self.markdown:parse(text))
+			-- print(`Markdown took {os.clock() - start}s`)
+
+			return html_
 		end,
 		webPath = function(x: any)
 			return self:getLink(x)
@@ -675,10 +711,20 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 	local toc: { TOCItem } = {}
 
 	local mdToc = article:generateToc()
-	for _, i in mdToc do
-		if i.level == 2 then
-			table.insert(toc, { label = i.text, link = "#" .. i.id })
+	for n, i in mdToc do
+		if i.level < 1 then
+			continue
 		end
+		if i.level > 4 then
+			continue
+		end
+
+		local item: TOCItem = {
+			label = i.text,
+			link = `#{i.id}`,
+			level = i.level,
+		}
+		table.insert(toc, item)
 	end
 
 	-- Build breadcrumbs from the article path.

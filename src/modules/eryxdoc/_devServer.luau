@@ -1,3 +1,5 @@
+--- @ignore
+
 --[[
 	In-memory dev server for eryxdoc.
 
@@ -19,6 +21,7 @@ local Renderer = require("./render/renderer")
 local buildWarnings = require("./warnings")
 
 local eryxdoc = require("@eryx/eryxdoc")
+local exception = require("@eryx/exception")
 type Config = eryxdoc.Config
 
 -- ── MIME map (for static assets) ─────────────────────────────────────────
@@ -447,6 +450,7 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 			for _, mod in state.allModules do
 				if mod.qualifiedName == modName then
 					local ok, content = pcall(renderer.renderModule, renderer, mod.qualifiedName)
+
 					if ok then
 						return 200, content, "text/html; charset=utf-8"
 					end
@@ -477,8 +481,10 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 				if ok then
 					return 200, content, "text/html; charset=utf-8"
 				end
-				print(string.format("  [dev] Error rendering article %s: %s", article.name, tostring(content)))
-				return 500, `<h1>500 — Render Error</h1><pre>{content}</pre>`, "text/html; charset=utf-8"
+				print(string.format("  [dev] Error rendering article %s: %s", article.name, exception.format(content)))
+				return 500,
+					`<h1>500 — Render Error</h1><pre>{exception.format(content)}</pre>`,
+					"text/html; charset=utf-8"
 			end
 		end
 	end
@@ -570,7 +576,7 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		addDirWatcher(state.staticDir, "static")
 	end
 
-	local server = http.createServer(function(req, res)
+	local server = http.HttpServer.new(function(req, res)
 		-- Handle WebSocket upgrade for live-reload on reserved path
 		if req.path == "/__eryxdoc_ws" then
 			local ws = websocket.upgrade(req, res)

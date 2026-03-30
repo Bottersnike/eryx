@@ -1,5 +1,6 @@
-#include "../pch.hpp"
 #include "lmarshall.hpp"
+
+#include "../pch.hpp"
 
 // ---------------------------------------------------------------------------
 // Encoder helpers
@@ -151,13 +152,12 @@ static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, 
 
 void eryx_marshall(lua_State* L, int idx, std::vector<uint8_t>& out) {
     // Normalize negative indices before we push the visited table
-    if (idx < 0 && idx > LUA_REGISTRYINDEX)
-        idx = lua_gettop(L) + idx + 1;
+    if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
 
     lua_newtable(L);
     int visited = lua_gettop(L);
     encode_lua_value(L, idx, out, visited);
-    lua_pop(L, 1); // pop visited table
+    lua_pop(L, 1);  // pop visited table
 }
 
 // ---------------------------------------------------------------------------
@@ -169,8 +169,7 @@ static size_t decode_varint(lua_State* L, const uint8_t* data, size_t len, unsig
     size_t pos = 0;
     unsigned int shift = 0;
     do {
-        if (pos >= len)
-            luaL_error(L, "Truncated varint in unmarshall");
+        if (pos >= len) luaL_error(L, "Truncated varint in unmarshall");
         *out |= (unsigned int)(data[pos] & 0x7F) << shift;
         shift += 7;
     } while (data[pos++] & 0x80);
@@ -223,8 +222,7 @@ static size_t decode_lua_table(lua_State* L, const uint8_t* data, size_t len) {
 }
 
 static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
-    if (len == 0)
-        luaL_error(L, "Truncated data in unmarshall");
+    if (len == 0) luaL_error(L, "Truncated data in unmarshall");
 
     uint8_t tag = data[0];
     size_t pos = 1;
@@ -240,8 +238,7 @@ static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
             lua_pushboolean(L, 0);
             break;
         case ETYPE_DOUBLE: {
-            if (len - pos < sizeof(lua_Number))
-                luaL_error(L, "Truncated double in unmarshall");
+            if (len - pos < sizeof(lua_Number)) luaL_error(L, "Truncated double in unmarshall");
             lua_Number k;
             memcpy(&k, data + pos, sizeof(lua_Number));
             pos += sizeof(lua_Number);
@@ -252,8 +249,7 @@ static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
             unsigned int slen;
             size_t vlen = decode_varint(L, data + pos, len - pos, &slen);
             pos += vlen;
-            if (len - pos < slen)
-                luaL_error(L, "Truncated string in unmarshall");
+            if (len - pos < slen) luaL_error(L, "Truncated string in unmarshall");
             lua_pushlstring(L, reinterpret_cast<const char*>(data + pos), slen);
             pos += slen;
             break;
@@ -262,8 +258,7 @@ static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
             unsigned int blen;
             size_t vlen = decode_varint(L, data + pos, len - pos, &blen);
             pos += vlen;
-            if (len - pos < blen)
-                luaL_error(L, "Truncated buffer in unmarshall");
+            if (len - pos < blen) luaL_error(L, "Truncated buffer in unmarshall");
             void* buf = lua_newbuffer(L, blen);
             if (blen) memcpy(buf, data + pos, blen);
             pos += blen;
@@ -271,8 +266,7 @@ static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
         }
         case ETYPE_VECTOR: {
             const size_t vsize = sizeof(float) * LUA_VECTOR_SIZE;
-            if (len - pos < vsize)
-                luaL_error(L, "Truncated vector in unmarshall");
+            if (len - pos < vsize) luaL_error(L, "Truncated vector in unmarshall");
             float v[LUA_VECTOR_SIZE];
             memcpy(v, data + pos, vsize);
             pos += vsize;

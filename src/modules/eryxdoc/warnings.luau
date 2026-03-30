@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Simple build warnings collector.
 -- Modules call warn() during the build; main.luau calls summary() at the end.
 

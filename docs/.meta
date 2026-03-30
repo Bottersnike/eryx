@@ -1,6 +1,4 @@
 children:
 - getting-started
-- module-resolution
-- style-guide
-- vfs-behaviour
-- old
+- writing-code
+- markdown

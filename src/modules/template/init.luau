@@ -242,6 +242,7 @@
 
 local Parser = require("@self/parser")
 local json = require("@eryx/encoding/json")
+local exception = require("@eryx/exception")
 
 --[=[
 	A structured error value thrown by `compileRaw` and `evaluateRaw`.
@@ -778,6 +779,7 @@ function template.evaluate(
 ): string
 	local ok, result = pcall(_evaluateRaw, nodes, ctx, filters)
 	if not ok then
+		print(exception.format(result))
 		rethrowError(result)
 	end
 	return result :: string

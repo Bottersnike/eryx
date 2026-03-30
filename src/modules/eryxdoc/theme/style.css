@@ -163,6 +163,19 @@ body::-webkit-scrollbar-thumb {
     color: var(--text-invert);
 }
 
+.md-footnotes {
+    border-top: 1px solid var(--border);
+    padding-top: 1em;
+    margin-top: 1em;
+}
+
+.md-task_list_item::marker {
+    content: none;
+}
+.md-task_list_item {
+    margin-left: 0 !important;
+}
+
 /* ---- Announcement Banner ---- */
 .announcement-banner {
     position: fixed;
@@ -656,8 +669,7 @@ body::-webkit-scrollbar-thumb {
     font-weight: 600;
 }
 
-ul:not(.sidebar-nav) li,
-ol:not(.sidebar-nav) li {
+.md-list_item {
     margin-left: 1rem;
 }
 
@@ -772,13 +784,20 @@ h3 {
     margin: 0;
 }
 
-.article-content h3 {
+.article-content h3.md-heading {
     margin: 0.75em 0 0.25em;
 }
-.article-content p,
-.article-content ul,
-.article-content ol {
-    margin: 1.25em 0;
+.article-content .md-quote:not(:last-child),
+.article-content .md-paragraph:not(:last-child),
+.article-content .md-list:not(:last-child),
+.article-content .md-list:not(:last-child) {
+    margin-bottom: 1.25em;
+}
+.article-content .md-quote:not(:first-child),
+.article-content .md-paragraph:not(:first-child),
+.article-content .md-list:not(:first-child),
+.article-content .md-list:not(:first-child) {
+    margin-top: 1.25em;
 }
 
 .meta {
@@ -976,6 +995,38 @@ code {
     font-size: 0.85em;
     color: var(--hl-yellow);
 }
+.md-color_dot {
+    width: 0.8em;
+    height: 0.8em;
+    display: inline-block;
+    border-radius: 50%;
+    background-color: var(--color);
+    vertical-align: baseline;
+    margin-left: 0.35em;
+    border: 1px solid var(--border);
+}
+
+.md-tab_panel {
+    padding-top: 0.5em;
+}
+.md-tab_panel:not([active]) {
+    display: none;
+}
+.md-tab_group_header {
+    display: flex;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+}
+.md-tab_group_button {
+    padding: 0.25em 1em;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    margin-bottom: -1px;
+}
+.md-tab_group_button[active] {
+    color: var(--accent);
+    border-bottom: 2px solid var(--accent);
+}
 
 .md-paragraph + .md-paragraph {
     margin-top: 0.75em;
@@ -1013,6 +1064,7 @@ pre.md-code_block:last-child {
 
 .md-admonition-title {
     font-weight: 700;
+    margin-top: 0;
     margin-bottom: 0.4rem;
     font-size: 0.88rem;
     letter-spacing: 0.03em;
@@ -1022,43 +1074,43 @@ pre.md-code_block:last-child {
     margin-bottom: 0;
 }
 
-.md-admonition.caution {
+.md-admonition[data-label="caution"] {
     background: rgba(230, 168, 23, 0.12);
     border-left: 4px solid var(--amber);
 }
 
-.md-admonition.caution .md-admonition-title {
+.md-admonition[data-label="caution"] .md-admonition-title {
     color: var(--amber);
 }
 
-.md-admonition.info,
-.md-admonition.note {
+.md-admonition[data-label="info"],
+.md-admonition[data-label="note"] {
     background: rgba(86, 156, 214, 0.12);
     border-left: 4px solid var(--accent);
 }
 
-.md-admonition.info .md-admonition-title,
-.md-admonition.note .md-admonition-title {
+.md-admonition[data-label="info"] .md-admonition-title,
+.md-admonition[data-label="note"] .md-admonition-title {
     color: var(--accent);
 }
 
-.md-admonition.tip {
+.md-admonition[data-label="tip"] {
     background: rgba(78, 201, 176, 0.12);
     border-left: 4px solid var(--hl-dark-green);
 }
 
-.md-admonition.tip .md-admonition-title {
+.md-admonition[data-label="tip"] .md-admonition-title {
     color: var(--hl-dark-green);
 }
 
-.md-admonition.danger,
-.md-admonition.warning {
+.md-admonition[data-label="danger"],
+.md-admonition[data-label="warning"] {
     background: rgba(244, 71, 71, 0.12);
     border-left: 4px solid var(--red);
 }
 
-.md-admonition.danger .md-admonition-title,
-.md-admonition.warning .md-admonition-title {
+.md-admonition[data-label="danger"] .md-admonition-title,
+.md-admonition[data-label="warning"] .md-admonition-title {
     color: var(--red);
 }
 
@@ -1138,6 +1190,11 @@ table.params tr:last-child td {
     color: var(--text-dim);
     margin-left: 0.5rem;
     font-size: 0.88rem;
+}
+
+.md-quote {
+    border-left: 4px solid var(--border);
+    padding-left: 1em;
 }
 
 .md-table {
@@ -1246,21 +1303,21 @@ hr.section-sep {
 
 /* ---- Light theme overrides ---- */
 /* Admonition tints are hardcoded rgba - bump opacity so they show on light bg */
-:root[data-theme="light"] .md-admonition.caution {
+:root[data-theme="light"] .md-admonition[data-label="caution"] {
     background: rgba(184, 114, 14, 0.13);
 }
 
-:root[data-theme="light"] .md-admonition.info,
-:root[data-theme="light"] .md-admonition.note {
+:root[data-theme="light"] .md-admonition[data-label="info"],
+:root[data-theme="light"] .md-admonition[data-label="note"] {
     background: rgba(0, 87, 174, 0.1);
 }
 
-:root[data-theme="light"] .md-admonition.tip {
+:root[data-theme="light"] .md-admonition[data-label="tip"] {
     background: rgba(38, 127, 153, 0.1);
 }
 
-:root[data-theme="light"] .md-admonition.danger,
-:root[data-theme="light"] .md-admonition.warning {
+:root[data-theme="light"] .md-admonition[data-label="danger"],
+:root[data-theme="light"] .md-admonition[data-label="warning"] {
     background: rgba(201, 48, 48, 0.1);
 }
 
@@ -1335,6 +1392,20 @@ hr.section-sep {
 }
 .toc-sidebar .sidebar-link {
     padding: 0 0.5em;
+}
+.toc-sidebar .sidebar-link.level-3 {
+    padding: 0 0.5em 0 1.5em;
+    font-size: 0.8em;
+    line-height: 1.1;
+    margin-top: -0.3em;
+    margin-bottom: 0.3em;
+}
+.toc-sidebar .sidebar-link.level-4 {
+    padding: 0 0.5em 0 2.5em;
+    font-size: 0.8em;
+    line-height: 1.1;
+    margin-top: -0.3em;
+    margin-bottom: 0.3em;
 }
 .toc-sidebar .sidebar-link.active {
     background-color: unset;

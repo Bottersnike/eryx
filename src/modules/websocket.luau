@@ -21,6 +21,14 @@
 	local ws = websocket.connect("wss://echo.example.com/ws")
 	```
 
+	**Client - with compression and heartbeat:**
+	```luau
+	local ws = websocket.connect("wss://echo.example.com/ws", {
+	    compress = true,       -- negotiate permessage-deflate
+	    heartbeat = 30,        -- send a ping every 30 seconds
+	})
+	```
+
 	**Server - upgrade inside an HTTP handler:**
 	```luau
 	local http = require("@eryx/http")
@@ -28,7 +36,7 @@
 
 	local server = http.createServer(function(req, res)
 	    if req.path == "/ws" then
-	        local ws = websocket.upgrade(req, res)
+	        local ws = websocket.upgrade(req, res, { compress = true })
 	        while true do
 	            local msg = ws:receive()
 	            if not msg then break end
@@ -49,8 +57,11 @@
 local _socket = require("@eryx/_socket")
 local _ssl = require("@eryx/_ssl")
 local hash = require("@eryx/crypto/hash")
+local random = require("@eryx/crypto/random")
 local base64 = require("@eryx/encoding/base64")
 local http = require("@eryx/http")
+local zlib = require("@eryx/compression/zlib")
+local task = require("@eryx/task")
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- Constants
@@ -73,6 +84,10 @@ local PING = 0x9
 local PONG = 0xA
 
 local WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+-- permessage-deflate: the 4-byte trailer that zlib appends for SYNC flush,
+-- which must be stripped before sending and re-appended before decompressing.
+local DEFLATE_TAIL = "\x00\x00\xff\xff"
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- Helpers
@@ -111,18 +126,9 @@ local function sendAll(sock: any, data: string)
 	sock:sendAll(strToBuf(data))
 end
 
---- Generate `n` random bytes.
-local function randomBytes(n: number): buffer
-	local buf = buffer.create(n)
-	for i = 0, n - 1 do
-		buffer.writeu8(buf, i, math.random(0, 255))
-	end
-	return buf
-end
-
 --- Generate a random 16-byte base64-encoded WebSocket key.
 local function generateKey(): string
-	return base64.encode(randomBytes(16))
+	return base64.encode(random.bytes(16))
 end
 
 --- Compute the `Sec-WebSocket-Accept` value for a given key.
@@ -150,7 +156,8 @@ end
 -- ───────────────────────────────────────────────────────────────────────────
 
 --- Encode a single WebSocket frame and return it as a string ready to send.
-local function encodeFrame(fin: boolean, opcode: number, payload: buffer, mask: boolean): string
+--- rsv1 sets the RSV1 bit (used by permessage-deflate to indicate compression).
+local function encodeFrame(fin: boolean, opcode: number, payload: buffer, mask: boolean, rsv1: boolean?): string
 	local payloadLen = buffer.len(payload)
 
 	-- Determine extended-length header size.
@@ -163,8 +170,12 @@ local function encodeFrame(fin: boolean, opcode: number, payload: buffer, mask: 
 	local header = buffer.create(headerSize)
 	local off = 0
 
-	-- Byte 0: FIN | RSV(0) | opcode
-	buffer.writeu8(header, off, bit32.bor(if fin then 0x80 else 0, opcode))
+	-- Byte 0: FIN | RSV1 | RSV2(0) | RSV3(0) | opcode
+	local byte0 = bit32.bor(if fin then 0x80 else 0, opcode)
+	if rsv1 then
+		byte0 = bit32.bor(byte0, 0x40)
+	end
+	buffer.writeu8(header, off, byte0)
 	off += 1
 
 	-- Byte 1: MASK | payload length
@@ -197,7 +208,7 @@ local function encodeFrame(fin: boolean, opcode: number, payload: buffer, mask: 
 	-- Masking key (client frames only)
 	local maskKey: buffer?
 	if mask then
-		maskKey = randomBytes(4)
+		maskKey = random.bytes(4)
 		buffer.copy(header, off, maskKey :: buffer)
 		off += 4
 	end
@@ -212,6 +223,7 @@ end
 --- Internal frame representation.
 type Frame = {
 	fin: boolean,
+	rsv1: boolean,
 	opcode: number,
 	payload: buffer,
 }
@@ -228,6 +240,7 @@ local function readFrame(sock: any): Frame?
 	local byte1 = string.byte(hdr, 2)
 
 	local fin = bit32.band(byte0, 0x80) ~= 0
+	local rsv1 = bit32.band(byte0, 0x40) ~= 0
 	local opcode = bit32.band(byte0, 0x0F)
 	local masked = bit32.band(byte1, 0x80) ~= 0
 	local payloadLen: number = bit32.band(byte1, 0x7F)
@@ -278,9 +291,99 @@ local function readFrame(sock: any): Frame?
 
 	return {
 		fin = fin,
+		rsv1 = rsv1,
 		opcode = opcode,
 		payload = payload,
 	}
+end
+
+-- ───────────────────────────────────────────────────────────────────────────
+-- permessage-deflate (RFC 7692)
+-- ───────────────────────────────────────────────────────────────────────────
+
+--- Holds the deflate/inflate streams and negotiated parameters for a
+--- single WebSocket connection's permessage-deflate state.
+type DeflateState = {
+	deflater: any, -- zlib.Deflate stream (raw, -15 window bits)
+	inflater: any, -- zlib.Inflate stream (raw, -15 window bits)
+	noClientTakeover: boolean,
+	noServerTakeover: boolean,
+	isClient: boolean,
+}
+
+--- Create a new DeflateState after successful negotiation.
+local function createDeflateState(isClient: boolean, noClientTakeover: boolean, noServerTakeover: boolean): DeflateState
+	return {
+		deflater = zlib.createDeflate(zlib.DEFAULT_COMPRESSION, zlib.RAW_WBITS),
+		inflater = zlib.createInflate(zlib.RAW_WBITS),
+		noClientTakeover = noClientTakeover,
+		noServerTakeover = noServerTakeover,
+		isClient = isClient,
+	}
+end
+
+--- Compress a message payload using permessage-deflate.
+--- Returns the compressed payload (with trailing 0x00 0x00 0xff 0xff stripped).
+local function deflatePayload(state: DeflateState, payload: buffer): buffer
+	-- Compress with SYNC_FLUSH to get a complete deflate block.
+	local compressed = bufToStr(state.deflater:write(payload, zlib.FLUSH_SYNC))
+
+	-- Per RFC 7692 §7.2.1: strip the trailing 0x00 0x00 0xff 0xff.
+	if string.sub(compressed, -4) == DEFLATE_TAIL then
+		compressed = string.sub(compressed, 1, -5)
+	end
+
+	-- If context takeover is disabled for our sending side, reset the deflater.
+	local noTakeover = if state.isClient then state.noClientTakeover else state.noServerTakeover
+	if noTakeover then
+		state.deflater:close()
+		state.deflater = zlib.createDeflate(zlib.DEFAULT_COMPRESSION, zlib.RAW_WBITS)
+	end
+
+	return strToBuf(compressed)
+end
+
+--- Decompress a message payload using permessage-deflate.
+--- Re-appends the trailing 0x00 0x00 0xff 0xff before inflating.
+local function inflatePayload(state: DeflateState, payload: buffer): buffer
+	-- Per RFC 7692 §7.2.2: re-append the stripped trailer.
+	local input = bufToStr(payload) .. DEFLATE_TAIL
+	local decompressed, _ = state.inflater:write(strToBuf(input))
+
+	-- If context takeover is disabled for the receiving side, reset the inflater.
+	local noTakeover = if state.isClient then state.noServerTakeover else state.noClientTakeover
+	if noTakeover then
+		state.inflater:close()
+		state.inflater = zlib.createInflate(zlib.RAW_WBITS)
+	end
+
+	return decompressed
+end
+
+--- Parse the Sec-WebSocket-Extensions header value to extract
+--- permessage-deflate parameters. Returns nil if not present.
+local function parseDeflateParams(extHeader: string?): {
+	noClientTakeover: boolean,
+	noServerTakeover: boolean,
+}?
+	if not extHeader then
+		return nil
+	end
+
+	-- Find permessage-deflate among possibly multiple extensions.
+	for ext in string.gmatch(extHeader :: string, "[^,]+") do
+		local trimmed = string.match(ext, "^%s*(.-)%s*$") :: string
+		if string.find(trimmed, "^permessage%-deflate") then
+			local noClientTakeover = string.find(trimmed, "client_no_context_takeover") ~= nil
+			local noServerTakeover = string.find(trimmed, "server_no_context_takeover") ~= nil
+			return {
+				noClientTakeover = noClientTakeover,
+				noServerTakeover = noServerTakeover,
+			}
+		end
+	end
+
+	return nil
 end
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -303,21 +406,40 @@ type WebSocketFields = {
 	_closed: boolean,
 	_closeSent: boolean,
 	_closeReceived: boolean,
+	_deflate: DeflateState?,
+	_heartbeatThread: thread?,
 }
 
 export type WebSocket = typeof(setmetatable({} :: WebSocketFields, WebSocket))
 
-function WebSocket._new(sock: any, isClient: boolean): WebSocket
-	return setmetatable(
+function WebSocket._new(sock: any, isClient: boolean, deflate: DeflateState?, heartbeatInterval: number?): WebSocket
+	local ws = setmetatable(
 		{
 			_sock = sock,
 			_isClient = isClient,
 			_closed = false,
 			_closeSent = false,
 			_closeReceived = false,
+			_deflate = deflate,
+			_heartbeatThread = nil :: thread?,
 		} :: WebSocketFields,
 		WebSocket
 	)
+
+	-- Start heartbeat if requested.
+	if heartbeatInterval and heartbeatInterval > 0 then
+		ws._heartbeatThread = task.spawn(function()
+			while not ws._closed do
+				task.wait(heartbeatInterval)
+				if ws._closed then
+					break
+				end
+				pcall(WebSocket.ping, ws)
+			end
+		end)
+	end
+
+	return ws
 end
 
 --[=[
@@ -334,6 +456,9 @@ export type Message = {
 
 --[=[
 	Sends a text or binary message.
+
+	If `permessage-deflate` was negotiated, the message is automatically
+	compressed before sending.
 
 	@param data The payload to send. Strings are sent as-is; buffers are
 	            converted with `buffer.tostring`.
@@ -353,7 +478,14 @@ function WebSocket.send(self: WebSocket, data: string | buffer, binary: boolean?
 		payload = data
 	end
 
-	sendAll(self._sock, encodeFrame(true, opcode, payload, self._isClient))
+	-- Compress if permessage-deflate is active.
+	local rsv1 = false
+	if self._deflate and buffer.len(payload) > 0 then
+		payload = deflatePayload(self._deflate, payload)
+		rsv1 = true
+	end
+
+	sendAll(self._sock, encodeFrame(true, opcode, payload, self._isClient, rsv1))
 end
 
 --[=[
@@ -398,7 +530,8 @@ end
 
 	Handles fragmented messages, automatically responds to Ping frames
 	with Pong, and performs the close handshake when a close frame is
-	received.
+	received. If `permessage-deflate` was negotiated, compressed messages
+	(RSV1 set) are automatically decompressed.
 
 	@return Message? -- The received message, or `nil` when the connection
 	                    has been closed.
@@ -410,6 +543,7 @@ function WebSocket.receive(self: WebSocket): Message?
 
 	local fragments: { buffer } = {}
 	local messageOpcode: number? = nil
+	local messageCompressed = false
 
 	while true do
 		local frame = readFrame(self._sock)
@@ -442,6 +576,7 @@ function WebSocket.receive(self: WebSocket): Message?
 		-- Data frame
 		if frame.opcode ~= CONTINUATION then
 			messageOpcode = frame.opcode
+			messageCompressed = frame.rsv1
 			fragments = { frame.payload }
 		else
 			table.insert(fragments, frame.payload)
@@ -465,6 +600,11 @@ function WebSocket.receive(self: WebSocket): Message?
 				off += buffer.len(frag)
 			end
 
+			-- Decompress if RSV1 is set and permessage-deflate is active.
+			if messageCompressed and self._deflate then
+				result = inflatePayload(self._deflate, result)
+			end
+
 			return {
 				data = bufToStr(result),
 				binary = messageOpcode == BINARY,
@@ -477,7 +617,8 @@ end
 	Initiates the WebSocket close handshake.
 
 	Sends a close frame, waits for the server's close reply (if not
-	already received), then shuts down the underlying socket.
+	already received), then shuts down the underlying socket. Also
+	cancels any active heartbeat.
 
 	@param code Optional status code (e.g. `1000` for normal closure).
 	@param reason Optional human-readable close reason.
@@ -487,6 +628,12 @@ function WebSocket.close(self: WebSocket, code: number?, reason: string?)
 		return
 	end
 	self._closeSent = true
+
+	-- Stop the heartbeat.
+	if self._heartbeatThread then
+		pcall(task.cancel, self._heartbeatThread)
+		self._heartbeatThread = nil
+	end
 
 	-- Build the close frame payload.
 	local payload: buffer
@@ -523,6 +670,13 @@ function WebSocket.close(self: WebSocket, code: number?, reason: string?)
 
 	self._closed = true
 	pcall(self._sock.close, self._sock)
+
+	-- Clean up compression state.
+	if self._deflate then
+		pcall(self._deflate.deflater.close, self._deflate.deflater)
+		pcall(self._deflate.inflater.close, self._deflate.inflater)
+		self._deflate = nil
+	end
 end
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -588,11 +742,15 @@ end
 	.headers { [string]: string }? -- Extra headers to include in the upgrade request.
 	.timeout number? -- Socket timeout in seconds.
 	.subprotocols { string }? -- Requested sub-protocols (`Sec-WebSocket-Protocol`).
+	.compress boolean? -- When `true`, negotiates `permessage-deflate` compression (RFC 7692).
+	.heartbeat number? -- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 ]=]
 export type ConnectOptions = {
 	headers: { [string]: string }?,
 	timeout: number?,
 	subprotocols: { string }?,
+	compress: boolean?,
+	heartbeat: number?,
 }
 
 --[=[
@@ -601,8 +759,14 @@ export type ConnectOptions = {
 	Supports `ws://` (plain) and `wss://` (TLS) schemes. Performs the
 	HTTP upgrade handshake and returns a connected [[WebSocket]].
 
+	When `compress` is `true`, the client offers `permessage-deflate`
+	and enables compression if the server accepts.
+
 	```luau
-	local ws = websocket.connect("ws://localhost:8080/chat")
+	local ws = websocket.connect("ws://localhost:8080/chat", {
+	    compress = true,
+	    heartbeat = 30,
+	})
 	```
 
 	@param url The WebSocket URL to connect to.
@@ -646,6 +810,11 @@ local function connect(url: string, options: ConnectOptions?): WebSocket
 		"Sec-WebSocket-Key: " .. key .. "\r\n",
 		"Sec-WebSocket-Version: 13\r\n",
 	}
+
+	-- Offer permessage-deflate if compression is requested.
+	if opts.compress then
+		table.insert(lines, "Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n")
+	end
 
 	if opts.subprotocols and #opts.subprotocols > 0 then
 		table.insert(lines, "Sec-WebSocket-Protocol: " .. table.concat(opts.subprotocols, ", ") .. "\r\n")
@@ -703,7 +872,17 @@ local function connect(url: string, options: ConnectOptions?): WebSocket
 		error("WebSocket handshake failed: Sec-WebSocket-Accept mismatch")
 	end
 
-	return WebSocket._new(connSock, true)
+	-- Check if server accepted permessage-deflate.
+	local deflate: DeflateState? = nil
+	if opts.compress then
+		local extHeader = string.match(responseBuf, "[Ss]ec%-[Ww]eb[Ss]ocket%-[Ee]xtensions:%s*([^\r\n]+)")
+		local params = parseDeflateParams(extHeader)
+		if params then
+			deflate = createDeflateState(true, params.noClientTakeover, params.noServerTakeover)
+		end
+	end
+
+	return WebSocket._new(connSock, true, deflate, opts.heartbeat)
 end
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -715,9 +894,13 @@ end
 
 	@interface UpgradeOptions
 	.subprotocol string? -- The sub-protocol to select. Sent back in `Sec-WebSocket-Protocol`.
+	.compress boolean? -- When `true`, accepts `permessage-deflate` if the client offered it.
+	.heartbeat number? -- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 ]=]
 export type UpgradeOptions = {
 	subprotocol: string?,
+	compress: boolean?,
+	heartbeat: number?,
 }
 
 --[=[
@@ -730,9 +913,12 @@ export type UpgradeOptions = {
 	returns a [[WebSocket]] that owns the underlying socket. The HTTP
 	server will **not** close the socket after the handler returns.
 
+	When `compress` is `true` and the client offered `permessage-deflate`,
+	the server accepts and enables compression for the connection.
+
 	```luau
 	http.createServer(function(req, res)
-	    local ws = websocket.upgrade(req, res)
+	    local ws = websocket.upgrade(req, res, { compress = true })
 	    if ws then
 	        -- WebSocket connection established
 	        ws:send("hello")
@@ -778,12 +964,37 @@ local function upgrade(request: http.ServerRequest, response: http.ServerRespons
 	-- Compute accept value and build the 101 response.
 	local accept = computeAccept(key)
 
+	-- Check if the client offered permessage-deflate and we want to accept it.
+	local deflate: DeflateState? = nil
+	local deflateResponseExt: string? = nil
+	if opts.compress then
+		local clientExts = request.headers["sec-websocket-extensions"]
+		local params = parseDeflateParams(clientExts)
+		if params then
+			deflate = createDeflateState(false, params.noClientTakeover, params.noServerTakeover)
+
+			-- Build the response extension header, echoing relevant parameters.
+			local parts = { "permessage-deflate" }
+			if params.noClientTakeover then
+				table.insert(parts, "client_no_context_takeover")
+			end
+			if params.noServerTakeover then
+				table.insert(parts, "server_no_context_takeover")
+			end
+			deflateResponseExt = table.concat(parts, "; ")
+		end
+	end
+
 	local responseLines: { string } = {
 		"HTTP/1.1 101 Switching Protocols\r\n",
 		"Upgrade: websocket\r\n",
 		"Connection: Upgrade\r\n",
 		"Sec-WebSocket-Accept: " .. accept .. "\r\n",
 	}
+
+	if deflateResponseExt then
+		table.insert(responseLines, "Sec-WebSocket-Extensions: " .. deflateResponseExt .. "\r\n")
+	end
 
 	if opts.subprotocol then
 		table.insert(responseLines, "Sec-WebSocket-Protocol: " .. opts.subprotocol .. "\r\n")
@@ -809,7 +1020,7 @@ local function upgrade(request: http.ServerRequest, response: http.ServerRespons
 	response._finished = true
 	(response :: any)._upgraded = true
 
-	return WebSocket._new(sock, false)
+	return WebSocket._new(sock, false, deflate, opts.heartbeat)
 end
 
 -- ───────────────────────────────────────────────────────────────────────────

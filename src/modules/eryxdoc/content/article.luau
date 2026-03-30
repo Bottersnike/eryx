@@ -1,5 +1,5 @@
 local fs = require("@eryx/fs")
-local md = require("@eryx/markdown")
+local markdown = require("@eryx/markdown")
 local yaml = require("@eryx/encoding/yaml")
 
 export type ArticleMeta = { [string]: any }
@@ -107,8 +107,8 @@ function Article.fromFile(path: string): Article
 	return Article.fromSource(source, path)
 end
 
-function Article.generateToc(self: Article): { md.TocEntry }
-	return md.toc(md.parse(self.body))
+function Article.generateToc(self: Article): { markdown.TocEntry }
+	return markdown.toc(markdown.parse(self.body, {}))
 end
 
 return Article

@@ -19,6 +19,8 @@ LUAU_MODULE_INFO()
 // Helpers
 // ---------------------------------------------------------------------------
 
+static constexpr size_t MAX_DECOMPRESS_SIZE = 256 * 1024 * 1024;  // 256 MB
+
 static void* decompress_known_size(lua_State* L, const void* src, size_t srcLen, size_t outLen) {
     void* out = lua_newbuffer(L, outLen);
     size_t ret = ZSTD_decompress(out, outLen, src, srcLen);
@@ -29,6 +31,10 @@ static void* decompress_known_size(lua_State* L, const void* src, size_t srcLen,
 static void push_decompressed(lua_State* L, const void* src, size_t srcLen) {
     unsigned long long cs = ZSTD_getFrameContentSize(src, srcLen);
     if (cs != ZSTD_CONTENTSIZE_UNKNOWN && cs != ZSTD_CONTENTSIZE_ERROR) {
+        if ((size_t)cs > MAX_DECOMPRESS_SIZE) {
+            luaL_error(L, "zstd: decompressed size exceeds limit (%d MB)",
+                       (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+        }
         decompress_known_size(L, src, srcLen, (size_t)cs);
         return;
     }
@@ -41,7 +47,12 @@ static void push_decompressed(lua_State* L, const void* src, size_t srcLen) {
             memcpy(out, tmp.data(), ret);
             return;
         } else if (ZSTD_getErrorCode(ret) == ZSTD_error_dstSize_tooSmall) {
-            tmp.resize(tmp.size() * 2);
+            size_t newSize = tmp.size() * 2;
+            if (newSize > MAX_DECOMPRESS_SIZE) {
+                luaL_error(L, "zstd: decompressed size exceeds limit (%d MB)",
+                           (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+            }
+            tmp.resize(newSize);
         } else {
             luaL_error(L, "zstd: decompress failed: %s", ZSTD_getErrorName(ret));
         }
@@ -163,6 +174,12 @@ static int l_decompress_with_dict(lua_State* L) {
     size_t ret;
 
     if (cs != ZSTD_CONTENTSIZE_UNKNOWN && cs != ZSTD_CONTENTSIZE_ERROR) {
+        if ((size_t)cs > MAX_DECOMPRESS_SIZE) {
+            ZSTD_freeDCtx(dctx);
+            ZSTD_freeDDict(ddict);
+            luaL_error(L, "zstd: decompressed size exceeds limit (%d MB)",
+                       (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+        }
         tmp.resize((size_t)cs);
         ret = ZSTD_decompress_usingDDict(dctx, tmp.data(), tmp.size(), src, srcLen, ddict);
     } else {
@@ -170,10 +187,18 @@ static int l_decompress_with_dict(lua_State* L) {
         while (true) {
             ret = ZSTD_decompress_usingDDict(dctx, tmp.data(), tmp.size(), src, srcLen, ddict);
             if (!ZSTD_isError(ret)) break;
-            if (ZSTD_getErrorCode(ret) == ZSTD_error_dstSize_tooSmall)
-                tmp.resize(tmp.size() * 2);
-            else
+            if (ZSTD_getErrorCode(ret) == ZSTD_error_dstSize_tooSmall) {
+                size_t newSize = tmp.size() * 2;
+                if (newSize > MAX_DECOMPRESS_SIZE) {
+                    ZSTD_freeDCtx(dctx);
+                    ZSTD_freeDDict(ddict);
+                    luaL_error(L, "zstd: decompressed size exceeds limit (%d MB)",
+                               (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+                }
+                tmp.resize(newSize);
+            } else {
                 break;
+            }
         }
     }
 
@@ -228,10 +253,313 @@ static int l_train_dictionary(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming Compress
+// ---------------------------------------------------------------------------
+
+static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;  // 32 KB
+
+static const char* MT_ZSTD_CSTREAM = "zstd.Compressor";
+static const char* MT_ZSTD_DSTREAM = "zstd.Decompressor";
+
+struct LuaZstdCompressor {
+    ZSTD_CStream* cstream;
+    bool closed;
+};
+
+static void zstd_compressor_dtor(void* ud) {
+    auto* c = (LuaZstdCompressor*)ud;
+    if (!c->closed && c->cstream) {
+        ZSTD_freeCStream(c->cstream);
+        c->cstream = nullptr;
+        c->closed = true;
+    }
+}
+
+static LuaZstdCompressor* check_zstd_compressor(lua_State* L) {
+    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+    if (c->closed) luaL_error(L, "zstd: compressor is closed");
+    return c;
+}
+
+// compressor:write(data) -> buffer
+static int l_zstd_compressor_write(lua_State* L) {
+    auto* c = check_zstd_compressor(L);
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+
+    ZSTD_inBuffer input = { src, srcLen, 0 };
+    std::vector<char> out;
+    out.reserve(ZSTD_CStreamOutSize());
+
+    while (input.pos < input.size) {
+        size_t used = out.size();
+        out.resize(used + ZSTD_CStreamOutSize());
+        ZSTD_outBuffer output = { out.data() + used, ZSTD_CStreamOutSize(), 0 };
+
+        size_t ret = ZSTD_compressStream2(c->cstream, &output, &input, ZSTD_e_continue);
+        if (ZSTD_isError(ret))
+            luaL_error(L, "zstd: compress stream error: %s", ZSTD_getErrorName(ret));
+
+        out.resize(used + output.pos);
+    }
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+// compressor:flush() -> buffer
+static int l_zstd_compressor_flush(lua_State* L) {
+    auto* c = check_zstd_compressor(L);
+
+    ZSTD_inBuffer input = { nullptr, 0, 0 };
+    std::vector<char> out;
+
+    size_t remaining;
+    do {
+        size_t used = out.size();
+        out.resize(used + ZSTD_CStreamOutSize());
+        ZSTD_outBuffer output = { out.data() + used, ZSTD_CStreamOutSize(), 0 };
+
+        remaining = ZSTD_compressStream2(c->cstream, &output, &input, ZSTD_e_flush);
+        if (ZSTD_isError(remaining))
+            luaL_error(L, "zstd: flush error: %s", ZSTD_getErrorName(remaining));
+
+        out.resize(used + output.pos);
+    } while (remaining > 0);
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+// compressor:finish() -> buffer
+static int l_zstd_compressor_finish(lua_State* L) {
+    auto* c = check_zstd_compressor(L);
+
+    ZSTD_inBuffer input = { nullptr, 0, 0 };
+    std::vector<char> out;
+
+    size_t remaining;
+    do {
+        size_t used = out.size();
+        out.resize(used + ZSTD_CStreamOutSize());
+        ZSTD_outBuffer output = { out.data() + used, ZSTD_CStreamOutSize(), 0 };
+
+        remaining = ZSTD_compressStream2(c->cstream, &output, &input, ZSTD_e_end);
+        if (ZSTD_isError(remaining))
+            luaL_error(L, "zstd: finish error: %s", ZSTD_getErrorName(remaining));
+
+        out.resize(used + output.pos);
+    } while (remaining > 0);
+
+    ZSTD_freeCStream(c->cstream);
+    c->cstream = nullptr;
+    c->closed = true;
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+static int l_zstd_compressor_close(lua_State* L) {
+    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+    if (!c->closed && c->cstream) {
+        ZSTD_freeCStream(c->cstream);
+        c->cstream = nullptr;
+        c->closed = true;
+    }
+    return 0;
+}
+
+static int l_zstd_compressor_tostring(lua_State* L) {
+    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+    lua_pushfstring(L, "zstd.Compressor(%s)", c->closed ? "closed" : "open");
+    return 1;
+}
+
+// zstd.createCompressor(level?) -> Compressor
+static int l_create_zstd_compressor(lua_State* L) {
+    int level = (int)luaL_optinteger(L, 1, ZSTD_CLEVEL_DEFAULT);
+
+    auto* c =
+        (LuaZstdCompressor*)lua_newuserdatadtor(L, sizeof(LuaZstdCompressor), zstd_compressor_dtor);
+    c->cstream = ZSTD_createCStream();
+    c->closed = false;
+
+    if (!c->cstream) {
+        c->closed = true;
+        luaL_error(L, "zstd: failed to create CStream");
+    }
+
+    size_t ret = ZSTD_initCStream(c->cstream, level);
+    if (ZSTD_isError(ret)) {
+        ZSTD_freeCStream(c->cstream);
+        c->cstream = nullptr;
+        c->closed = true;
+        luaL_error(L, "zstd: initCStream failed: %s", ZSTD_getErrorName(ret));
+    }
+
+    luaL_getmetatable(L, MT_ZSTD_CSTREAM);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Decompress
+// ---------------------------------------------------------------------------
+
+struct LuaZstdDecompressor {
+    ZSTD_DStream* dstream;
+    bool closed;
+    bool finished;
+};
+
+static void zstd_decompressor_dtor(void* ud) {
+    auto* d = (LuaZstdDecompressor*)ud;
+    if (!d->closed && d->dstream) {
+        ZSTD_freeDStream(d->dstream);
+        d->dstream = nullptr;
+        d->closed = true;
+    }
+}
+
+static LuaZstdDecompressor* check_zstd_decompressor(lua_State* L) {
+    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+    if (d->closed) luaL_error(L, "zstd: decompressor is closed");
+    return d;
+}
+
+// decompressor:write(data) -> buffer, finished
+static int l_zstd_decompressor_write(lua_State* L) {
+    auto* d = check_zstd_decompressor(L);
+    if (d->finished) luaL_error(L, "zstd: decompressor already finished");
+
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+
+    ZSTD_inBuffer input = { src, srcLen, 0 };
+    std::vector<char> out;
+    out.reserve(ZSTD_DStreamOutSize());
+
+    while (input.pos < input.size) {
+        size_t used = out.size();
+        if (used + ZSTD_DStreamOutSize() > MAX_DECOMPRESS_SIZE) {
+            luaL_error(L, "zstd: decompressed size exceeds limit (%d MB)",
+                       (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+        }
+        out.resize(used + ZSTD_DStreamOutSize());
+        ZSTD_outBuffer output = { out.data() + used, ZSTD_DStreamOutSize(), 0 };
+
+        size_t ret = ZSTD_decompressStream(d->dstream, &output, &input);
+        if (ZSTD_isError(ret))
+            luaL_error(L, "zstd: decompress stream error: %s", ZSTD_getErrorName(ret));
+
+        out.resize(used + output.pos);
+
+        if (ret == 0) {
+            d->finished = true;
+            break;
+        }
+    }
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    lua_pushboolean(L, d->finished);
+    return 2;
+}
+
+static int l_zstd_decompressor_close(lua_State* L) {
+    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+    if (!d->closed && d->dstream) {
+        ZSTD_freeDStream(d->dstream);
+        d->dstream = nullptr;
+        d->closed = true;
+    }
+    return 0;
+}
+
+static int l_zstd_decompressor_tostring(lua_State* L) {
+    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+    const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
+    lua_pushfstring(L, "zstd.Decompressor(%s)", state);
+    return 1;
+}
+
+// zstd.createDecompressor() -> Decompressor
+static int l_create_zstd_decompressor(lua_State* L) {
+    auto* d = (LuaZstdDecompressor*)lua_newuserdatadtor(L, sizeof(LuaZstdDecompressor),
+                                                        zstd_decompressor_dtor);
+    d->dstream = ZSTD_createDStream();
+    d->closed = false;
+    d->finished = false;
+
+    if (!d->dstream) {
+        d->closed = true;
+        luaL_error(L, "zstd: failed to create DStream");
+    }
+
+    size_t ret = ZSTD_initDStream(d->dstream);
+    if (ZSTD_isError(ret)) {
+        ZSTD_freeDStream(d->dstream);
+        d->dstream = nullptr;
+        d->closed = true;
+        luaL_error(L, "zstd: initDStream failed: %s", ZSTD_getErrorName(ret));
+    }
+
+    luaL_getmetatable(L, MT_ZSTD_DSTREAM);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_zstd(lua_State* L) {
+    // Register Compressor metatable
+    luaL_newmetatable(L, MT_ZSTD_CSTREAM);
+    {
+        static const luaL_Reg methods[] = {
+            { "write", l_zstd_compressor_write },
+            { "flush", l_zstd_compressor_flush },
+            { "finish", l_zstd_compressor_finish },
+            { "close", l_zstd_compressor_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_zstd_compressor_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_zstd_compressor_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    // Register Decompressor metatable
+    luaL_newmetatable(L, MT_ZSTD_DSTREAM);
+    {
+        static const luaL_Reg methods[] = {
+            { "write", l_zstd_decompressor_write },
+            { "close", l_zstd_decompressor_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_zstd_decompressor_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_zstd_decompressor_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {
@@ -242,6 +570,8 @@ LUAU_MODULE_EXPORT int luauopen_zstd(lua_State* L) {
         { "compressWithDict", l_compress_with_dict },
         { "decompressWithDict", l_decompress_with_dict },
         { "trainDictionary", l_train_dictionary },
+        { "createCompressor", l_create_zstd_compressor },
+        { "createDecompressor", l_create_zstd_decompressor },
         { nullptr, nullptr },
     };
     for (const luaL_Reg* f = fns; f->name; f++) {

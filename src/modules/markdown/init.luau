@@ -1,90 +1,139 @@
---[=[
-	Markdown parser and HTML renderer.
+local block = require("@self/parseBlock")
+local inline = require("@self/parseInline")
+local types = require("@self/types")
+local html = require("@self/html")
+local rules = require("@self/rules")
+local util = require("@self/util")
 
-	Converts a Markdown string to an IR (intermediate representation) of
-	nested Luau tables via [[parse]], then renders the IR to HTML via
-	[[@eryx/markdown/html.render|html.render]].  A table of contents can be extracted with [[toc]].
+-- Built-in inline extensions
+local AutolinkRule = require("@self/rules/autolink")
+local InlineHtmlRule = require("@self/rules/inlineHtml")
 
-	**Two-step pipeline:**
-	```luau
-	local md   = require("@eryx/markdown")
-	local html = require("@eryx/markdown/html")
-	local doc  = md.parse(source)
-	print(html.render(doc))
-	```
-
-	**Block syntax:**
-	- Headings: `# H1` through `###### H6` (with auto-ID anchors)
-	- Paragraphs (blank-line separated)
-	- Fenced code blocks ` ```lang ... ``` `
-	- Unordered lists (`- item`, `* item`)
-	- Ordered lists (`1. item`)
-	- Blockquotes (`> text`)
-	- Tables (`| col | col |`)
-	- Admonitions (`:::caution ... :::`)
-	- Horizontal rules (`---`, `***`, `___`)
-
-	**Inline syntax:**
-	- Bold: `**text**` or `__text__`
-	- Italic: `*text*` or `_text_`
-	- Bold+italic: `***text***`
-	- Strikethrough: `~~text~~`
-	- Inline code: `` `code` ``
-	- Links: `[text](url)`
-	- Wiki-links: `[[target]]` or `[[target|label]]`
-]=]
-
-local parse = require("@self/parse")
-
---- A single entry in a table of contents, as returned by [[toc]].
 export type TocEntry = { level: number, id: string, text: string }
+
+local EXTENSIONS: { types.AnyBlockRule } = {
+	require("@eryx/markdown/extensions/table"),
+	require("@eryx/markdown/extensions/footnote"),
+	require("@eryx/markdown/extensions/admonition"),
+	require("@eryx/markdown/extensions/tabs").TabGroupRule,
+	require("@eryx/markdown/extensions/tabs").TabPanelRule,
+}
+local INLINE_EXTENSIONS: { types.InlineRule } = {
+	require("@eryx/markdown/extensions/footnoteInline"),
+	require("@eryx/markdown/extensions/colour"),
+
+	-- We can't do wikilinks by default because they need a resolver
+	-- wikilinkRuleBuilder(wikilinkResolver),
+}
+local INLINE_EMPHASIS_EXTENSIONS: { types.InlineEmphasisRule } = {
+	require("@eryx/markdown/extensions/strikethrough"),
+}
 
 local markdown = {}
 
---[=[
-	Parses a Markdown string into a [[parse.DocumentNode|DocumentNode]] IR tree.
+export type MarkdownConfig = types.MarkdownConfig
 
-	```luau
-	local doc = md.parse("# Hello\n\n**World**!\n\n> A quote.")
-	print(doc.type)              -- "document"
-	print(doc.children[1].type)  -- "heading"
-	print(doc.children[1].id)    -- "hello"
-	```
+local function prepareConfig(config: MarkdownConfig): MarkdownConfig
+	-- local start = os.clock()
+	if config.extensions and config.extraExtensions then
+		error("Cannot specify both extensions and extraExtensions")
+	end
+	if config.inlineExtensions and config.extraInlineExtensions then
+		error("Cannot specify both inlineExtensions and extraInlineExtensions")
+	end
+	if config.inlineEmphasisExtensions and config.extraInlineEmphasisExtensions then
+		error("Cannot specify both inlineEmphasisExtensions and extraInlineEmphasisExtensions")
+	end
 
-	@param source The Markdown source string.
-	@return DocumentNode -- The root of the IR tree.
-]=]
-function markdown.parse(source: string): parse.DocumentNode
-	return { type = "document", children = parse.parseBlocks(source) }
+	local realConfig = table.clone(config)
+	-- Join in all extensions
+
+	if not config.extensions then
+		-- Default to enabling all extensions
+		realConfig.extensions = rules.collect(EXTENSIONS)
+	else
+		realConfig.extensions = rules.collect(config.extensions)
+	end
+	if not config.inlineExtensions then
+		-- Default to enabling all extensions
+		realConfig.inlineExtensions = INLINE_EXTENSIONS
+	else
+		realConfig.inlineExtensions = table.clone(config.inlineExtensions)
+	end
+	if not config.inlineEmphasisExtensions then
+		realConfig.inlineEmphasisExtensions = INLINE_EMPHASIS_EXTENSIONS
+	else
+		realConfig.inlineEmphasisExtensions = table.clone(config.inlineEmphasisExtensions)
+	end
+
+	assert(realConfig.extensions)
+	assert(realConfig.inlineExtensions)
+	assert(realConfig.inlineEmphasisExtensions)
+
+	if config.extraExtensions then
+		for _, i in config.extraExtensions do
+			table.insert(realConfig.extensions, i)
+		end
+	end
+	if config.extraInlineExtensions then
+		for _, i in config.extraInlineExtensions do
+			table.insert(realConfig.inlineExtensions, i)
+		end
+	end
+	if config.extraInlineEmphasisExtensions then
+		for _, i in config.extraInlineEmphasisExtensions do
+			table.insert(realConfig.inlineEmphasisExtensions, i)
+		end
+	end
+
+	-- Enable built-in inline extensions
+	table.insert(realConfig.inlineExtensions, AutolinkRule)
+	table.insert(realConfig.inlineExtensions, InlineHtmlRule)
+
+	-- print("Config took", os.clock() - start)
+	return realConfig
 end
 
---[=[
-	Extracts a flat table of contents from a parsed document.
+local Markdown = {}
+Markdown.__index = Markdown
+export type Markdown = setmetatable<{ config: types.MarkdownConfig }, typeof(Markdown)>
+function Markdown.new(config: MarkdownConfig): Markdown
+	local this = {}
 
-	Returns one [[TocEntry]] per heading in document order.
+	this.config = prepareConfig(config)
 
-	```luau
-	local doc = md.parse(source)
-	for _, entry in md.toc(doc) do
-	    print(entry.level, entry.id, entry.text)
-	end
-	```
+	return setmetatable(this, Markdown)
+end
+function Markdown.parse(self: Markdown, source: string): types.DocumentBlockNode
+	local doc, orphans = block.parse(source, self.config.extensions)
+	return inline.parse(doc, orphans, self.config)
+end
+function Markdown.renderHtml(self: Markdown, doc: types.DocumentBlockNode): string
+	return html.renderDocument(doc, self.config)
+end
+markdown.Markdown = table.freeze(Markdown)
 
-	@param doc The [[parse.DocumentNode|DocumentNode]] to extract headings from.
-	@return {TocEntry} -- Ordered list of heading entries.
-]=]
-function markdown.toc(doc: parse.DocumentNode): { TocEntry }
+function markdown.parse(source: string, config: MarkdownConfig): types.DocumentBlockNode
+	local realConfig = prepareConfig(config)
+	local doc, orphans = block.parse(source, realConfig.extensions)
+	return inline.parse(doc, orphans, realConfig)
+end
+function markdown.toc(doc: types.DocumentBlockNode): { TocEntry }
 	local entries: { TocEntry } = {}
 	for _, block in doc.children do
 		if block.type == "heading" then
+			local text = util.getPlainText(block.inlines)
 			table.insert(entries, {
 				level = block.level,
-				id = block.id,
-				text = parse.inlineText(block.children),
+				id = util.slugify(text),
+				text = text,
 			})
 		end
 	end
 	return entries
 end
+function markdown.renderHtml(doc: types.DocumentBlockNode, config: MarkdownConfig): string
+	return html.renderDocument(doc, prepareConfig(config))
+end
 
-return markdown
+return table.freeze(markdown)

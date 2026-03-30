@@ -4,6 +4,7 @@
 #include "Luau/Config.h"
 #include "Luau/LuauConfig.h"
 #include "lrequire.hpp"
+#include "lresolve.hpp"
 
 namespace fs = std::filesystem;
 
@@ -196,12 +197,12 @@ static std::optional<std::string> createLuauConfigFromLuauTable(
 // #endregion
 
 static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::path directory,
-                          Luau::Config& cfg) {
+                          Luau::Config& cfg, const std::string& cacheKey) {
     // Execute in a fresh thread (keep it on GL's stack so GC doesn't collect it)
     lua_State* GL = lua_mainthread(L);
     lua_State* CL = lua_newthread(GL);
 
-    int ok = eryx_execute_module_script(CL, source, std::string("@") + path.string());
+    int ok = eryx_execute_module_script(CL, source, std::string("@") + path.string(), cacheKey);
     if (!ok) {
         luaL_error(L, "Error executing " PATH_PRINTF, path.c_str());
     }
@@ -477,7 +478,13 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
                            (*err).c_str());
             }
         } else {
-            runLuauConfig(L, it->file, contents, configDir, cfg);
+            std::string cacheKey;
+            if (it->isVFS)
+                cacheKey = std::to_string(LocatedModule::TYPE_VFS) + ":" + it->vfsPath;
+            else
+                cacheKey = std::to_string(LocatedModule::TYPE_VFS) + ":" + it->file.string();
+
+            runLuauConfig(L, it->file, contents, configDir, cfg, cacheKey);
         }
     }
 

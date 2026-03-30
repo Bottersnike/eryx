@@ -2,7 +2,7 @@
 	RSA asymmetric cryptography.
 
 	Provides key generation, PEM/DER conversion, PKCS#1 v1.5 and OAEP
-	encryption/decryption, and PKCS#1 v1.5 signing/verification.
+	encryption/decryption, and both PKCS#1 v1.5 and PSS signing/verification.
 
 	Keys are represented as PEM strings (the standard `-----BEGIN RSA
 	PRIVATE KEY-----` / `-----BEGIN PUBLIC KEY-----` format). Use
@@ -152,6 +152,45 @@ end
 ]=]
 function rsa.verifyPkcs1(public_pem: string, data: buffer, signature: buffer, hash: string?): boolean
 	return _rsa.verifyPkcs1(public_pem, data, signature, hash)
+end
+
+--[=[
+	Signs `data` using RSA-PSS (Probabilistic Signature Scheme).
+
+	PSS is the modern, preferred RSA signature scheme. Unlike PKCS#1 v1.5,
+	it uses randomized padding and has a formal security proof.
+
+	The data is hashed internally before signing. Supported hash values:
+	`"sha256"` (default), `"sha1"`, `"sha384"`, `"sha512"`.
+
+	```luau
+	local sig = rsa.signPss(priv, buffer.fromstring("message"))
+	assert(rsa.verifyPss(pub, buffer.fromstring("message"), sig))
+	```
+
+	@param private_pem PEM-encoded RSA private key.
+	@param data        Message to sign.
+	@param hash        Hash algorithm - `"sha256"` (default), `"sha1"`, `"sha384"`, `"sha512"`.
+	@return buffer -- Signature (same length as the key modulus).
+]=]
+function rsa.signPss(private_pem: string, data: buffer, hash: string?): buffer
+	return _rsa.sign_pss(private_pem, data, hash)
+end
+
+--[=[
+	Verifies an RSA-PSS signature.
+
+	Returns `true` if the signature is valid for the given data and
+	public key, `false` otherwise.
+
+	@param public_pem PEM-encoded RSA public key.
+	@param data       The original message.
+	@param signature  Signature to verify.
+	@param hash       Hash algorithm - must match what was used for signing.
+	@return boolean -- `true` if the signature is valid.
+]=]
+function rsa.verifyPss(public_pem: string, data: buffer, signature: buffer, hash: string?): boolean
+	return _rsa.verify_pss(public_pem, data, signature, hash)
 end
 
 --[=[

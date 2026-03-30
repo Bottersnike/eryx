@@ -145,7 +145,30 @@ local function collectModules(dir: string, prefix: string, relPath: string): { M
 		local fullPath = dir .. "/" .. entry
 
 		local module = parseModule(fullPath, prefix, relPath)
-		table.insert(modules, module)
+
+		local ignoreModule = false
+		if module.description then
+			for _, line in module.description:split("\n") do
+				if line:sub(1, 7) == "@ignore" then
+					ignoreModule = true
+				end
+			end
+		end
+
+		-- Filter out modules that have nothing to document
+		if
+			not ignoreModule
+			and (
+				module.description
+				or module.primaryExport
+				or #module.classes > 0
+				or #module.functions > 0
+				or #module.types > 0
+				or #module.constants > 0
+			)
+		then
+			table.insert(modules, module)
+		end
 	end
 
 	-- Recurse into subdirectories after processing files at this level

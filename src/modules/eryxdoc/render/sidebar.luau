@@ -21,7 +21,7 @@ local function toSidebar(node: TTree, parentPath: string, activePage: string?): 
 	local result: { SidebarEntry } = {}
 	local anyChildrenOpen = false
 
-	for k, v in pairs(node) do
+	for k, v in node do
 		if type(v) == "table" then
 			local children, hadActiveChildren = toSidebar(v.children, v.path, activePage)
 			if hadActiveChildren then
@@ -102,7 +102,7 @@ local function buildSidebarModuleTree(
 			table.insert(fullParts, p)
 		end
 		local offset = #fullParts - #parts -- how many prefix parts were stripped (e.g. 1 for "@eryx/...")
-		for i, part in ipairs(parts) do
+		for i, part in parts do
 			path = path ~= "" and (path .. "/" .. part) or part
 			if not node[part] then
 				node[part] = { children = {}, info = nil, path = table.concat(fullParts, "/", 1, offset + i) }
@@ -150,7 +150,7 @@ local function toArticleSidebar(
 	local result: { ArticleSidebarEntry } = {}
 	local anyActive = false
 
-	for stem, node in pairs(tree) do
+	for stem, node in tree do
 		local hasChildren = next(node.children) ~= nil
 		local isActive = node.name ~= nil and node.name == activePage
 		if isActive then
@@ -229,7 +229,7 @@ local function buildSidebarArticleSections(
 		end
 
 		local cur = tree
-		for i, part in ipairs(parts) do
+		for i, part in parts do
 			if not cur[part] then
 				insertionCounter += 1
 				cur[part] = { children = {}, insertionOrder = insertionCounter }
@@ -248,7 +248,7 @@ local function buildSidebarArticleSections(
 	local topLevel: { ArticleSidebarEntry } = {}
 
 	local sorted: { { stem: string, node: ANode } } = {}
-	for stem, node in pairs(tree) do
+	for stem, node in tree do
 		table.insert(sorted, { stem = stem, node = node })
 	end
 	table.sort(sorted, function(a, b)

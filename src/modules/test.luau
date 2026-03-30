@@ -58,11 +58,17 @@ type Test = {
 type TestResult = {
 	name: string,
 	passed: boolean,
+	skipped: boolean,
+	skipReason: string?,
 	err: string?,
 	duration: number,
 }
 
-type RunTotals = { passed: number, failed: number }
+type RunTotals = { passed: number, failed: number, skipped: number }
+
+--- Sentinel type thrown by test.skip() / test.skipIf() to signal a skip.
+local SKIP_SENTINEL = newproxy(false)
+type SkipSignal = { __skip: typeof(SKIP_SENTINEL), reason: string? }
 
 -- ── Suite ────────────────────────────────────────────────────────────────────
 
@@ -115,10 +121,17 @@ function Suite.afterEach(self: Suite, fn: () -> ())
 	self.afterEach = fn
 end
 
---- Execute all tests in the suite and print results.  Returns pass/fail totals.
-function Suite.run(self: Suite): RunTotals
+--[=[
+	Execute all tests in the suite and print results.
+
+	@param filter  Optional Lua pattern. When provided, only tests whose name
+	               matches the pattern are executed; the rest are skipped.
+	@return RunTotals -- pass/fail/skip counts.
+]=]
+function Suite.run(self: Suite, filter: string?): RunTotals
 	local passed = 0
 	local failed = 0
+	local skipped = 0
 
 	stdio.write(bold(cyan(`  > {self.name}\n`)))
 
@@ -127,11 +140,24 @@ function Suite.run(self: Suite): RunTotals
 		local ok, err = r[1], r[2]
 		if not ok then
 			stdio.write(red(`    beforeAll failed: {fmtErr(err)}\n\n`))
-			return { passed = 0, failed = #self.tests }
+			return { passed = 0, failed = #self.tests, skipped = 0 }
 		end
 	end
 
 	for _, t in self.tests do
+		-- Filter by name pattern
+		if filter and not string.find(t.name, filter) then
+			skipped += 1
+			stdio.write(`    {dim("-")} {dim(t.name)} {dim("(filtered)")}\n`)
+			table.insert(self.results, {
+				name = t.name,
+				passed = true,
+				skipped = true,
+				duration = 0,
+			})
+			continue
+		end
+
 		if self.beforeEach then
 			pcall(self.beforeEach :: () -> ())
 		end
@@ -140,19 +166,42 @@ function Suite.run(self: Suite): RunTotals
 		local ok, err = pcall(t.runner)
 		local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
 
-		if ok then
+		-- Check if the test called test.skip() / test.skipIf()
+		if not ok and type(err) == "table" and (err :: any).__skip == SKIP_SENTINEL then
+			skipped += 1
+			local reason = (err :: SkipSignal).reason
+			local label = if reason then `(skipped: {reason})` else "(skipped)"
+			stdio.write(`    {dim("-")} {dim(t.name)} {dim(label)}\n`)
+			table.insert(self.results, {
+				name = t.name,
+				passed = true,
+				skipped = true,
+				skipReason = reason,
+				duration = os.clock() - t0,
+			})
+		elseif ok then
 			passed += 1
 			stdio.write(`    {green("+")} {dim(t.name)} {dim(elapsed)}\n`)
-			table.insert(self.results, { name = t.name, passed = true, duration = os.clock() - t0 })
+			table.insert(self.results, {
+				name = t.name,
+				passed = true,
+				skipped = false,
+				duration = os.clock() - t0,
+			})
 		else
 			failed += 1
 			local msg = fmtErr(err)
 			stdio.write(`    {red("!")} {bold(t.name)} {dim(elapsed)}\n`)
-			-- Indent each line of the error message
 			for line in msg:gmatch("[^\n]+") do
 				stdio.write(`      {red(line)}\n`)
 			end
-			table.insert(self.results, { name = t.name, passed = false, err = msg, duration = os.clock() - t0 })
+			table.insert(self.results, {
+				name = t.name,
+				passed = false,
+				skipped = false,
+				err = msg,
+				duration = os.clock() - t0,
+			})
 		end
 
 		if self.afterEach then
@@ -164,7 +213,7 @@ function Suite.run(self: Suite): RunTotals
 		pcall(self.afterAll :: () -> ())
 	end
 
-	return { passed = passed, failed = failed }
+	return { passed = passed, failed = failed, skipped = skipped }
 end
 
 test.Suite = Suite
@@ -406,6 +455,43 @@ function test.expect(...: any): Expecter
 	return Expecter.new(...)
 end
 
+--[=[
+	Unconditionally skips the current test. Call at the top of a test body
+	to mark it as not-yet-implemented or temporarily disabled.
+
+	```luau
+	suite:test("future feature", function()
+	    test.skip("not implemented yet")
+	end)
+	```
+
+	@param reason  Optional human-readable reason shown in the test output.
+]=]
+function test.skip(reason: string?)
+	error({ __skip = SKIP_SENTINEL, reason = reason } :: SkipSignal)
+end
+
+--[=[
+	Conditionally skips the current test when `condition` is truthy.
+	Use this for platform-specific tests, tests that require external
+	services, or environment-dependent checks.
+
+	```luau
+	suite:test("unix permissions", function()
+	    test.skipIf(os.platform() == "windows", "unix-only test")
+	    -- ... test code ...
+	end)
+	```
+
+	@param condition  When truthy, the test is skipped.
+	@param reason     Optional reason shown in the test output.
+]=]
+function test.skipIf(condition: any, reason: string?)
+	if condition then
+		error({ __skip = SKIP_SENTINEL, reason = reason } :: SkipSignal)
+	end
+end
+
 -- ── File loading ─────────────────────────────────────────────────────────────
 
 -- Loads a .test.luau file and returns the Suite it returns, or errors.
@@ -421,12 +507,26 @@ end
 
 -- ── runOne ────────────────────────────────────────────────────────────────────
 
---- Load and run a single `.test.luau` file. Exits with code 1 on failure
---- when `exitOnFail` is true (the default).
-function test.runOne(path: string, exitOnFail: boolean?)
-	if exitOnFail == nil then
-		exitOnFail = true
-	end
+--[=[
+	Options for [[runOne]] and [[runAll]].
+]=]
+export type RunOptions = {
+	--- Exit the process with code 1 when any test fails. Defaults to true.
+	exitOnFail: boolean?,
+	--- Lua pattern matched against test names. Only matching tests run;
+	--- the rest are skipped. Equivalent to Jest's `-t` / `--testNamePattern`.
+	filter: string?,
+}
+
+--[=[
+	Load and run a single `.test.luau` file.
+
+	@param path The path to the test file.
+	@param options Run options (exitOnFail, filter).
+]=]
+function test.runOne(path: string, options: RunOptions?)
+	local opts: RunOptions = options or {}
+	local exitOnFail = if opts.exitOnFail ~= nil then opts.exitOnFail else true
 
 	local ok, result = pcall(load_test_file, path)
 	if not ok then
@@ -434,16 +534,16 @@ function test.runOne(path: string, exitOnFail: boolean?)
 		if exitOnFail then
 			os.exit(1)
 		end
-		return { passed = 0, failed = 1 }
+		return { passed = 0, failed = 1, skipped = 0 }
 	end
 
-	local totals = result:run()
+	local totals = result:run(opts.filter)
 	stdio.write("\n")
 
 	if totals.failed > 0 then
 		stdio.write(bold(red("Failed:\n\n")))
 		for _, r in result.results do
-			if not r.passed then
+			if not r.passed and not r.skipped then
 				stdio.write(`  {red("!")} {bold(r.name)}\n`)
 				for line in (r.err or ""):gmatch("[^\n]+") do
 					stdio.write(`      {red(line)}\n`)
@@ -466,16 +566,24 @@ end
 	Walk `path` recursively for files matching `*.test.luau`.
 	Each such file must `return` a `Suite`.
 
-	If `exitOnFail` is true (the default), the process exits with code 1 when
-	any test fails.
+	```luau
+	-- Run all tests:
+	test.runAll("tests/")
+
+	-- Run only tests with "crypto" in the name:
+	test.runAll("tests/", { filter = "crypto" })
+	```
+
+	@param path The directory to search for test files.
+	@param options Run options (exitOnFail, filter).
 ]=]
-function test.runAll(path: string, exitOnFail: boolean?)
-	if exitOnFail == nil then
-		exitOnFail = true
-	end
+function test.runAll(path: string, options: RunOptions?)
+	local opts: RunOptions = options or {}
+	local exitOnFail = if opts.exitOnFail ~= nil then opts.exitOnFail else true
 
 	local totalPassed = 0
 	local totalFailed = 0
+	local totalSkipped = 0
 	local suiteCount = 0
 	local t0 = os.clock()
 
@@ -499,13 +607,14 @@ function test.runAll(path: string, exitOnFail: boolean?)
 					continue
 				end
 				local s = suite :: Suite
-				local totals = s:run()
+				local totals = s:run(opts.filter)
 				totalPassed += totals.passed
 				totalFailed += totals.failed
+				totalSkipped += totals.skipped
 				suiteCount += 1
 				stdio.write("\n")
 				for _, r in s.results do
-					if not r.passed then
+					if not r.passed and not r.skipped then
 						local fe: FailEntry = { suite = s.name, name = r.name, err = (r.err or "") :: string }
 						table.insert(failures, fe)
 					end
@@ -518,16 +627,24 @@ function test.runAll(path: string, exitOnFail: boolean?)
 
 	-- ── Summary ──────────────────────────────────────────────────────────────
 	local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
-	local total = totalPassed + totalFailed
+	local total = totalPassed + totalFailed + totalSkipped
 	local sep = string.rep("-", 40)
 
 	stdio.write(`{sep}\n`)
 	stdio.write(bold(` Suites:  {suiteCount}\n`))
+
+	local testLine = ""
 	if totalFailed > 0 then
-		stdio.write(` Tests:   {green(`{totalPassed} passed`)}, {red(`{totalFailed} failed`)}, {total} total\n`)
+		testLine = ` Tests:   {green(`{totalPassed} passed`)}, {red(`{totalFailed} failed`)}`
 	else
-		stdio.write(` Tests:   {green(`{totalPassed} passed`)}, {total} total\n`)
+		testLine = ` Tests:   {green(`{totalPassed} passed`)}`
 	end
+	if totalSkipped > 0 then
+		testLine ..= `, {dim(`{totalSkipped} skipped`)}`
+	end
+	testLine ..= `, {total} total\n`
+	stdio.write(testLine)
+
 	stdio.write(` Time:    {elapsed}\n`)
 	stdio.write(`{sep}\n`)
 
@@ -548,7 +665,7 @@ function test.runAll(path: string, exitOnFail: boolean?)
 		os.exit(1)
 	end
 
-	return { passed = totalPassed, failed = totalFailed }
+	return { passed = totalPassed, failed = totalFailed, skipped = totalSkipped }
 end
 
 return table.freeze(test)

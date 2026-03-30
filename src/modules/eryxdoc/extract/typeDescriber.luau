@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Converts AST type nodes into human-readable string and structured token representations.
 --
 -- `describeTypeParts` is the single source of truth for rendering types.

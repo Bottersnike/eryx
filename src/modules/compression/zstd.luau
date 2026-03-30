@@ -83,6 +83,45 @@ function zstd.trainDictionary(samples: { buffer }, capacity: number): buffer
 	return nil :: any
 end
 
+--[=[
+	A streaming Zstandard compressor.
+
+	@class Compressor
+]=]
+export type Compressor = {
+	write: (self: Compressor, data: buffer) -> buffer,
+	flush: (self: Compressor) -> buffer,
+	finish: (self: Compressor) -> buffer,
+	close: (self: Compressor) -> (),
+}
+
+--[=[
+	A streaming Zstandard decompressor.
+
+	@class Decompressor
+]=]
+export type Decompressor = {
+	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
+	close: (self: Decompressor) -> (),
+}
+
+--[=[
+	Creates a streaming Zstandard compressor.
+	@param level number? -- compression level (CLEVEL_MIN..CLEVEL_MAX)
+	@return Compressor -- the streaming compressor
+]=]
+function zstd.createCompressor(level: number?): Compressor
+	return nil :: any
+end
+
+--[=[
+	Creates a streaming Zstandard decompressor.
+	@return Decompressor -- the streaming decompressor
+]=]
+function zstd.createDecompressor(): Decompressor
+	return nil :: any
+end
+
 --- Compression level constants
 zstd.CLEVEL_MIN = -131072 :: number --- approximate; call compressBound for the real value
 zstd.CLEVEL_MAX = 22 :: number

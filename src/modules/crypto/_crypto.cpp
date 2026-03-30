@@ -962,6 +962,77 @@ static int rsa_verify_pkcs1(lua_State* L) {
     return 1;
 }
 
+// sign_pss(private_pem, data, hash?) -> signature
+static int rsa_sign_pss(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+    size_t dataLen = 0;
+    const void* data = luaL_checkbuffer(L, 2, &dataLen);
+    const char* hash_name = luaL_optstring(L, 3, "sha256");
+
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+    if (strcmp(hash_name, "sha1") == 0) md_type = MBEDTLS_MD_SHA1;
+    if (strcmp(hash_name, "sha384") == 0) md_type = MBEDTLS_MD_SHA384;
+    if (strcmp(hash_name, "sha512") == 0) md_type = MBEDTLS_MD_SHA512;
+
+    // Hash the data
+    const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(md_type);
+    unsigned char hash[64];
+    mbedtls_md(md_info, (const unsigned char*)data, dataLen, hash);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)pem, strlen(pem) + 1, nullptr, 0);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "rsa_sign_pss", ret);
+    }
+
+    void* sig = lua_newbuffer(L, 512);
+    size_t sig_len = 0;
+    ret = mbedtls_pk_sign_ext(MBEDTLS_PK_SIGALG_RSA_PSS, &pk, md_type, hash,
+                              mbedtls_md_get_size(md_info), (unsigned char*)sig, 512, &sig_len);
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "rsa_sign_pss", ret);
+
+    void* sig2 = lua_newbuffer(L, sig_len);
+    memcpy(sig2, sig, sig_len);
+    lua_remove(L, -2);
+    return 1;
+}
+
+// verify_pss(public_pem, data, signature, hash?) -> boolean
+static int rsa_verify_pss(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+    size_t dataLen = 0;
+    const void* data = luaL_checkbuffer(L, 2, &dataLen);
+    size_t sigLen = 0;
+    const void* sig = luaL_checkbuffer(L, 3, &sigLen);
+    const char* hash_name = luaL_optstring(L, 4, "sha256");
+
+    mbedtls_md_type_t md_type = MBEDTLS_MD_SHA256;
+    if (strcmp(hash_name, "sha1") == 0) md_type = MBEDTLS_MD_SHA1;
+    if (strcmp(hash_name, "sha384") == 0) md_type = MBEDTLS_MD_SHA384;
+    if (strcmp(hash_name, "sha512") == 0) md_type = MBEDTLS_MD_SHA512;
+
+    const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(md_type);
+    unsigned char hash[64];
+    mbedtls_md(md_info, (const unsigned char*)data, dataLen, hash);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)pem, strlen(pem) + 1);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "rsa_verify_pss", ret);
+    }
+
+    ret = mbedtls_pk_verify_ext(MBEDTLS_PK_SIGALG_RSA_PSS, &pk, md_type, hash,
+                                mbedtls_md_get_size(md_info), (const unsigned char*)sig, sigLen);
+    mbedtls_pk_free(&pk);
+    lua_pushboolean(L, ret == 0);
+    return 1;
+}
+
 // private_to_der(private_pem: string) -> buffer
 static int rsa_private_to_der(lua_State* L) {
     const char* pem = luaL_checkstring(L, 1);
@@ -1071,10 +1142,6 @@ static int rsa_get_key_bits(lua_State* L) {
     lua_pushnumber(L, (lua_Number)bits);
     return 1;
 }
-
-// ---------------------------------------------------------------------------
-// Random
-// ---------------------------------------------------------------------------
 
 // Helper: fill buffer with secure random bytes
 static void secure_random_bytes(lua_State* L, void* out, size_t out_len) {
@@ -1192,6 +1259,10 @@ static void push_rsa_table(lua_State* L) {
     lua_setfield(L, -2, "sign_pkcs1");
     lua_pushcfunction(L, rsa_verify_pkcs1, "verify_pkcs1");
     lua_setfield(L, -2, "verify_pkcs1");
+    lua_pushcfunction(L, rsa_sign_pss, "sign_pss");
+    lua_setfield(L, -2, "sign_pss");
+    lua_pushcfunction(L, rsa_verify_pss, "verify_pss");
+    lua_setfield(L, -2, "verify_pss");
     lua_pushcfunction(L, rsa_private_to_der, "private_to_der");
     lua_setfield(L, -2, "private_to_der");
     lua_pushcfunction(L, rsa_public_to_der, "public_to_der");

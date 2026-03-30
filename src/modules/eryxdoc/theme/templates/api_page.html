@@ -156,6 +156,8 @@
             {{ module.description | markdown }}
         {% end %}
 
+        {% if module.primaryExport or module.classes | length > 0 or module.functions | length > 0 then %}
+
         <h2>Summary</h2>
 
         {% if module.primaryExport then %}
@@ -200,6 +202,10 @@
         {% end %}
         {% end %}
         {% end %}
+
+        {% end %}
+
+        {% if module.primaryExport or module.classes | length > 0 or functionGroups | length > 0 or module.types | length > 0 or module.constants | length > 0 then %}
 
         <h2>API Reference</h2>
 
@@ -296,6 +302,8 @@
             <li id="const-{{c.owner|escape}}.{{c.name|escape}}"><code>{{ c.owner | escape }}.{{ c.name | escape }}</code> = <code>{{ c.value | highlight }}</code>{% if c.doc then %}<span class="const-desc"> - {{c.doc}}</span>{% end %}</li>
             {% end %}
         </ul>
+        {% end %}
+
         {% end %}
     </div>
 </main>

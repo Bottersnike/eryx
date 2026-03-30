@@ -1,13 +1,16 @@
--- Public API for extracting structured documentation from a Luau parse result.
---
--- Usage:
---   local extract = require("eryxdoc/extract")
---   local luau = require("@eryx/luau")
---
---   local source = fs.openSync("mymodule.luau"):readSync()
---   local result = luau.parse(source, { captureComments = true })
---   local docs = extract.extract(result, string.split(source, "\n"))
---   -- docs.functions, docs.types, docs.constants, docs.moduleDescription
+--- Public API for extracting structured documentation from a Luau parse result.
+---
+--- Usage:
+---
+--- ```luau
+--- local extract = require("eryxdoc/extract")
+--- local luau = require("@eryx/luau")
+---
+--- local source = fs.openSync("mymodule.luau"):readSync()
+--- local result = luau.parse(source, { captureComments = true })
+--- local docs = extract.extract(result, string.split(source, "\n"))
+--- -- docs.functions, docs.types, docs.constants, docs.moduleDescription
+--- ```
 
 local luau = require("@eryx/luau")
 local doctags = require("@self/../parse/doctags")
@@ -33,7 +36,9 @@ local parseDocTags = doctags.parseDocTags
 local tp = td.tp
 local tpExtend = td.tpExtend
 
-local function extract(result: luau.ParseResult, sourceLines: { string }): ExtractedDocs
+local extract = {}
+
+function extract.extract(result: luau.ParseResult, sourceLines: { string }): ExtractedDocs
 	local commentBlocks, inlineComments = comments.collectComments(result, sourceLines)
 
 	-- ── Module description detection ─────────────────────────────────────
@@ -198,7 +203,30 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 
 	-- ── Extract a literal value string from an expression ────────────────
 	local function extractLiteralValue(val: luau.AstExpr): string?
-		if val.type == "ExprConstantNumber" then
+		if val.type == "ExprTable" then
+			local chunks: { string } = {}
+			for _, i in val.items do
+				local v = extractLiteralValue(i.value)
+				if not v then
+					continue
+				end
+				if not i.key then
+					table.insert(chunks, v)
+					continue
+				end
+				local k = extractLiteralValue(i.key)
+				if not k then
+					continue
+				end
+				table.insert(chunks, `[{k}] = {v}`)
+			end
+			if #chunks == 0 then
+				return nil
+			end
+			return "{" .. table.concat(chunks, " ") .. "}"
+
+			-- return tostring((val :: luau.ExprConstantNumber).value)
+		elseif val.type == "ExprConstantNumber" then
 			return tostring((val :: luau.ExprConstantNumber).value)
 		elseif val.type == "ExprConstantString" then
 			return '"' .. (val :: luau.ExprConstantString).value .. '"'
@@ -631,10 +659,8 @@ local function extract(result: luau.ParseResult, sourceLines: { string }): Extra
 	}
 end
 
--- Re-export types and key functions for library consumers
-return {
-	extract = extract,
-	describeType = td.describeType,
-	describeTypeParts = td.describeTypeParts,
-	describeTypeFull = td.describeTypeFull,
-}
+extract.describeType = td.describeType
+extract.describeTypeParts = td.describeTypeParts
+extract.describeTypeFull = td.describeTypeFull
+
+return extract

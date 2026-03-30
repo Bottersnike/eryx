@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Builds FuncDoc records from type table properties (class members and properties).
 
 local luau = require("@eryx/luau")

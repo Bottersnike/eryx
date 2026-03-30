@@ -116,6 +116,9 @@ static int l_compress_ex(lua_State* L) {
 // ---------------------------------------------------------------------------
 // decompress(data) -> buffer
 // ---------------------------------------------------------------------------
+
+static constexpr size_t MAX_DECOMPRESS_SIZE = 256 * 1024 * 1024;  // 256 MB
+
 static int l_decompress(lua_State* L) {
     size_t srcLen = 0;
     const void* src = luaL_checkbuffer(L, 1, &srcLen);
@@ -130,7 +133,15 @@ static int l_decompress(lua_State* L) {
     int ret = Z_OK;
     while (ret != Z_STREAM_END) {
         size_t used = (size_t)strm.total_out;
-        if (used == out.size()) out.resize(out.size() * 2);
+        if (used == out.size()) {
+            size_t newSize = out.size() * 2;
+            if (newSize > MAX_DECOMPRESS_SIZE) {
+                inflateEnd(&strm);
+                luaL_error(L, "gzip: decompressed size exceeds limit (%d MB)",
+                           (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+            }
+            out.resize(newSize);
+        }
         strm.next_out = out.data() + used;
         strm.avail_out = (uInt)(out.size() - used);
         ret = inflate(&strm, Z_NO_FLUSH);
@@ -239,15 +250,292 @@ static int l_read_header(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming Compress
+// ---------------------------------------------------------------------------
+
+static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;  // 32 KB
+
+static const char* MT_GZIP_COMPRESS = "gzip.Compressor";
+static const char* MT_GZIP_DECOMPRESS = "gzip.Decompressor";
+
+struct LuaGzipCompressor {
+    z_stream strm;
+    bool closed;
+};
+
+static void gzip_compressor_dtor(void* ud) {
+    auto* c = (LuaGzipCompressor*)ud;
+    if (!c->closed) {
+        deflateEnd(&c->strm);
+        c->closed = true;
+    }
+}
+
+static LuaGzipCompressor* check_compressor(lua_State* L) {
+    auto* c = (LuaGzipCompressor*)luaL_checkudata(L, 1, MT_GZIP_COMPRESS);
+    if (c->closed) luaL_error(L, "gzip: compressor is closed");
+    return c;
+}
+
+// compressor:write(data, flush?) -> buffer
+static int l_compressor_write(lua_State* L) {
+    auto* c = check_compressor(L);
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+    int flush = (int)luaL_optinteger(L, 3, Z_NO_FLUSH);
+
+    c->strm.next_in = (Bytef*)src;
+    c->strm.avail_in = (uInt)srcLen;
+
+    std::vector<Bytef> out;
+    out.reserve(srcLen < STREAM_CHUNK_SIZE ? STREAM_CHUNK_SIZE : srcLen);
+
+    do {
+        size_t used = out.size();
+        out.resize(used + STREAM_CHUNK_SIZE);
+        c->strm.next_out = out.data() + used;
+        c->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        int ret = deflate(&c->strm, flush);
+        if (ret == Z_STREAM_ERROR) luaL_error(L, "gzip: deflate stream error");
+
+        size_t produced = STREAM_CHUNK_SIZE - c->strm.avail_out;
+        out.resize(used + produced);
+    } while (c->strm.avail_out == 0);
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+// compressor:finish() -> buffer
+static int l_compressor_finish(lua_State* L) {
+    auto* c = check_compressor(L);
+
+    c->strm.next_in = nullptr;
+    c->strm.avail_in = 0;
+
+    std::vector<Bytef> out;
+    int ret;
+    do {
+        size_t used = out.size();
+        out.resize(used + STREAM_CHUNK_SIZE);
+        c->strm.next_out = out.data() + used;
+        c->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        ret = deflate(&c->strm, Z_FINISH);
+        if (ret == Z_STREAM_ERROR) luaL_error(L, "gzip: deflate stream error");
+
+        size_t produced = STREAM_CHUNK_SIZE - c->strm.avail_out;
+        out.resize(used + produced);
+    } while (ret != Z_STREAM_END);
+
+    deflateEnd(&c->strm);
+    c->closed = true;
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    return 1;
+}
+
+static int l_compressor_close(lua_State* L) {
+    auto* c = (LuaGzipCompressor*)luaL_checkudata(L, 1, MT_GZIP_COMPRESS);
+    if (!c->closed) {
+        deflateEnd(&c->strm);
+        c->closed = true;
+    }
+    return 0;
+}
+
+static int l_compressor_tostring(lua_State* L) {
+    auto* c = (LuaGzipCompressor*)luaL_checkudata(L, 1, MT_GZIP_COMPRESS);
+    lua_pushfstring(L, "gzip.Compressor(%s)", c->closed ? "closed" : "open");
+    return 1;
+}
+
+// gzip.createCompressor(level?) -> Compressor
+static int l_create_compressor(lua_State* L) {
+    int level = (int)luaL_optinteger(L, 1, Z_DEFAULT_COMPRESSION);
+
+    auto* c =
+        (LuaGzipCompressor*)lua_newuserdatadtor(L, sizeof(LuaGzipCompressor), gzip_compressor_dtor);
+    memset(&c->strm, 0, sizeof(z_stream));
+    c->closed = false;
+
+    int ret = deflateInit2(&c->strm, level, Z_DEFLATED, 15 + 16, 8, Z_DEFAULT_STRATEGY);
+    if (ret != Z_OK) {
+        c->closed = true;
+        luaL_error(L, "gzip: deflateInit2 failed (%d)", ret);
+    }
+
+    luaL_getmetatable(L, MT_GZIP_COMPRESS);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// Streaming Decompress
+// ---------------------------------------------------------------------------
+
+struct LuaGzipDecompressor {
+    z_stream strm;
+    bool closed;
+    bool finished;
+};
+
+static void gzip_decompressor_dtor(void* ud) {
+    auto* d = (LuaGzipDecompressor*)ud;
+    if (!d->closed) {
+        inflateEnd(&d->strm);
+        d->closed = true;
+    }
+}
+
+static LuaGzipDecompressor* check_decompressor(lua_State* L) {
+    auto* d = (LuaGzipDecompressor*)luaL_checkudata(L, 1, MT_GZIP_DECOMPRESS);
+    if (d->closed) luaL_error(L, "gzip: decompressor is closed");
+    return d;
+}
+
+// decompressor:write(data) -> buffer, finished
+static int l_decompressor_write(lua_State* L) {
+    auto* d = check_decompressor(L);
+    if (d->finished) luaL_error(L, "gzip: decompressor already finished");
+
+    size_t srcLen = 0;
+    const void* src = luaL_checkbuffer(L, 2, &srcLen);
+
+    d->strm.next_in = (Bytef*)src;
+    d->strm.avail_in = (uInt)srcLen;
+
+    std::vector<Bytef> out;
+    out.reserve(srcLen < STREAM_CHUNK_SIZE ? STREAM_CHUNK_SIZE : srcLen * 2);
+
+    int ret = Z_OK;
+    do {
+        size_t used = out.size();
+        if (used + STREAM_CHUNK_SIZE > MAX_DECOMPRESS_SIZE) {
+            luaL_error(L, "gzip: decompressed size exceeds limit (%d MB)",
+                       (int)(MAX_DECOMPRESS_SIZE / (1024 * 1024)));
+        }
+        out.resize(used + STREAM_CHUNK_SIZE);
+        d->strm.next_out = out.data() + used;
+        d->strm.avail_out = (uInt)STREAM_CHUNK_SIZE;
+
+        ret = inflate(&d->strm, Z_NO_FLUSH);
+        if (ret == Z_STREAM_ERROR || ret == Z_DATA_ERROR || ret == Z_MEM_ERROR ||
+            ret == Z_NEED_DICT) {
+            luaL_error(L, "gzip: inflate error (%d)", ret);
+        }
+
+        size_t produced = STREAM_CHUNK_SIZE - d->strm.avail_out;
+        out.resize(used + produced);
+
+        if (ret == Z_STREAM_END) {
+            d->finished = true;
+            break;
+        }
+    } while (d->strm.avail_out == 0);
+
+    void* buf = lua_newbuffer(L, out.size());
+    if (!out.empty()) memcpy(buf, out.data(), out.size());
+    lua_pushboolean(L, d->finished);
+    return 2;
+}
+
+static int l_decompressor_close(lua_State* L) {
+    auto* d = (LuaGzipDecompressor*)luaL_checkudata(L, 1, MT_GZIP_DECOMPRESS);
+    if (!d->closed) {
+        inflateEnd(&d->strm);
+        d->closed = true;
+    }
+    return 0;
+}
+
+static int l_decompressor_tostring(lua_State* L) {
+    auto* d = (LuaGzipDecompressor*)luaL_checkudata(L, 1, MT_GZIP_DECOMPRESS);
+    const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
+    lua_pushfstring(L, "gzip.Decompressor(%s)", state);
+    return 1;
+}
+
+// gzip.createDecompressor() -> Decompressor
+static int l_create_decompressor(lua_State* L) {
+    auto* d = (LuaGzipDecompressor*)lua_newuserdatadtor(L, sizeof(LuaGzipDecompressor),
+                                                        gzip_decompressor_dtor);
+    memset(&d->strm, 0, sizeof(z_stream));
+    d->closed = false;
+    d->finished = false;
+
+    int ret = inflateInit2(&d->strm, 15 + 16);
+    if (ret != Z_OK) {
+        d->closed = true;
+        luaL_error(L, "gzip: inflateInit2 failed (%d)", ret);
+    }
+
+    luaL_getmetatable(L, MT_GZIP_DECOMPRESS);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_gzip(lua_State* L) {
+    // Register Compressor metatable
+    luaL_newmetatable(L, MT_GZIP_COMPRESS);
+    {
+        static const luaL_Reg methods[] = {
+            { "write", l_compressor_write },
+            { "finish", l_compressor_finish },
+            { "close", l_compressor_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_compressor_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_compressor_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    // Register Decompressor metatable
+    luaL_newmetatable(L, MT_GZIP_DECOMPRESS);
+    {
+        static const luaL_Reg methods[] = {
+            { "write", l_decompressor_write },
+            { "close", l_decompressor_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, l_decompressor_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, l_decompressor_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {
-        { "compress", l_compress }, { "compressEx", l_compress_ex }, { "decompress", l_decompress },
-        { "isGzip", l_is_gzip },    { "readHeader", l_read_header }, { nullptr, nullptr },
+        { "compress", l_compress },
+        { "compressEx", l_compress_ex },
+        { "decompress", l_decompress },
+        { "isGzip", l_is_gzip },
+        { "readHeader", l_read_header },
+        { "createCompressor", l_create_compressor },
+        { "createDecompressor", l_create_decompressor },
+        { nullptr, nullptr },
     };
     for (const luaL_Reg* f = fns; f->name; f++) {
         lua_pushcfunction(L, f->func, f->name);

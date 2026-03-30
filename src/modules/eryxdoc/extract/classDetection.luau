@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Detects class patterns in type aliases (setmetatable-based class idioms).
 
 local luau = require("@eryx/luau")

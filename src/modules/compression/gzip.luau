@@ -82,6 +82,46 @@ gzip.OS_MAC = 7 :: number
 gzip.OS_NTFS = 11 :: number
 gzip.OS_UNKNOWN = 255 :: number
 
+--[=[
+	A streaming gzip compressor. Feed data incrementally with `write`,
+	then call `finish` to produce the final gzip output.
+
+	@class Compressor
+]=]
+export type Compressor = {
+	write: (self: Compressor, data: buffer, flush: number?) -> buffer,
+	finish: (self: Compressor) -> buffer,
+	close: (self: Compressor) -> (),
+}
+
+--[=[
+	A streaming gzip decompressor. Feed compressed chunks with `write`;
+	the second return value indicates when the stream is complete.
+
+	@class Decompressor
+]=]
+export type Decompressor = {
+	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
+	close: (self: Decompressor) -> (),
+}
+
+--[=[
+	Creates a streaming gzip compressor.
+	@param level number? -- compression level
+	@return Compressor -- the streaming compressor
+]=]
+function gzip.createCompressor(level: number?): Compressor
+	return nil :: any
+end
+
+--[=[
+	Creates a streaming gzip decompressor.
+	@return Decompressor -- the streaming decompressor
+]=]
+function gzip.createDecompressor(): Decompressor
+	return nil :: any
+end
+
 --- Compression levels
 gzip.NO_COMPRESSION = 0 :: number
 gzip.BEST_SPEED = 1 :: number

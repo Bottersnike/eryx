@@ -56,29 +56,29 @@ if ($luau) {
     }
 }
 
-# if ($DryRun) {
-#     if ($formattingChanged) {
-#         Write-Host "Formatting problems detected (dry-run)." -ForegroundColor Yellow
-#         exit 2
-#     } else {
-#         Write-Host "No formatting problems detected (dry-run)."
-#         exit 0
-#     }
-# } else {
-#     $modified = git ls-files -m 2>$null
-#     if ($modified) {
-#         Write-Host "Modified files from formatting:"
-#         $modified | ForEach-Object { Write-Host "  $_" }
-#         if ($ApplyAndAbort) {
-#             git add $modified
-#             Write-Host "Staged formatted files. Aborting commit so you can review." -ForegroundColor Yellow
-#             exit 1
-#         } else {
-#             Write-Host "Run 'git add' to stage changes, or run this script with -ApplyAndAbort from a hook." -ForegroundColor Yellow
-#         }
-#     } else {
-#         Write-Host "No changes from formatting."
-#     }
-# }
+if ($DryRun) {
+    if ($formattingChanged) {
+        Write-Host "Formatting problems detected (dry-run)." -ForegroundColor Yellow
+        exit 2
+    } else {
+        Write-Host "No formatting problems detected (dry-run)."
+        exit 0
+    }
+} else {
+    $modified = git ls-files -m 2>$null
+    if ($modified) {
+        Write-Host "Modified files from formatting:"
+        $modified | ForEach-Object { Write-Host "  $_" }
+        if ($ApplyAndAbort) {
+            git add $modified
+            Write-Host "Staged formatted files. Aborting commit so you can review." -ForegroundColor Yellow
+            exit 1
+        } else {
+            Write-Host "Run 'git add' to stage changes, or run this script with -ApplyAndAbort from a hook." -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "No changes from formatting."
+    }
+}
 
 exit 0

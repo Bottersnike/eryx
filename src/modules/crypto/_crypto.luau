@@ -79,6 +79,8 @@ export type RsaLib = {
 	decrypt_oaep: (private_pem: string, data: buffer, hash: string?) -> buffer,
 	sign_pkcs1: (private_pem: string, data: buffer, hash: string?) -> buffer,
 	verify_pkcs1: (public_pem: string, data: buffer, signature: buffer, hash: string?) -> boolean,
+	sign_pss: (private_pem: string, data: buffer, hash: string?) -> buffer,
+	verify_pss: (public_pem: string, data: buffer, signature: buffer, hash: string?) -> boolean,
 	private_to_der: (private_pem: string) -> buffer,
 	public_to_der: (public_pem: string) -> buffer,
 	private_from_der: (der: buffer) -> string,

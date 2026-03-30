@@ -447,6 +447,24 @@
                 });
             })();
         </script>
-        {% end %} {% if global.extraScripts then %} {{ global.extraScripts }} {% end %}
+        {% end %}
+        <script>
+            (() => {
+                document.addEventListener("click", (e) => {
+                    if (!e.target.matches(".md-tab_group_button")) return;
+
+                    const clickedTab = ([...e.target.parentElement.children]).indexOf(e.target);
+                    for (const child of e.target.parentElement.parentElement.children) {
+                        child.removeAttribute("active");
+                    }
+                    for (const child of e.target.parentElement.children) {
+                        child.removeAttribute("active");
+                    }
+                    e.target.parentElement.parentElement.children[clickedTab + 1].setAttribute("active", "");
+                    e.target.setAttribute("active", "");
+                })
+            })();
+        </script>
+        {% if global.extraScripts then %} {{ global.extraScripts }} {% end %}
     </body>
 </html>

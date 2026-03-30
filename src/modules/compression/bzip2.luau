@@ -42,6 +42,46 @@ function bzip2.compressBound(len: number): number
 	return nil :: any
 end
 
+--[=[
+	A streaming bzip2 compressor.
+
+	@class Compressor
+]=]
+export type Compressor = {
+	write: (self: Compressor, data: buffer) -> buffer,
+	flush: (self: Compressor) -> buffer,
+	finish: (self: Compressor) -> buffer,
+	close: (self: Compressor) -> (),
+}
+
+--[=[
+	A streaming bzip2 decompressor.
+
+	@class Decompressor
+]=]
+export type Decompressor = {
+	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
+	close: (self: Decompressor) -> (),
+}
+
+--[=[
+	Creates a streaming bzip2 compressor.
+	@param blockSize number? -- block size 1..9
+	@return Compressor -- the streaming compressor
+]=]
+function bzip2.createCompressor(blockSize: number?): Compressor
+	return nil :: any
+end
+
+--[=[
+	Creates a streaming bzip2 decompressor.
+	@param small boolean? -- use small-memory decoder
+	@return Decompressor -- the streaming decompressor
+]=]
+function bzip2.createDecompressor(small: boolean?): Decompressor
+	return nil :: any
+end
+
 --- Block size constants
 bzip2.BLOCK_FAST = 1 :: number --- fastest, least memory
 bzip2.BLOCK_BEST = 9 :: number --- best compression, most memory

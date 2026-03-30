@@ -1,3 +1,5 @@
+--- @ignore
+
 -- Function signature extraction and rendering in multiple formats:
 -- compact one-liner, multi-line with doc comments, structured token array, and metadata.
 

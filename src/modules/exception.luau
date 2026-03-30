@@ -23,5 +23,11 @@ end
 function exception.format(error: Exception): string
 	return nil :: any
 end
+function exception.isInterrupt(error: any): boolean
+	if typeof(error) ~= "Exception" then
+		return false
+	end
+	return error.type == "interrupt"
+end
 
 return table.freeze(exception)
