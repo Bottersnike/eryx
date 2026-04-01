@@ -17,10 +17,10 @@ export type Exception = {
 	traceback: { ExceptionFrame },
 }
 
-function exception.new(message: string): Exception
+function exception.new(message: string, parent: Exception?): Exception
 	return nil :: any
 end
-function exception.format(error: Exception): string
+function exception.format(error: Exception, useAnsi: boolean?): string
 	return nil :: any
 end
 function exception.isInterrupt(error: any): boolean

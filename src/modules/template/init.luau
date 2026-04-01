@@ -423,36 +423,19 @@ local function extractErrorData(err: any): any
 	return err
 end
 
--- Formats an error into a string with location context.
--- The structured data is preserved in the thrown table's fields for
--- programmatic access (via Exception .data), while the message itself
--- contains the human-readable location prefix.
-local function formatError(err: any): string
-	local data = extractErrorData(err)
-	if typeof(data) == "table" and data.message then
-		if data.filepath then
-			return `{data.filepath}:{data.line}:{data.col}: {data.message}`
-		else
-			return `{data.line}:{data.col}: {data.message}`
-		end
-	elseif typeof(err) == "Exception" then
-		return err.message
-	end
-	return tostring(err)
-end
-
 -- Re-throws an error with location baked into the message string,
 -- while preserving the full structured data in the table.
 local function rethrowError(err: any)
 	local data = extractErrorData(err)
+	print("!!", data)
 	if typeof(data) == "table" and data.message then
-		-- Clone the table but with the formatted message so the exception
-		-- system shows the location in its output
-		local formatted = formatError(err)
-		data.message = formatted
-		error(data, 0)
+		if data.filepath then
+			error(exception.new(`template {data.filepath}:{data.line}:{data.col}: {data.message}`, err), 3)
+		else
+			error(exception.new(`template <string>:{data.line}:{data.col} {data.message}`, err), 3)
+		end
 	end
-	error(formatError(err), 0)
+	error(err, 0)
 end
 
 -- Forward declaration so evaluateExpr can call evaluateCondition for group nodes.
@@ -779,7 +762,6 @@ function template.evaluate(
 ): string
 	local ok, result = pcall(_evaluateRaw, nodes, ctx, filters)
 	if not ok then
-		print(exception.format(result))
 		rethrowError(result)
 	end
 	return result :: string

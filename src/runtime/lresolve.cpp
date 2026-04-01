@@ -2,8 +2,8 @@
 
 #include <filesystem>
 #include <mutex>
-#include <sstream>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "../vfs.hpp"
 #include "embedded_modules.h"
@@ -12,6 +12,191 @@
 #include "lua.h"
 
 namespace fs = std::filesystem;
+
+namespace {
+
+std::string path_to_string(const fs::path& p) {
+    if (p.empty()) return std::string();
+    auto u8 = p.generic_u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
+std::string normalize_module_key(const fs::path& p) {
+    return p.lexically_normal().generic_string();
+}
+
+bool is_requireable_script_path(const fs::path& path) {
+    std::string filename = path.filename().string();
+    std::string extension = path.extension().string();
+
+    if (filename == ".config.luau") return false;
+    return extension == ".luau" || extension == ".lua";
+}
+
+std::optional<std::string> module_base_key_for_script_path(const fs::path& path) {
+    if (!is_requireable_script_path(path)) return std::nullopt;
+
+    fs::path base =
+        (path.stem() == "init") ? path.parent_path() : fs::path(path).replace_extension();
+
+    return normalize_module_key(base);
+}
+
+int module_priority(const LocatedModule& module) {
+    switch (module.type) {
+        case LocatedModule::TYPE_EMBEDDED_NATIVE:
+            return 0;
+
+        case LocatedModule::TYPE_EMBEDDED_SCRIPT:
+            return module.path.ends_with("/init") ? 2 : 1;
+
+        case LocatedModule::TYPE_FILE:
+        case LocatedModule::TYPE_VFS:
+            if (module.path.ends_with(".luau")) return module.path.ends_with("/init.luau") ? 2 : 0;
+            if (module.path.ends_with(".lua")) return module.path.ends_with("/init.lua") ? 3 : 1;
+            return 4;
+    }
+
+    return 4;
+}
+
+void insert_module_candidate(std::unordered_map<std::string, std::vector<LocatedModule>>& index,
+                             const std::string& baseKey, LocatedModule module) {
+    auto& modules = index[baseKey];
+
+    for (const LocatedModule& existing : modules) {
+        if (existing.type == module.type && existing.path == module.path) return;
+    }
+
+    auto insertAt = modules.begin();
+    int priority = module_priority(module);
+    while (insertAt != modules.end() && module_priority(*insertAt) <= priority) {
+        ++insertAt;
+    }
+
+    modules.insert(insertAt, std::move(module));
+}
+
+struct ResolverVirtualFileSystem {
+    std::mutex mutex;
+    std::unordered_map<std::string, std::vector<LocatedModule>> filesystemModules;
+    std::unordered_set<std::string> indexedFilesystemRoots;
+
+    std::unordered_map<std::string, std::vector<LocatedModule>> bundledVfsModules;
+    bool bundledVfsIndexed = false;
+
+    std::unordered_map<std::string, std::vector<LocatedModule>> embeddedModules;
+    bool embeddedIndexed = false;
+
+    void ensure_filesystem_indexed(const fs::path& root) {
+        if (root.empty()) return;
+
+        fs::path canonicalRoot;
+        try {
+            canonicalRoot = fs::weakly_canonical(root);
+        } catch (...) {
+            return;
+        }
+
+        std::string rootKey = normalize_module_key(canonicalRoot);
+
+        std::scoped_lock lock(mutex);
+        if (!indexedFilesystemRoots.emplace(rootKey).second) return;
+
+        try {
+            for (const auto& entry : fs::recursive_directory_iterator(canonicalRoot)) {
+                if (!entry.is_regular_file()) continue;
+
+                const fs::path& entryPath = entry.path();
+                auto baseKey = module_base_key_for_script_path(entryPath);
+                if (!baseKey) continue;
+
+                insert_module_candidate(
+                    filesystemModules, *baseKey,
+                    LocatedModule{ .path = path_to_string(fs::weakly_canonical(entryPath)),
+                                   .type = LocatedModule::TYPE_FILE });
+            }
+        } catch (...) {
+        }
+    }
+
+    void ensure_bundled_vfs_indexed() {
+        std::scoped_lock lock(mutex);
+        if (bundledVfsIndexed) return;
+        bundledVfsIndexed = true;
+
+        if (!vfs_open()) return;
+
+        for (const std::string& path : vfs_list_dir("")) {
+            auto baseKey = module_base_key_for_script_path(fs::path(path));
+            if (!baseKey) continue;
+
+            insert_module_candidate(bundledVfsModules, *baseKey,
+                                    LocatedModule{ .path = path, .type = LocatedModule::TYPE_VFS });
+        }
+    }
+
+    void ensure_embedded_indexed() {
+        std::scoped_lock lock(mutex);
+        if (embeddedIndexed) return;
+        embeddedIndexed = true;
+
+        if (auto* natives = eryx_get_embedded_native_modules()) {
+            for (auto module = natives; module->modulePath; ++module) {
+                insert_module_candidate(
+                    embeddedModules, normalize_module_key(fs::path(module->modulePath)),
+                    LocatedModule{ .path = module->modulePath,
+                                   .type = LocatedModule::TYPE_EMBEDDED_NATIVE });
+            }
+        }
+
+        if (auto* scripts = eryx_get_embedded_script_modules()) {
+            for (const EmbeddedScriptModule* module = scripts; module->modulePath; ++module) {
+                fs::path modulePath(module->modulePath);
+                auto baseKey = (modulePath.filename() == "init")
+                                   ? normalize_module_key(modulePath.parent_path())
+                                   : normalize_module_key(modulePath);
+
+                insert_module_candidate(
+                    embeddedModules, baseKey,
+                    LocatedModule{ .path = module->modulePath,
+                                   .type = LocatedModule::TYPE_EMBEDDED_SCRIPT });
+            }
+        }
+    }
+
+    std::vector<LocatedModule> lookup_filesystem(const fs::path& base) {
+        ensure_filesystem_indexed(base.parent_path());
+
+        std::scoped_lock lock(mutex);
+        auto it = filesystemModules.find(normalize_module_key(base));
+        return it == filesystemModules.end() ? std::vector<LocatedModule>() : it->second;
+    }
+
+    std::vector<LocatedModule> lookup_bundled_vfs(const std::string& base) {
+        ensure_bundled_vfs_indexed();
+
+        std::scoped_lock lock(mutex);
+        auto it = bundledVfsModules.find(normalize_module_key(fs::path(base)));
+        return it == bundledVfsModules.end() ? std::vector<LocatedModule>() : it->second;
+    }
+
+    std::optional<LocatedModule> lookup_embedded(const std::string& key) {
+        ensure_embedded_indexed();
+
+        std::scoped_lock lock(mutex);
+        auto it = embeddedModules.find(normalize_module_key(fs::path(key)));
+        if (it == embeddedModules.end() || it->second.empty()) return std::nullopt;
+        return it->second.front();
+    }
+};
+
+ResolverVirtualFileSystem& resolver_vfs() {
+    static ResolverVirtualFileSystem index;
+    return index;
+}
+
+}  // namespace
 
 static fs::path getExecutableDir() {
 #if defined(_WIN32)
@@ -28,22 +213,6 @@ static fs::path getExecutableDir() {
 #endif
 }
 
-static EmbeddedModuleEntry eryx_find_embedded_native(const char* modulePath) {
-    auto* modules = eryx_get_embedded_native_modules();
-    if (!modules) return nullptr;
-    for (auto m = modules; m->modulePath; ++m) {
-        if (strcmp(m->modulePath, modulePath) == 0) return m->entry;
-    }
-    return nullptr;
-}
-static const char* eryx_find_embedded_script(const char* modulePath) {
-    auto* modules = eryx_get_embedded_script_modules();
-    if (!modules) return nullptr;
-    for (const EmbeddedScriptModule* m = modules; m->modulePath; ++m) {
-        if (strcmp(m->modulePath, modulePath) == 0) return m->source;
-    }
-    return nullptr;
-}
 /**
  * We trust that all embedded scripts have been structured properly.
  *
@@ -57,21 +226,7 @@ static const char* eryx_find_embedded_script(const char* modulePath) {
  */
 static std::optional<LocatedModule> eryx_resolve_embedded(std::string key) {
     if (!eryx_has_embedded_modules()) return std::nullopt;
-
-    // Try native first (mirrors DLL-before-script priority)
-    if (eryx_find_embedded_native(key.c_str()))
-        return LocatedModule{ .path = key, .type = LocatedModule::TYPE_EMBEDDED_NATIVE };
-
-    // Try script
-    if (eryx_find_embedded_script(key.c_str()))
-        return LocatedModule{ .path = key, .type = LocatedModule::TYPE_EMBEDDED_SCRIPT };
-
-    // Try init pattern for directory-style modules
-    std::string init_key = key + "/init";
-    if (eryx_find_embedded_script(init_key.c_str()))
-        return LocatedModule{ .path = init_key, .type = LocatedModule::TYPE_EMBEDDED_SCRIPT };
-
-    return std::nullopt;
+    return resolver_vfs().lookup_embedded(key);
 }
 
 RequireContext eryx_get_require_context(lua_State* L) {
@@ -177,46 +332,6 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
 
     std::vector<LocatedModule> locatedModules;
 
-    // Build a cache key for this resolution to avoid repeated work on identical
-    // requires. Keep it conservative: include path + a few ctx flags/dirs.
-    auto pathToStr = [](const fs::path& p) -> std::string {
-        if (p.empty()) return std::string();
-        auto u8 = p.u8string();
-        return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
-    };
-
-    std::ostringstream keyBuilder;
-    keyBuilder << (ctx.isVFS ? "1" : "0") << ":" << (ctx.isEmbedded ? "1" : "0") << ":"
-               << (ctx.isInit ? "1" : "0") << ":" << path << ":" << pathToStr(ctx.root) << ":"
-               << pathToStr(ctx.selfDir) << ":" << pathToStr(ctx.callerDir) << ":" << ctx.vfsSelfDir
-               << ":" << ctx.vfsCallerDir << ":" << ctx.embeddedSelfDir << ":"
-               << ctx.embeddedCallerDir;
-    std::string cacheKey = keyBuilder.str();
-
-    static std::unordered_map<std::string, std::vector<LocatedModule>> resolution_cache;
-    static std::mutex cache_mutex;
-
-    // per-VFS and per-filesystem existence caches keyed by the lookup base
-    static std::unordered_map<std::string, std::vector<std::string>> vfs_exists_cache;
-    static std::unordered_map<std::string, std::vector<std::string>> fs_exists_cache;
-
-    // Helper to cache a result and return it. Use a lambda so we don't jump
-    // over local object initializations (no goto).
-    auto cache_and_return =
-        [&](const std::vector<LocatedModule>& res) -> std::vector<LocatedModule> {
-        std::scoped_lock _lock(cache_mutex);
-        resolution_cache.emplace(cacheKey, res);
-        return res;
-    };
-
-    {
-        std::scoped_lock _lock(cache_mutex);
-        auto it = resolution_cache.find(cacheKey);
-        if (it != resolution_cache.end()) {
-            return it->second;
-        }
-    }
-
     fs::path resolvedPath;
 
     // Alias resolution
@@ -263,37 +378,8 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             else
                 key = ctx.vfsSelfDir + "/" + modulePath;
 
-            std::string vfsCandidates[] = {
-                key + ".luau",
-                key + ".lua",
-                key + "/init.luau",
-                key + "/init.lua",
-            };
-            std::vector<std::string> foundVfs;
-            {
-                std::scoped_lock _lock(cache_mutex);
-                auto it = vfs_exists_cache.find(key);
-                if (it != vfs_exists_cache.end()) foundVfs = it->second;
-            }
-
-            if (foundVfs.empty()) {
-                for (auto& c : vfsCandidates) {
-                    if (c == ".config.luau") continue;
-                    if (!vfs_read_file(c).empty()) {
-                        foundVfs.push_back(c);
-                    }
-                }
-                if (!foundVfs.empty()) {
-                    std::scoped_lock _lock(cache_mutex);
-                    vfs_exists_cache.emplace(key, foundVfs);
-                }
-            }
-
-            for (auto& c : foundVfs) {
-                locatedModules.push_back(
-                    LocatedModule{ .path = c, .type = LocatedModule::TYPE_VFS });
-            }
-            if (!locatedModules.empty()) return cache_and_return(locatedModules);
+            locatedModules = resolver_vfs().lookup_bundled_vfs(key);
+            if (!locatedModules.empty()) return locatedModules;
             // Fall through to filesystem @self resolution
             resolvedPath = fs::weakly_canonical(ctx.root / fs::path(key));
         }
@@ -302,7 +388,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             auto module = eryx_resolve_embedded(modulePath);
             if (module) {
                 locatedModules.push_back(*module);
-                return cache_and_return(locatedModules);
+                return locatedModules;
             }
             // Fall back to [exe dir]/modules
             resolvedPath =
@@ -320,7 +406,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             auto module = eryx_resolve_embedded(key);
             if (module) {
                 locatedModules.push_back(*module);
-                return cache_and_return(locatedModules);
+                return locatedModules;
             }
             // Fall through to filesystem @self resolution
             resolvedPath = fs::weakly_canonical(ctx.selfDir / fs::path(modulePath));
@@ -338,38 +424,8 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             fs::path combined = fs::path(ctx.vfsCallerDir) / fs::path(path);
             std::string base = combined.lexically_normal().generic_string();
 
-            std::string vfsCandidates[] = {
-                base + ".luau",
-                base + ".lua",
-                base + "/init.luau",
-                base + "/init.lua",
-            };
-
-            std::vector<std::string> foundVfsBase;
-            {
-                std::scoped_lock _lock(cache_mutex);
-                auto it = vfs_exists_cache.find(base);
-                if (it != vfs_exists_cache.end()) foundVfsBase = it->second;
-            }
-
-            if (foundVfsBase.empty()) {
-                for (auto& c : vfsCandidates) {
-                    if (c == ".config.luau") continue;
-                    if (!vfs_read_file(c).empty()) {
-                        foundVfsBase.push_back(c);
-                    }
-                }
-                if (!foundVfsBase.empty()) {
-                    std::scoped_lock _lock(cache_mutex);
-                    vfs_exists_cache.emplace(base, foundVfsBase);
-                }
-            }
-
-            for (auto& c : foundVfsBase) {
-                locatedModules.push_back(
-                    LocatedModule{ .path = c, .type = LocatedModule::TYPE_VFS });
-            }
-            if (!locatedModules.empty()) return cache_and_return(locatedModules);
+            locatedModules = resolver_vfs().lookup_bundled_vfs(base);
+            if (!locatedModules.empty()) return locatedModules;
 
             // VFS lookup failed - if not isolated, try filesystem from exe dir
             // for paths that resolve at or above the VFS root level.
@@ -389,7 +445,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
             auto module = eryx_resolve_embedded(key);
             if (module) {
                 locatedModules.push_back(*module);
-                return cache_and_return(locatedModules);
+                return locatedModules;
             }
         }
         // Fall back to filesystem resolution
@@ -407,83 +463,16 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
     // VFS overlay - check virtual filesystem before the real one
     if (vfs_open()) {
         // Convert resolvedPath to a VFS-relative path (forward slashes, relative to root)
-        std::string vfsBase = fs::relative(resolvedPath, ctx.root).generic_string();
-
-        std::string vfsCandidates[] = {
-            vfsBase + ".luau",
-            vfsBase + ".lua",
-            vfsBase + "/init.luau",
-            vfsBase + "/init.lua",
-        };
-
-        std::vector<std::string> foundVfsOverlay;
-        {
-            std::scoped_lock _lock(cache_mutex);
-            auto it = vfs_exists_cache.find(vfsBase);
-            if (it != vfs_exists_cache.end()) foundVfsOverlay = it->second;
-        }
-
-        if (foundVfsOverlay.empty()) {
-            for (auto& c : vfsCandidates) {
-                if (c == ".config.luau") continue;
-
-                if (!vfs_read_file(c).empty()) {
-                    foundVfsOverlay.push_back(c);
-                }
-            }
-            if (!foundVfsOverlay.empty()) {
-                std::scoped_lock _lock(cache_mutex);
-                vfs_exists_cache.emplace(vfsBase, foundVfsOverlay);
-            }
-        }
-
-        for (auto& c : foundVfsOverlay) {
-            locatedModules.push_back(LocatedModule{ .path = c, .type = LocatedModule::TYPE_VFS });
-        }
-
-        if (!locatedModules.empty()) return cache_and_return(locatedModules);
-    }
-
-    // Filesystem resolution (with per-base cache to avoid repeated stat calls)
-    fs::path candidates[] = {
-        fs::path(resolvedPath).replace_extension(".luau"),
-        fs::path(resolvedPath).replace_extension(".lua"),
-        resolvedPath / "init.luau",
-        resolvedPath / "init.lua",
-    };
-
-    std::string fsBase = resolvedPath.generic_string();
-    std::vector<std::string> foundFs;
-    {
-        std::scoped_lock _lock(cache_mutex);
-        auto it = fs_exists_cache.find(fsBase);
-        if (it != fs_exists_cache.end()) foundFs = it->second;
-    }
-
-    if (foundFs.empty()) {
-        for (int i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-            // .config.luau files cannot be required!
-            if (candidates[i].string() == ".config.luau") {
-                continue;
-            }
-
-            if (fs::exists(candidates[i])) {
-                auto u8 = candidates[i].u8string();
-                foundFs.push_back(std::string(reinterpret_cast<const char*>(u8.data()), u8.size()));
-            }
-        }
-
-        if (!foundFs.empty()) {
-            std::scoped_lock _lock(cache_mutex);
-            fs_exists_cache.emplace(fsBase, foundFs);
+        std::error_code ec;
+        fs::path relativePath = fs::relative(resolvedPath, ctx.root, ec);
+        if (!ec) {
+            std::string vfsBase = relativePath.generic_string();
+            locatedModules = resolver_vfs().lookup_bundled_vfs(vfsBase);
+            if (!locatedModules.empty()) return locatedModules;
         }
     }
 
-    for (auto& s : foundFs) {
-        locatedModules.push_back(LocatedModule{ .path = s, .type = LocatedModule::TYPE_FILE });
-    }
-
-    return cache_and_return(locatedModules);
+    return resolver_vfs().lookup_filesystem(resolvedPath);
 
     // if (!fs::exists(resolvedPath)) {
     //     return std::nullopt;

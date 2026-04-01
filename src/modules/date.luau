@@ -190,6 +190,10 @@ export type DateTime = setmetatable<
 		--- Returns a new DateTime shifted by `n` calendar years (may be negative).
 		--- Equivalent to `AddMonths(n * 12)`.
 		addYears: (self: DateTime, n: number) -> DateTime,
+
+		--- Returns a human-readable relative time string such as `"2 hours ago"`
+		--- or `"in 3 days"`. When `other` is omitted, the current instant is used.
+		relative: (self: DateTime, other: DateTime?) -> string,
 	},
 	{
 		--- Shift the instant forward by a Duration.

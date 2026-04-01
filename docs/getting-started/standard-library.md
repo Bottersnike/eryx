@@ -26,20 +26,16 @@ The standard library is the core selling point for Eryx. Each available library 
 
 ## Development utilities
 
-| Library           | Status                   | Description                                |
-| ----------------- | ------------------------ | ------------------------------------------ |
-| [[@eryx/pprint]]  | Complete                 | Data pretty-printer                        |
-| [[@eryx/test]]    | Complete                 | Unit testing framework                     |
-| [[@eryx/eryxdoc]] | Complete                 | Documentation generation engine            |
-| [[@eryx/signal]]  | Mostly complete[^signal] | Provides signals that can be subscribed to |
-| [[@eryx/date]]    | Mostly complete[^date]   | Dates and times with timezone support      |
-| Logging           | Planned                  | Structured logging utilities               |
-| Retry helpers     | Planned                  | Helpers for retrying failed actions        |
-| Caching (LRU)?    | Planned                  | Function result caching                    |
-
-[^date]: Relative time formats ("2 hours ago") are missing
-
-[^signal]: Missing any form of error propagation from handlers
+| Library           | Status   | Description                                |
+| ----------------- | -------- | ------------------------------------------ |
+| [[@eryx/pprint]]  | Complete | Data pretty-printer                        |
+| [[@eryx/test]]    | Complete | Unit testing framework                     |
+| [[@eryx/eryxdoc]] | Complete | Documentation generation engine            |
+| [[@eryx/signal]]  | Complete | Provides signals that can be subscribed to |
+| [[@eryx/date]]    | Complete | Dates and times with timezone support      |
+| Logging           | Planned  | Structured logging utilities               |
+| Retry helpers     | Planned  | Helpers for retrying failed actions        |
+| Caching (LRU)?    | Planned  | Function result caching                    |
 
 ## Text processing
 
@@ -53,8 +49,10 @@ The standard library is the core selling point for Eryx. Each available library 
 | Library                            | Status                  | Description                        |
 | ---------------------------------- | ----------------------- | ---------------------------------- |
 | [[@eryx/stdio]]                    | Mostly complete[^stdio] | Standard input and output interact |
-| [[@eryx/argparse]]                 | Partial                 | Command-line option parser         |
+| [[@eryx/argparse]]                 | Partial[^argparse]      | Command-line option parser         |
 | Curses? Maybe? Or just our own TUI | Planned                 | Basic terminal UI functionality    |
+
+[^argparse]: Still lacks some advanced CLI ergonomics, but now supports variadic positionals, multi-value options, mutually exclusive groups, and generated shell completion scripts
 
 [^stdio]: Missing raw mode, line terminators, streaming
 
@@ -79,29 +77,31 @@ The standard library is the core selling point for Eryx. Each available library 
 
 ## Networking
 
-| Library             | Status              | Description                                       |
-| ------------------- | ------------------- | ------------------------------------------------- |
-| [[@eryx/http]]      | Partial[^http]      | HTTP client and server                            |
-| [[@eryx/net]]       | Partial[^net]       | Basic TCP client and server                       |
-| [[@eryx/websocket]] | Partial[^websocket] | Websocket client and server                       |
-| [[@eryx/mime]]      | Unusable[^mime]     | MIME format detection                             |
-| [[@eryx/_socket]]   | Complete            | Low level BSD-style socket interface              |
-| [[@eryx/_ssl]]      | Complete            | Low level SSL interface to be used with `_socket` |
-| UUID                | Planned             | Creation and manipulation of UUIDs                |
-| RPC                 | Planned             | RCON, JSON-RPC, XML-RPC                           |
-| Email               | Planned             |                                                   |
-| FTP                 | Planned             | Support for the FTP protocol                      |
-| IMAP                | Planned             | Support for the IMAP protocol                     |
-| SMTP                | Planned             | Support for the SMTP protocol                     |
-| JWT                 | Planned             | Creation and manipulation of JWTs                 |
+| Library             | Status                 | Description                                       |
+| ------------------- | ---------------------- | ------------------------------------------------- |
+| [[@eryx/http]]      | Mostly complete[^http] | HTTP client and server                            |
+| [[@eryx/net]]       | Partial[^net]          | Basic TCP client and server                       |
+| [[@eryx/websocket]] | Partial[^websocket]    | Websocket client and server                       |
+| [[@eryx/mime]]      | Unusable[^mime]        | MIME format detection                             |
+| [[@eryx/_socket]]   | Complete               | Low level BSD-style socket interface              |
+| [[@eryx/_ssl]]      | Mostly Complete[^_ssl] | Low level SSL interface to be used with `_socket` |
+| UUID                | Planned                | Creation and manipulation of UUIDs                |
+| RPC                 | Planned                | RCON, JSON-RPC, XML-RPC                           |
+| Email               | Planned                |                                                   |
+| FTP                 | Planned                | Support for the FTP protocol                      |
+| IMAP                | Planned                | Support for the IMAP protocol                     |
+| SMTP                | Planned                | Support for the SMTP protocol                     |
+| JWT                 | Planned                | Creation and manipulation of JWTs                 |
 
-[^http]: No connection polling, has issues with multiple simultaneous clients
+[^http]: Lacks proxy support
 
 [^net]: No UDP, no IPv6, no socket options, no concurrent server patterns
 
 [^websocket]: Immature implementation lacking many features. Not sufficient tested
 
 [^mime]: No sufficient tested. Supports only a limited number of features. Some heuristics likely broken
+
+[^_ssl]: No mTLS support, no ALPN, no cipher suite selection, no OCSP
 
 ## Databases
 
@@ -154,7 +154,8 @@ The standard library is the core selling point for Eryx. Each available library 
 | [[@eryx/crypto/pem]]      | Complete        | PEM/DER format support                  |
 | [[@eryx/crypto/random]]   | Complete        | Secure random number and data generator |
 | [[@eryx/crypto/asn1]]     | Unusable[^asn1] | ASN1 format support                     |
-| ECC                       | Planned         | ECC ciphers                             |
+| ECC                       | Planned         | ECC ciphers (ECDSA/ECDH/EdDSA)          |
+| Argon2                    | Planned         |                                         |
 
 [^asn1]: Very patchy hand-written code, lacking almost all important ASN1 features
 

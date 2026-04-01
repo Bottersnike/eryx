@@ -64,6 +64,7 @@ type RendererFields = {
 	versionLabel: string?,
 	sectionTitles: { [string]: string }?,
 	folderTitles: { [string]: string }?,
+	folderOrder: { [string]: number }?,
 
 	templates: {
 		article: template.Template,
@@ -103,6 +104,7 @@ function Renderer.new(
 		versionLabel: string?,
 		sectionTitles: { [string]: string }?,
 		folderTitles: { [string]: string }?,
+		folderOrder: { [string]: number }?,
 	}?
 ): Renderer
 	local siteRoot = (if options then options.siteRoot else nil) or "/"
@@ -133,6 +135,7 @@ function Renderer.new(
 		versionLabel = if options then options.versionLabel else nil,
 		sectionTitles = if options then options.sectionTitles else nil,
 		folderTitles = if options then options.folderTitles else nil,
+		folderOrder = if options then options.folderOrder else nil,
 		templates = {
 			article = template.compile(fs.openSync(templates.article):readSync(), templates.article),
 			api = template.compile(fs.openSync(templates.api):readSync(), templates.api),
@@ -251,7 +254,8 @@ function Renderer.renderPage(
 			return self:getLink(article)
 		end,
 		self.sectionTitles,
-		self.folderTitles
+		self.folderTitles,
+		self.folderOrder
 	)
 
 	local displayName = pageDisplayName or pageName
@@ -758,7 +762,10 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 			if not parentTitle and self.sectionTitles and self.sectionTitles[parts[i]] then
 				parentTitle = self.sectionTitles[parts[i]]
 			end
-			table.insert(breadcrumbs, { label = parentTitle or parts[i], link = parentLink })
+			table.insert(
+				breadcrumbs,
+				{ label = parentTitle or parts[i], link = parentLink, position = i + 1, next = i + 2 }
+			)
 		end
 	end
 

@@ -64,6 +64,40 @@ export type BlockRule<Name, T> = {
 	-- Fired for arbitrary post-processing step
 	read postProcessDocument: ((doc: DocumentBlockNode) -> ())?,
 
+	-- Phase 2: If true, blank lines at this block's level set the blankSinceLast flag.
+	read setsBlankFlag: boolean?,
+
+	-- Phase 2: The wrapper container type this block requires (e.g. "list" for "list_item").
+	-- The main loop creates a wrapper when open[#open].type ~= wrapperType.
+	read wrapperType: string?,
+
+	-- Phase 2: Build the wrapper node. Called when wrapperType is not at the open-stack top.
+	read createWrapper: ((firstBlock: AnyBlockNode) -> AnyBlockNode)?,
+
+	-- Phase 2: Should this container remain open to accept newBlock as its next child?
+	-- Return false to close it. Only called on blocks that define this method.
+	read acceptsNewChild: ((wrapper: BlockNode<Name, T>, newBlock: AnyBlockNode) -> boolean)?,
+
+	-- Phase 2/3: Called just before a child is inserted into this container.
+	-- For setsBlankFlag rules: also called pre-wrapper to propagate looseness up the open stack.
+	read onBeforeChildMount: ((
+		container: BlockNode<Name, T>,
+		child: AnyBlockNode,
+		blankSinceLast: boolean,
+		openStack: { AnyBlockNode }
+	) -> ())?,
+
+	-- Phase 2: When breakAfterOpen is true, return true to close this block after opening.
+	-- Default (nil): close if the rule has no incorporateLine (leaf block), otherwise stay open.
+	read shouldCloseAfterOpen: ((block: BlockNode<Name, T>) -> boolean?)?,
+
+	-- Phase 3: Called after incorporateLine. Return true to close this block.
+	read afterIncorporate: ((block: BlockNode<Name, T>) -> boolean?)?,
+
+	-- Phase 3: If false, auto-close this container when a paragraph would be created inside it.
+	-- Defaults to true.
+	read canContainParagraph: boolean?,
+
 	-- Convert this block to HTML
 	read toHtml: (block: BlockNode<Name, T>, rules: { BlockRule<string, any> }, config: MarkdownConfig) -> string?,
 	read toHtmlPrepend: (

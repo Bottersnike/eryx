@@ -168,6 +168,29 @@ local OrderedListItemRule: types.BlockRule<"ordered_list_item", OrderedListItem>
 		return false
 	end,
 
+	setsBlankFlag = true,
+	wrapperType = "ordered_list",
+	createWrapper = function(firstBlock): types.AnyBlockNode
+		return {
+			type = "ordered_list",
+			start = (firstBlock :: any).start,
+			delimiter = (firstBlock :: any).delimiter,
+			maybeLoose = false,
+			loose = false,
+			children = {},
+		}
+	end,
+	onBeforeChildMount = function(container, _child, blankSinceLast, openStack)
+		if #openStack >= 2 then
+			local parentList = openStack[#openStack - 1]
+			if parentList.type == "list" or parentList.type == "ordered_list" then
+				if (parentList :: any).maybeLoose or (blankSinceLast and #container.children > 0) then
+					(parentList :: any).loose = true
+				end
+			end
+		end
+	end,
+
 	toHtml = function(block, rules, config): string
 		local annotation = ""
 		if config.annotateHtml then
@@ -245,6 +268,21 @@ local OrderedListRule: types.BlockRule<
 				if i.type == "ordered_list_item" then
 					i.loose = block.loose
 				end
+			end
+		end,
+		canContainParagraph = false,
+		acceptsNewChild = function(wrapper, newBlock): boolean
+			if newBlock.type ~= "ordered_list_item" then
+				return false
+			end
+			if wrapper.delimiter ~= (newBlock :: any).delimiter then
+				return false
+			end
+			return true
+		end,
+		onBeforeChildMount = function(container, _child, blankSinceLast, _openStack)
+			if (container :: any).maybeLoose or (blankSinceLast and #(container :: any).children > 0) then
+				(container :: any).loose = true
 			end
 		end,
 		toHtml = function(block, rules, config): string

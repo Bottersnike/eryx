@@ -468,6 +468,12 @@ local HtmlBlockRule: types.BlockRule<
 				table.remove(block.lines, #block.lines)
 			end
 		end,
+		afterIncorporate = function(block): boolean?
+			return not block.open
+		end,
+		shouldCloseAfterOpen = function(block): boolean?
+			return not block.open
+		end,
 
 		toHtml = function(block, rules, config): string
 			local content: string

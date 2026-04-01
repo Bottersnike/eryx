@@ -168,7 +168,9 @@ local CodeFenceRule: types.BlockRule<
 			else
 				content = table.concat(block.lines, "\n")
 			end
-			if block.lines[#block.lines] and #block.lines[#block.lines] ~= 0 then
+			-- Each content line in a fenced block carries its line ending.
+			-- Preserve that even when the final content line is blank.
+			if #block.lines > 0 then
 				content ..= if config.useCrlf then "\r\n" else "\n"
 			end
 

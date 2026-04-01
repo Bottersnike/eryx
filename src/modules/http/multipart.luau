@@ -15,7 +15,17 @@ export type MultipartField = {
 	contentType: string?,
 }
 
+export type ParsedMultipartField = {
+	name: string,
+	value: string,
+	filename: string?,
+	contentType: string?,
+	headers: { [string]: string },
+}
+
 local multipart = {}
+
+local util = require("./util")
 
 --[=[
 	Encodes a list of form fields as a `multipart/form-data` body.
@@ -68,6 +78,98 @@ function multipart.encodeFields(fields: { MultipartField }): (string, string)
 	table.insert(parts, "--" .. boundary .. "--\r\n")
 
 	return table.concat(parts), "multipart/form-data; boundary=" .. boundary
+end
+
+local function trimTrailingCrlf(value: string): string
+	if string.sub(value, -2) == "\r\n" then
+		return string.sub(value, 1, -3)
+	end
+	return value
+end
+
+local function parseContentDisposition(value: string?): { name: string?, filename: string? }
+	local result = { name = nil :: string?, filename = nil :: string? }
+	if value == nil then
+		return result
+	end
+
+	for paramName, paramValue in string.gmatch(value, ';%s*([^=]+)="([^"]*)"') do
+		local lowered = string.lower(paramName)
+		if lowered == "name" then
+			result.name = paramValue
+		elseif lowered == "filename" then
+			result.filename = paramValue
+		end
+	end
+
+	return result
+end
+
+--[=[
+	Parses a `multipart/form-data` body into individual fields.
+
+	Pass the raw body and either the full `Content-Type` header value or
+	just the boundary string.
+]=]
+function multipart.parse(body: string, contentTypeOrBoundary: string): { ParsedMultipartField }
+	local boundary = contentTypeOrBoundary
+	if string.find(contentTypeOrBoundary, "multipart/", 1, true) then
+		local parsed = util.parseContentType(contentTypeOrBoundary)
+		boundary = parsed.params.boundary or ""
+	end
+
+	if boundary == "" then
+		error("multipart.parse: missing boundary")
+	end
+
+	local delimiter = "--" .. boundary
+	local closeDelimiter = delimiter .. "--"
+	local fields = {}
+	local position = 1
+
+	while true do
+		local startPos, endPos = string.find(body, delimiter, position, true)
+		if not startPos then
+			break
+		end
+
+		position = endPos + 1
+		if string.sub(body, startPos, startPos + #closeDelimiter - 1) == closeDelimiter then
+			break
+		end
+
+		if string.sub(body, position, position + 1) == "\r\n" then
+			position += 2
+		end
+
+		local nextDelimiterPos = string.find(body, "\r\n" .. delimiter, position, true)
+		if not nextDelimiterPos then
+			break
+		end
+
+		local part = string.sub(body, position, nextDelimiterPos - 1)
+		position = nextDelimiterPos + 2
+
+		local headerEnd = string.find(part, "\r\n\r\n", 1, true)
+		if not headerEnd then
+			continue
+		end
+
+		local headersRaw = string.sub(part, 1, headerEnd - 1)
+		local value = trimTrailingCrlf(string.sub(part, headerEnd + 4))
+		local headers = util.parseHeaders(headersRaw)
+		local disposition = parseContentDisposition(headers["content-disposition"])
+
+		table.insert(fields, {
+			name = disposition.name or "",
+			value = value,
+			filename = disposition.filename,
+			contentType = headers["content-type"],
+			headers = headers,
+		})
+	end
+
+	return fields
 end
 
 return table.freeze(multipart)

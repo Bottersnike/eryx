@@ -121,8 +121,15 @@ local EXTENSIONS: { [string]: string } = {
 	["pfx"] = "application/x-pkcs12",
 }
 
+local function normalizeExtension(extension: string): string
+	if string.sub(extension, 1, 1) == "." then
+		extension = string.sub(extension, 2)
+	end
+	return string.lower(extension)
+end
+
 function mime.fromExtension(extension: string): string?
-	return EXTENSIONS[extension]
+	return EXTENSIONS[normalizeExtension(extension)]
 end
 
 local function startsWithBytes(data: string, signature: { number }, offset: number?): boolean
@@ -196,10 +203,13 @@ function mime.fromFileContent(file: string | buffer): string?
 	else
 		filePath = file
 		local ok, result = pcall(function()
-			return fs.openSync(file):readBufferSync()
+			local handle = fs.openSync(file)
+			local bytes = handle:readBufferSync()
+			handle:closeSync()
+			return bytes
 		end)
-		if ok and type(result) == "string" then
-			data = result
+		if ok and type(result) == "buffer" then
+			data = buffer.tostring(result)
 		else
 			-- Fallback: treat string input as raw bytes when it isn't a readable path.
 			data = file

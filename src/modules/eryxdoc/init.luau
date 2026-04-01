@@ -158,13 +158,21 @@ end
 -- Returns two maps:
 --   sectionTitles: top-level folder name → display title (for sidebar section headings)
 --   folderTitles:  nested path key → display title (for sub-directory labels)
-local function collectFolderTitles(path: string): ({ [string]: string }, { [string]: string })
+local function collectFolderTitles(path: string): ({ [string]: string }, { [string]: string }, { [string]: number })
 	local sectionTitles: { [string]: string } = {}
 	local folderTitles: { [string]: string } = {}
+	local folderOrder: { [string]: number } = {}
 
 	local function walk(dir: string, prefix: string?, isTopLevel: boolean)
 		if not fs.isDirectory(dir) then
 			return
+		end
+		local currentMeta = parseMeta(dir .. "/.meta")
+		if currentMeta.children then
+			for i, child in currentMeta.children :: { string } do
+				local key = if prefix then prefix .. "/" .. child else child
+				folderOrder[key] = i
+			end
 		end
 		for _, entry in fs.listDir(dir) do
 			local fullPath = dir .. "/" .. entry
@@ -184,7 +192,20 @@ local function collectFolderTitles(path: string): ({ [string]: string }, { [stri
 	end
 
 	walk(path, nil, true)
-	return sectionTitles, folderTitles
+	return sectionTitles, folderTitles, folderOrder
+end
+
+local function formatFolderTitle(prefix: string?, metaTitle: string?): string
+	if metaTitle then
+		return metaTitle
+	end
+	if not prefix then
+		return "Home"
+	end
+	local stem = prefix:match("[^/]+$") or prefix
+	return stem:gsub("%-", " "):gsub("(%a)([%w]*)", function(first: string, rest: string)
+		return first:upper() .. rest
+	end)
 end
 
 local function collectArticles(path: string, prefix: string?): { { name: string, article: Article.Article } }
@@ -195,6 +216,8 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 
 	local meta = parseMeta(path .. "/.meta")
 	local entries = fs.listDir(path)
+	local hasIndexArticle = false
+	local generatedSectionPages: { Article.GeneratedSectionPage } = {}
 
 	if meta.children then
 		local childOrder: { [string]: number } = {}
@@ -243,6 +266,12 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 			local sub = collectArticles(fullPath, subPrefix)
 			for _, a in sub do
 				table.insert(articles, a)
+				if a.name == subPrefix then
+					table.insert(generatedSectionPages, {
+						title = a.article.title,
+						article = a.article,
+					})
+				end
 			end
 			continue
 		end
@@ -259,7 +288,31 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 		print(string.format("  article: %s", name))
 		local article = Article.fromFile(fullPath)
 		table.insert(articles, { name = name, article = article })
+		if stem == "index" then
+			hasIndexArticle = true
+		else
+			table.insert(generatedSectionPages, {
+				title = article.title,
+				article = article,
+			})
+		end
 	end
+
+	if not hasIndexArticle and #generatedSectionPages > 0 then
+		local name = prefix or "index"
+		print(string.format("  article: %s (generated)", name))
+		table.insert(articles, 1, {
+			name = name,
+			article = Article.generated(
+				formatFolderTitle(prefix, meta.title),
+				path .. "/index.md",
+				"",
+				"Overview for this section.",
+				generatedSectionPages
+			),
+		})
+	end
+
 	return articles
 end
 
@@ -364,7 +417,8 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		then {}
 		else modulesApi.collectModules(MODULES_DIR, MODULE_PREFIX, "")
 	local allArticles = if ARTICLES_DIR then collectArticles(ARTICLES_DIR) else {}
-	local sectionTitles, folderTitles = if ARTICLES_DIR then collectFolderTitles(ARTICLES_DIR) else {}, {}
+	local sectionTitles, folderTitles, folderOrder =
+		if ARTICLES_DIR then collectFolderTitles(ARTICLES_DIR) else {}, {}, {}
 
 	-- Populate last-updated dates from git
 	if cfg.showLastUpdated then
@@ -412,6 +466,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		versionLabel = if versionInfo then (versionInfo.label or versionInfo.name) else nil,
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
+		folderOrder = folderOrder,
 	})
 
 	for _, article in allArticles do

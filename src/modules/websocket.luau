@@ -59,7 +59,7 @@ local _ssl = require("@eryx/_ssl")
 local hash = require("@eryx/crypto/hash")
 local random = require("@eryx/crypto/random")
 local base64 = require("@eryx/encoding/base64")
-local http = require("@eryx/http")
+-- local http = require("@eryx/http")
 local zlib = require("@eryx/compression/zlib")
 local task = require("@eryx/task")
 

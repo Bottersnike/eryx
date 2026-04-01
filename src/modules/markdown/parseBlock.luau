@@ -37,6 +37,14 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 
 	table.insert(open, document :: types.AnyBlockNode)
 
+	local function closeTop()
+		local closing = table.remove(open, #open) :: types.AnyBlockNode
+		local closingRule = rulesByType[closing.type]
+		if closingRule and closingRule.onClose then
+			closingRule.onClose(closing :: any)
+		end
+	end
+
 	local lines = source:split("\n")
 	if #lines > 0 and lines[#lines] == "" then
 		table.remove(lines, #lines)
@@ -69,7 +77,7 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 						if result.consumedLine then
 							-- Close the block and all children up to here
 							while #open >= i do
-								table.remove(open, #open)
+								closeTop()
 							end
 							skipLine = true
 							break
@@ -121,7 +129,7 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 			local tipRule = rulesByType[tip.type]
 			if tipRule and tipRule.onBlankLine then
 				if tipRule.onBlankLine(tip :: any, open) then
-					table.remove(open, #open)
+					closeTop()
 				end
 			end
 			-- Propagate to new tip (e.g., after closing paragraph, list_item sees blank)
@@ -131,7 +139,7 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 					local newTipRule = rulesByType[newTip.type]
 					if newTipRule and newTipRule.onBlankLine then
 						if newTipRule.onBlankLine(newTip :: any, open) then
-							table.remove(open, #open)
+							closeTop()
 						end
 					end
 				end
@@ -141,7 +149,8 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 			-- Blanks inside blockquotes or other containers within a list item
 			-- should not make the parent list loose (see CommonMark §5.3).
 			local blankTip = open[#open]
-			if blankTip.type == "list_item" or blankTip.type == "ordered_list_item" then
+			local blankTipRule = rulesByType[blankTip.type]
+			if blankTipRule and blankTipRule.setsBlankFlag then
 				blankSinceLast = true
 			end
 			continue
@@ -172,8 +181,8 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 			end
 			-- If the paragraph was emptied by link ref extraction (no content left),
 			-- remove it from the open stack so the line is processed fresh
-			if para.raw == "" then
-				table.remove(open, #open)
+			if #para.raw == 0 then
+				closeTop()
 				matchedCount = #open
 			end
 		end
@@ -229,129 +238,68 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 
 							local firstBlock = result.blocks[1]
 
-							-- Check looseness: if mounting into a list_item whose
-							-- parent list has maybeLoose, confirm it as loose
+							-- Pre-wrapper: notify item-level containers (e.g. list_item) so they
+							-- can propagate looseness to their parent list before any wrapper is created.
 							local mountTarget = open[#open]
-							if mountTarget.type == "list_item" or mountTarget.type == "ordered_list_item" then
-								if #open >= 2 then
-									local parentList = open[#open - 1]
-									if parentList.type == "list" or parentList.type == "ordered_list" then
-										if
-											(parentList :: any).maybeLoose
-											or (blankSinceLast and #(mountTarget :: any).children > 0)
-										then
-											(parentList :: any).loose = true
-										end
-									end
-								end
+							local mountTargetRule = rulesByType[mountTarget.type]
+							if
+								mountTargetRule
+								and mountTargetRule.setsBlankFlag
+								and mountTargetRule.onBeforeChildMount
+							then
+								mountTargetRule.onBeforeChildMount(mountTarget :: any, firstBlock, blankSinceLast, open)
 							end
 
-							-- Close incompatible list/tab wrappers
+							-- Close incompatible wrapper containers
 							while true do
 								local top = open[#open]
-								if top.type == "list" and firstBlock.type ~= "list_item" then
-									table.remove(open, #open)
-								elseif top.type == "ordered_list" and firstBlock.type ~= "ordered_list_item" then
-									table.remove(open, #open)
-								elseif
-									top.type == "ordered_list"
-									and firstBlock.type == "ordered_list_item"
-									and (top :: types.OrderedList).delimiter
-										~= (firstBlock :: types.OrderedListItem).delimiter
+								local topRule = rulesByType[top.type]
+								if
+									topRule
+									and topRule.acceptsNewChild
+									and not topRule.acceptsNewChild(top :: any, firstBlock)
 								then
-									table.remove(open, #open)
-								elseif
-									top.type == "list"
-									and firstBlock.type == "list_item"
-									and #(top :: types.List).children > 0
-									and (top :: types.List).children[1].marker
-										~= (firstBlock :: types.ListItem).marker
-								then
-									table.remove(open, #open)
-								elseif top.type == "tab_group" and firstBlock.type ~= "tab_panel" then
-									table.remove(open, #open)
-								elseif
-									top.type == "tab_group"
-									and firstBlock.type == "tab_panel"
-									and (firstBlock :: any)._forceNewGroup
-								then
-									table.remove(open, #open)
+									closeTop()
+								else
+									break
+								end
+							end
+							-- If we're at a bare list wrapper and this is not a list item,
+							-- the list must end before mounting the new block.
+							while #open > 0 do
+								local top = open[#open]
+								local isListWrapper = top.type == "list" or top.type == "ordered_list"
+								local isListItem = firstBlock.type == "list_item"
+									or firstBlock.type == "ordered_list_item"
+								if isListWrapper and not isListItem then
+									closeTop()
 								else
 									break
 								end
 							end
 
-							-- Create list wrapper if needed
-							if firstBlock.type == "list_item" and open[#open].type ~= "list" then
-								local wrapper: types.List = {
-									type = "list",
-									maybeLoose = false,
-									loose = false,
-									children = {},
-								}
-								assert((open[#open] :: any).children ~= nil)
-								table.insert((open[#open] :: any).children, wrapper)
-								table.insert(open, wrapper)
-							elseif firstBlock.type == "ordered_list_item" and open[#open].type ~= "ordered_list" then
-								local wrapper: types.OrderedList = {
-									type = "ordered_list",
-									start = (firstBlock :: types.OrderedListItem).start,
-									delimiter = (firstBlock :: types.OrderedListItem).delimiter,
-									maybeLoose = false,
-									loose = false,
-									children = {},
-								}
-								assert((open[#open] :: any).children ~= nil)
-								table.insert((open[#open] :: any).children, wrapper)
-								table.insert(open, wrapper)
-							elseif firstBlock.type == "tab_panel" and open[#open].type ~= "tab_group" then
-								local wrapper: types.TabGroup = {
-									type = "tab_group",
-									children = {},
-								}
-								assert((open[#open] :: any).children ~= nil)
-								table.insert((open[#open] :: any).children, wrapper)
-								table.insert(open, wrapper)
+							-- Create wrapper container if needed
+							local firstBlockRule = rulesByType[firstBlock.type]
+							if
+								firstBlockRule
+								and firstBlockRule.wrapperType
+								and open[#open].type ~= firstBlockRule.wrapperType
+							then
+								if firstBlockRule.createWrapper then
+									local wrapper = firstBlockRule.createWrapper(firstBlock)
+									assert((open[#open] :: any).children ~= nil)
+									table.insert((open[#open] :: any).children, wrapper)
+									table.insert(open, wrapper)
+								end
 							end
 
-							-- Handle looseness when inserting into lists
+							-- Mount each block, notifying the container before each insertion
 							for _, newBlock in result.blocks do
-								local top = open[#open]
-
-								if top.type == "list" or top.type == "ordered_list" then
-									if (top :: any).maybeLoose or (blankSinceLast and #(top :: any).children > 0) then
-										(top :: any).loose = true
-									end
-								elseif top.type == "list_item" or top.type == "ordered_list_item" then
-									if #open >= 2 then
-										local parentList = open[#open - 1]
-										if parentList.type == "list" or parentList.type == "ordered_list" then
-											if
-												(parentList :: any).maybeLoose
-												or (blankSinceLast and #(top :: any).children > 0)
-											then
-												(parentList :: any).loose = true
-											end
-										end
-									end
+								local mountInto = open[#open]
+								local mountIntoRule = rulesByType[mountInto.type]
+								if mountIntoRule and mountIntoRule.onBeforeChildMount then
+									mountIntoRule.onBeforeChildMount(mountInto :: any, newBlock, blankSinceLast, open)
 								end
-
-								-- Sublist looseness (§5.3)
-								if (newBlock.type == "list" or newBlock.type == "ordered_list") and #open >= 3 then
-									local parentItem = open[#open]
-									local parentList = open[#open - 1]
-									if
-										(parentItem.type == "list_item" or parentItem.type == "ordered_list_item")
-										and (parentList.type == "list" or parentList.type == "ordered_list")
-										and (
-											(parentList :: any).maybeLoose
-											or (blankSinceLast and #(parentItem :: any).children > 0)
-										)
-									then
-										(parentList :: any).loose = true
-									end
-								end
-
 								assert((open[#open] :: any).children ~= nil)
 								table.insert((open[#open] :: any).children, newBlock)
 								table.insert(open, newBlock)
@@ -363,12 +311,17 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 
 							if result.breakAfterOpen then
 								local lastBlock = result.blocks[#result.blocks]
-								if lastBlock.type == "heading" or lastBlock.type == "thematic_break" then
-									table.remove(open, #open)
-								elseif lastBlock.type == "html_block" then
-									if not (lastBlock :: types.HtmlBlock).open then
-										table.remove(open, #open)
-									end
+								local lastRule = rulesByType[lastBlock.type]
+								-- Leaf blocks (no incorporateLine) are always closed immediately.
+								-- Multi-line blocks stay open unless shouldCloseAfterOpen says otherwise.
+								local isLeaf = lastRule == nil or lastRule.incorporateLine == nil
+								local close = isLeaf
+									or (
+										lastRule.shouldCloseAfterOpen ~= nil
+										and lastRule.shouldCloseAfterOpen(lastBlock :: any)
+									)
+								if close then
+									closeTop()
 								end
 								doneOpening = true
 							end
@@ -434,8 +387,7 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 		if tipRule and tipRule.incorporateLine then
 			tipRule.incorporateLine(tip :: any, remains)
 
-			-- HTML blocks: check if they self-closed after incorporation
-			if tip.type == "html_block" and not (tip :: types.HtmlBlock).open then
+			if tipRule.afterIncorporate and tipRule.afterIncorporate(tip :: any) then
 				table.remove(open, #open)
 			end
 		elseif tip.type == "paragraph" then
@@ -443,36 +395,34 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 			local para = tip :: types.ParagraphBlockNode
 			table.insert(para.raw, stripLeadingWhitespace(remains))
 		else
-			-- Close any wrapper containers at the top that can't hold paragraphs directly
-			while tip.type == "list" or tip.type == "ordered_list" or tip.type == "tab_group" do
-				local closing = table.remove(open, #open) :: types.AnyBlockNode
-				local closingRule = rulesByType[closing.type]
-				if closingRule and closingRule.onClose then
-					closingRule.onClose(closing :: any)
+			-- Close containers that can't hold paragraphs directly
+			while true do
+				local tipRule2 = rulesByType[tip.type]
+				if tipRule2 and tipRule2.canContainParagraph == false then
+					local closing = table.remove(open, #open) :: types.AnyBlockNode
+					local closingRule = rulesByType[closing.type]
+					if closingRule and closingRule.onClose then
+						closingRule.onClose(closing :: any)
+					end
+					tip = open[#open]
+				else
+					break
 				end
-				tip = open[#open]
 			end
 
 			-- Create a new paragraph (the fallback)
 			local strippedRemains = stripLeadingWhitespace(remains)
-
-			-- If we're adding a new paragraph into a list, check looseness
-			if tip.type == "list_item" or tip.type == "ordered_list_item" then
-				if #open >= 2 then
-					local parentList = open[#open - 1]
-					if parentList.type == "list" or parentList.type == "ordered_list" then
-						if (parentList :: any).maybeLoose or (blankSinceLast and #(tip :: any).children > 0) then
-							(parentList :: any).loose = true
-						end
-					end
-				end
-			end
 
 			local para: types.ParagraphBlockNode = {
 				type = "paragraph",
 				raw = { strippedRemains },
 				inlines = {},
 			}
+
+			local tipRuleForPara = rulesByType[tip.type]
+			if tipRuleForPara and tipRuleForPara.onBeforeChildMount then
+				tipRuleForPara.onBeforeChildMount(tip :: any, para :: types.AnyBlockNode, blankSinceLast, open)
+			end
 
 			assert((tip :: any).children ~= nil)
 			table.insert((tip :: any).children, para)

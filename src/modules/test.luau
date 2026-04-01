@@ -45,7 +45,7 @@ local function dim(s: string)
 end
 
 local function fmtErr(err: any): string
-	return exception.format(err :: exception.Exception)
+	return exception.format(err :: exception.Exception, COLOR)
 end
 
 -- ── Types ────────────────────────────────────────────────────────────────────
@@ -167,9 +167,9 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 		local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
 
 		-- Check if the test called test.skip() / test.skipIf()
-		if not ok and type(err) == "table" and (err :: any).__skip == SKIP_SENTINEL then
+		if not ok and type(err.data) == "table" and (err.data :: SkipSignal).__skip == SKIP_SENTINEL then
 			skipped += 1
-			local reason = (err :: SkipSignal).reason
+			local reason = (err.data :: SkipSignal).reason
 			local label = if reason then `(skipped: {reason})` else "(skipped)"
 			stdio.write(`    {dim("-")} {dim(t.name)} {dim(label)}\n`)
 			table.insert(self.results, {
@@ -244,7 +244,11 @@ function Expecter.toBe(self: Expecter, ...: any)
 	end
 	for i = 1, expect.n do
 		if expect[i] ~= self.values[i] then
-			error(`Return {i}: expected {fmt(expect[i])} but got {fmt(self.values[i])}`, 2)
+			if #self.values == 1 then
+				error(`expected {fmt(expect[i])} but got {fmt(self.values[i])}`, 2)
+			else
+				error(`Return #{i}: expected {fmt(expect[i])} but got {fmt(self.values[i])}`, 2)
+			end
 		end
 	end
 end

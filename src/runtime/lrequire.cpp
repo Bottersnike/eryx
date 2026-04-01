@@ -455,27 +455,7 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
         }
 
         if (parentException) {
-            lua_Debug ar;
-            for (int level = 0; lua_getinfo(ML, level, "sln", &ar); level++) {
-                if (strcmp(ar.source, "=[C]") == 0) {
-                    // We're here because a require() failed, so no need to rub that in
-                    if (level == 0 && strcmp(ar.name, "require") == 0) {
-                        continue;
-                    }
-
-                    // Skip everything else too
-                    continue;
-                }
-                // Otherwise, push this as a frame to the traceback
-                LuaFrame frame = {
-                    ar.source ? std::string(ar.source) : "",
-                    ar.short_src ? std::string(ar.short_src) : "",
-                    ar.currentline,
-                    ar.name ? std::string(ar.name) : "<top level>",
-                    getSourceLine(ar.source, ar.currentline),
-                };
-                parentException->traceback.push_back(frame);
-            }
+            eryx_exception_populate_tb(ML, parentException, 0);
 
             // Move exception from ML to L
             lua_xmove(ML, L, 1);
@@ -501,40 +481,7 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
             // Remove the old error string
             lua_remove(ML, -1);
 
-            // Start walking the frames to reconstruct the traceback
-            lua_Debug ar;
-            for (int level = 0; lua_getinfo(ML, level, "sln", &ar); level++) {
-                // An =[C] at top level suggests we might have a unique type of error
-                if (strcmp(ar.source, "=[C]") == 0) {
-                    if (level == 0) {
-                        if (strcmp(ar.name, "error") == 0) {
-                            exception->type = ETYPE_THROWN;
-                            continue;
-                        }
-                        if (strcmp(ar.name, "assert") == 0) {
-                            exception->type = ETYPE_ASSERT;
-                            continue;
-                        }
-                        if (strcmp(ar.name, "require") == 0) {
-                            exception->type = ETYPE_REQUIRE;
-                            continue;
-                        }
-                    }
-
-                    // C function, but not an interesting one
-                    continue;
-                }
-
-                // Otherwise, push this as a frame to the traceback
-                LuaFrame frame = {
-                    ar.source ? std::string(ar.source) : "",
-                    ar.short_src ? std::string(ar.short_src) : "",
-                    ar.currentline,
-                    ar.name ? std::string(ar.name) : "<top level>",
-                    getSourceLine(ar.source, ar.currentline),
-                };
-                exception->traceback.push_back(frame);
-            }
+            eryx_exception_populate_tb(ML, exception, 0);
 
             // remove ML thread from L stack
             lua_remove(L, -2);

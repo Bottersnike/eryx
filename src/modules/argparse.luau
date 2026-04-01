@@ -6,7 +6,7 @@
 	default and can be customised or disabled.
 
 	```luau
-	local argparse = require("@eryx/argparse2")
+	local argparse = require("@eryx/argparse")
 
 	local parser = argparse.Parser.new("mytool", "A handy CLI")
 	parser:addPositional("file", "string", nil, true, "Input file")
@@ -14,17 +14,49 @@
 	parser:addOption("port", "p", "number", 8080, nil, "Port to listen on")
 
 	local run = parser:addSubCommand("run", "Run a script")
-	run:addPositional("script", "string", false, "Script to run")
+	run:addPositional("script", "string", nil, true, "Script to run")
 
 	local config = parser:parse()
 	```
 ]=]
 
 local os = require("@eryx/os")
+local fs = require("@eryx/fs")
 local argparse = {}
 
 local Parser = {}
 Parser.__index = Parser
+
+type PositionalSpec = {
+	name: string,
+	type: "string" | "number",
+	description: string?,
+	optional: boolean?,
+	default: any?,
+	variadic: boolean?,
+}
+
+type OptionSpec = {
+	longName: string,
+	shortName: string?,
+	type: "string" | "number",
+	description: string?,
+	optional: boolean,
+	default: any?,
+	multiple: boolean?,
+	arity: number?,
+}
+
+type MutuallyExclusiveGroup = {
+	names: { string },
+	required: boolean,
+}
+
+type TFlag = {
+	longName: string,
+	shortName: string?,
+	description: string?,
+}
 
 --[=[
 	A command-line parser that can be configured with positional arguments,
@@ -43,38 +75,19 @@ export type Parser = setmetatable<
 		--- Text printed at the very end of help output.
 		epilog: string?,
 		--- Registered positional arguments, in order.
-		positionals: {
-			{
-				name: string,
-				type: "string" | "number",
-				description: string?,
-				optional: boolean?,
-				default: any?,
-			}
-		},
+		positionals: { PositionalSpec },
 		--- Registered boolean flags.
-		flags: {
-			{
-				longName: string,
-				shortName: string?,
-				description: string?,
-			}
-		},
+		flags: { TFlag },
 		--- Registered key-value options.
-		options: {
-			{
-				longName: string,
-				shortName: string?,
-				type: "string" | "number",
-				description: string?,
-				optional: boolean,
-				default: any?,
-			}
-		},
+		options: { OptionSpec },
 		--- Registered subcommands, keyed by name.
 		subCommands: { [string]: Parser },
+		--- Mutually exclusive groups of flag/option names.
+		mutexGroups: { MutuallyExclusiveGroup },
 		--- The function invoked when `--help` is parsed.
 		_helpHandler: (self: Parser) -> (),
+		--- Whether the built-in `--help` / `-h` behavior is active.
+		_helpEnabled: boolean,
 	},
 	typeof(Parser)
 >
@@ -104,7 +117,9 @@ function Parser.new(name: string, description: string?, epilog: string?): Parser
 		flags = {},
 		options = {},
 		subCommands = {},
+		mutexGroups = {},
 		_helpHandler = defaultHelpHandler,
+		_helpEnabled = true,
 	}, Parser)
 	self:addFlag("help", "h", "Show help message")
 	return self
@@ -172,6 +187,7 @@ function Parser.disableHelp(self: Parser)
 			break
 		end
 	end
+	self._helpEnabled = false
 	self._helpHandler = function() end
 end
 
@@ -205,11 +221,15 @@ end
 	To make a positional optional with no default, pass `nil` for default
 	and `false` for required.
 
+	Set `variadic` to `true` to let the positional consume all remaining
+	arguments. Variadic positionals must be the final positional.
+
 	@param name Key used in the result table.
 	@param type `"string"` or `"number"` - numeric values are coerced automatically.
 	@param default Default value when omitted. Implies optional when non-nil.
 	@param required Whether the argument must be provided. Defaults to `true` unless a default is given.
 	@param description Human-readable text shown in help output.
+	@param variadic Whether this positional should consume all remaining values.
 	@error Throws if a positional with the same name already exists.
 	@error Throws if a required positional is added after an optional one.
 	@error Throws if a default is provided for a required positional.
@@ -220,12 +240,17 @@ function Parser.addPositional(
 	type: "string" | "number",
 	default: any?,
 	required: boolean?,
-	description: string?
+	description: string?,
+	variadic: boolean?
 )
 	for _, pos in self.positionals do
 		if pos.name == name then
 			error(`Positional '{name}' is already registered`)
 		end
+	end
+
+	if #self.positionals > 0 and self.positionals[#self.positionals].variadic then
+		error("Cannot add another positional argument after a variadic positional argument")
 	end
 
 	-- Infer: non-nil default -> optional, otherwise required unless explicitly overridden
@@ -248,6 +273,7 @@ function Parser.addPositional(
 		description = description,
 		optional = not isRequired,
 		default = default,
+		variadic = variadic == true,
 	})
 end
 
@@ -285,12 +311,17 @@ end
 	To make an option optional with no default, pass `nil` for default
 	and `false` for required.
 
+	`settings.multiple = true` allows an option to be repeated and collects
+	its values into an array. `settings.arity` controls how many values each
+	occurrence consumes.
+
 	@param longName The `--long` name (without dashes).
 	@param shortName Optional single-character `-s` alias.
 	@param type `"string"` or `"number"` - numeric values are coerced automatically.
 	@param default Default value when omitted. Implies optional when non-nil.
 	@param required Whether the option must be provided. Defaults to `true` unless a default is given.
 	@param description Human-readable text shown in help output.
+	@param settings Optional parser settings such as `multiple` and `arity`.
 	@error Throws if the long or short name conflicts with an existing flag or option.
 	@error Throws if a default is provided for a required option.
 ]=]
@@ -301,7 +332,8 @@ function Parser.addOption(
 	type: "string" | "number",
 	default: any?,
 	required: boolean?,
-	description: string?
+	description: string?,
+	settings: { multiple: boolean?, arity: number? }?
 )
 	checkLongConflict(self, longName)
 	if shortName then
@@ -315,6 +347,13 @@ function Parser.addOption(
 		error("A default argument cannot be provided for a required option")
 	end
 
+	local arity = if settings and settings.arity ~= nil then settings.arity else 1
+	local multiple = if settings then settings.multiple == true else false
+
+	if arity < 1 then
+		error("Option arity must be at least 1")
+	end
+
 	table.insert(self.options, {
 		longName = longName,
 		shortName = shortName,
@@ -322,7 +361,612 @@ function Parser.addOption(
 		description = description,
 		optional = not isRequired,
 		default = default,
+		multiple = multiple,
+		arity = arity,
 	})
+end
+
+--[=[
+	Registers a mutually exclusive group of flags/options by long name.
+
+	At most one name in the group may be present during parsing. If `required`
+	is `true`, exactly one member must be present.
+]=]
+function Parser.addMutuallyExclusive(self: Parser, names: { string }, required: boolean?)
+	if #names < 2 then
+		error("A mutually exclusive group requires at least two names")
+	end
+
+	table.insert(self.mutexGroups, {
+		names = names,
+		required = required == true,
+	})
+end
+
+type CompletionSpec = {
+	path: string,
+	commands: { string },
+	options: { string },
+}
+
+local function completionIdent(programName: string): string
+	return (programName:gsub("[^%w_]", "_"))
+end
+
+local function escapeSingleQuotedShell(s: string): string
+	return (s:gsub("'", [['"'"']]))
+end
+
+local function escapePowerShellSingleQuoted(s: string): string
+	return (s:gsub("'", "''"))
+end
+
+local function completionDebugPath(): string?
+	local value = os.getenv("ERYX_COMPLETION_DEBUG")
+	if value == nil or value == "" then
+		return nil
+	end
+
+	if value == "1" then
+		local tmp = os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
+		return fs.path.join(tmp, "eryx-completion.log")
+	end
+
+	return value
+end
+
+local function completionDebugLog(message: string)
+	local path = completionDebugPath()
+	-- print(path, message)
+	if path == nil then
+		return
+	end
+
+	local handle = fs.openSync(path, "a")
+	handle:writeSync(message .. "\n")
+	handle:closeSync()
+end
+
+local function buildCompletionSpecs(self: Parser, path: string, specs: { CompletionSpec })
+	local commands = {}
+	local options = {}
+
+	for name in self.subCommands do
+		table.insert(commands, name)
+	end
+
+	for _, flag in self.flags do
+		table.insert(options, `--{flag.longName}`)
+		if flag.shortName then
+			table.insert(options, `-{flag.shortName}`)
+		end
+	end
+
+	for _, opt in self.options do
+		table.insert(options, `--{opt.longName}`)
+		if opt.shortName then
+			table.insert(options, `-{opt.shortName}`)
+		end
+	end
+
+	table.sort(commands)
+	table.sort(options)
+	table.insert(specs, {
+		path = path,
+		commands = commands,
+		options = options,
+	})
+
+	local subcommandNames = {}
+	for name in self.subCommands do
+		table.insert(subcommandNames, name)
+	end
+	table.sort(subcommandNames)
+
+	for _, name in subcommandNames do
+		local nextPath = if path == "" then name else `{path} {name}`
+		buildCompletionSpecs(self.subCommands[name], nextPath, specs)
+	end
+end
+
+local function findFlagByShort(self: Parser, short: string): TFlag?
+	for _, flag in self.flags do
+		if flag.shortName == short then
+			return flag
+		end
+	end
+	return nil
+end
+
+local function findOptionByShort(self: Parser, short: string): OptionSpec?
+	for _, opt in self.options do
+		if opt.shortName == short then
+			return opt
+		end
+	end
+	return nil
+end
+
+local function findFlagByLong(self: Parser, long: string): TFlag?
+	for _, flag in self.flags do
+		if flag.longName == long then
+			return flag
+		end
+	end
+	return nil
+end
+
+local function findOptionByLong(self: Parser, long: string): OptionSpec?
+	for _, opt in self.options do
+		if opt.longName == long then
+			return opt
+		end
+	end
+	return nil
+end
+
+local function coerce(value: string, expectedType: "string" | "number"): string | number
+	if expectedType == "number" then
+		local n = tonumber(value)
+		if n == nil then
+			error(`Expected a number, got '{value}'`)
+		end
+		return n
+	end
+	return value
+end
+
+--[=[
+	Returns shell completion candidates for the parser after consuming the
+	provided fully-typed arguments.
+
+	This is intentionally conservative: if the parser is currently waiting
+	for an option value it returns no candidates so the shell can fall back
+	to filename or custom value completion.
+]=]
+function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): { string }
+	local args: { string } = arguments or os.cliargs()
+	completionDebugLog(`argparse.getCompletionCandidates: parser={self.name} args={table.concat(args, " ")}`)
+	local provided: { [string]: boolean } = {}
+	local positionalIndex = 1
+	local i = 1
+
+	while i <= #args do
+		local arg = args[i]
+
+		if arg == "--" then
+			completionDebugLog(`argparse.getCompletionCandidates: end-of-options marker encountered`)
+			return {}
+		elseif string.sub(arg, 1, 2) == "--" then
+			local body = string.sub(arg, 3)
+			local eqPos = string.find(body, "=")
+
+			if eqPos then
+				local key = string.sub(body, 1, eqPos - 1)
+				local opt = findOptionByLong(self, key)
+				if not opt then
+					completionDebugLog(`argparse.getCompletionCandidates: unknown long option --{key}`)
+					return {}
+				end
+				provided[opt.longName] = true
+			else
+				local flag = findFlagByLong(self, body)
+				if flag then
+					provided[flag.longName] = true
+				else
+					local opt = findOptionByLong(self, body)
+					if not opt then
+						completionDebugLog(`argparse.getCompletionCandidates: unknown long token --{body}`)
+						return {}
+					end
+					local arity = opt.arity or 1
+					if (#args - i) < arity then
+						completionDebugLog(`argparse.getCompletionCandidates: waiting for value of --{opt.longName}`)
+						return {}
+					end
+					provided[opt.longName] = true
+					i += arity
+				end
+			end
+		elseif string.sub(arg, 1, 1) == "-" and #arg > 1 then
+			local chars = string.sub(arg, 2)
+			local j = 1
+			while j <= #chars do
+				local ch = string.sub(chars, j, j)
+				local flag = findFlagByShort(self, ch)
+				local opt = findOptionByShort(self, ch)
+
+				if flag and not opt then
+					provided[flag.longName] = true
+				elseif opt then
+					provided[opt.longName] = true
+					local rest = string.sub(chars, j + 1)
+					if #rest == 0 then
+						local arity = opt.arity or 1
+						if (#args - i) < arity then
+							completionDebugLog(`argparse.getCompletionCandidates: waiting for value of -{ch}`)
+							return {}
+						end
+						i += arity
+					elseif (opt.arity or 1) ~= 1 then
+						completionDebugLog(
+							`argparse.getCompletionCandidates: inline short option value rejected for -{ch}`
+						)
+						return {}
+					end
+					break
+				else
+					completionDebugLog(`argparse.getCompletionCandidates: unknown short token -{ch}`)
+					return {}
+				end
+				j += 1
+			end
+		elseif self.subCommands[arg] then
+			local sub = self.subCommands[arg]
+			local remaining = {}
+			for k = i + 1, #args do
+				table.insert(remaining, args[k])
+			end
+			completionDebugLog(`argparse.getCompletionCandidates: descending into subcommand {arg}`)
+			return sub:getCompletionCandidates(remaining)
+		else
+			if positionalIndex > #self.positionals then
+				completionDebugLog(`argparse.getCompletionCandidates: unexpected positional token {arg}`)
+				return {}
+			end
+
+			local pos = self.positionals[positionalIndex]
+			if not pos.variadic then
+				positionalIndex += 1
+			end
+		end
+
+		i += 1
+	end
+
+	local candidates = {}
+	local seen = {}
+
+	local function addCandidate(value: string)
+		if not seen[value] then
+			seen[value] = true
+			table.insert(candidates, value)
+		end
+	end
+
+	local commandNames = {}
+	for name in self.subCommands do
+		table.insert(commandNames, name)
+	end
+	table.sort(commandNames)
+	for _, name in commandNames do
+		addCandidate(name)
+	end
+
+	for _, flag in self.flags do
+		if not provided[flag.longName] then
+			addCandidate(`--{flag.longName}`)
+			if flag.shortName then
+				addCandidate(`-{flag.shortName}`)
+			end
+		end
+	end
+
+	for _, opt in self.options do
+		if opt.multiple or not provided[opt.longName] then
+			addCandidate(`--{opt.longName}`)
+			if opt.shortName then
+				addCandidate(`-{opt.shortName}`)
+			end
+		end
+	end
+
+	table.sort(candidates)
+	completionDebugLog(
+		`argparse.getCompletionCandidates: parser={self.name} candidates={table.concat(candidates, ",")}`
+	)
+	return candidates
+end
+
+local function maybeEmitCompletionCandidates(self: Parser, args: { string }): boolean
+	if os.getenv("ERYX_ARGPARSE_COMPLETE") ~= "1" then
+		return false
+	end
+
+	completionDebugLog(
+		`argparse.maybeEmitCompletionCandidates: parser={self.name} shell={os.getenv("ERYX_ARGPARSE_COMPLETE_SHELL") or ""}`
+	)
+	for _, candidate in self:getCompletionCandidates(args) do
+		print(candidate)
+	end
+	completionDebugLog(`argparse.maybeEmitCompletionCandidates: emitted completion candidates`)
+	os.exit(0)
+	return true
+end
+
+local function renderBashCompletion(programName: string, ident: string, specs: { CompletionSpec }): string
+	local nextCases = {}
+	local candidateCases = {}
+
+	for _, spec in specs do
+		for _, cmd in spec.commands do
+			local key = `{spec.path}|{cmd}`
+			local nextPath = if spec.path == "" then cmd else `{spec.path} {cmd}`
+			table.insert(
+				nextCases,
+				`        '{escapeSingleQuotedShell(key)}') printf '%s\n' '{escapeSingleQuotedShell(nextPath)}' ;;`
+			)
+		end
+
+		local values = {}
+		for _, cmd in spec.commands do
+			table.insert(values, `'` .. escapeSingleQuotedShell(cmd) .. `'`)
+		end
+		for _, opt in spec.options do
+			table.insert(values, `'` .. escapeSingleQuotedShell(opt) .. `'`)
+		end
+		local candidateBlock = if #values > 0 then "printf '%s\\n' " .. table.concat(values, " ") else ":"
+		table.insert(candidateCases, `        '{escapeSingleQuotedShell(spec.path)}') {candidateBlock} ;;`)
+	end
+
+	return table.concat({
+		`__{ident}_next_path() \{`,
+		'    local path="$1"',
+		'    local word="$2"',
+		'    case "$path|$word" in',
+		#nextCases > 0 and table.concat(nextCases, "\n") or "        *) : ;;",
+		"        *) printf '%s\\n' \"$path\" ;;",
+		"    esac",
+		"}",
+		"",
+		`__{ident}_candidates() \{`,
+		'    local path="$1"',
+		'    case "$path" in',
+		table.concat(candidateCases, "\n"),
+		"        *) : ;;",
+		"    esac",
+		"}",
+		"",
+		`_{ident}_completions() \{`,
+		"    local cur path word i",
+		'    cur="${COMP_WORDS[COMP_CWORD]}"',
+		'    path=""',
+		"    for (( i = 1; i < COMP_CWORD; i++ )); do",
+		'        word="${COMP_WORDS[i]}"',
+		'        if [[ "$word" == -* ]]; then',
+		"            continue",
+		"        fi",
+		`        path=\"$(__{ident}_next_path \"$path\" \"$word\")\"`,
+		"    done",
+		`    COMPREPLY=( $(compgen -W \"$(__{ident}_candidates \"$path\" | tr '\\n' ' ')\" -- \"$cur\") )`,
+		"    return 0",
+		"}",
+		`complete -F _{ident}_completions {programName}`,
+	}, "\n")
+end
+
+local function renderZshCompletion(programName: string, ident: string, specs: { CompletionSpec }): string
+	local nextCases = {}
+	local candidateCases = {}
+
+	for _, spec in specs do
+		for _, cmd in spec.commands do
+			local key = `{spec.path}|{cmd}`
+			local nextPath = if spec.path == "" then cmd else `{spec.path} {cmd}`
+			table.insert(
+				nextCases,
+				`        '{escapeSingleQuotedShell(key)}') print -r -- '{escapeSingleQuotedShell(nextPath)}' ;;`
+			)
+		end
+
+		local values = {}
+		for _, cmd in spec.commands do
+			table.insert(values, `'` .. escapeSingleQuotedShell(cmd) .. `'`)
+		end
+		for _, opt in spec.options do
+			table.insert(values, `'` .. escapeSingleQuotedShell(opt) .. `'`)
+		end
+		local candidateBlock = if #values > 0 then "print -l -- " .. table.concat(values, " ") else ":"
+		table.insert(candidateCases, `        '{escapeSingleQuotedShell(spec.path)}') {candidateBlock} ;;`)
+	end
+
+	return table.concat({
+		`#compdef {programName}`,
+		`__{ident}_next_path() \{`,
+		'    local path="$1"',
+		'    local word="$2"',
+		'    case "$path|$word" in',
+		#nextCases > 0 and table.concat(nextCases, "\n") or "        *) : ;;",
+		'        *) print -r -- "$path" ;;',
+		"    esac",
+		"}",
+		"",
+		`__{ident}_candidates() \{`,
+		'    local path="$1"',
+		'    case "$path" in',
+		table.concat(candidateCases, "\n"),
+		"        *) : ;;",
+		"    esac",
+		"}",
+		"",
+		`_{ident}_completions() \{`,
+		"    local path word i",
+		"    local -a candidates",
+		"    path=''",
+		"    for (( i = 2; i < CURRENT; ++i )); do",
+		'        word="${words[i]}"',
+		'        if [[ "$word" == -* ]]; then',
+		"            continue",
+		"        fi",
+		`        path=\"$(__{ident}_next_path \"$path\" \"$word\")\"`,
+		"    done",
+		`    candidates=(\"$\{(@f)$(__{ident}_candidates \"$path\")}\")`,
+		"    compadd -- $candidates",
+		"}",
+		`_{ident}_completions "$@"`,
+	}, "\n")
+end
+
+local function renderFishCompletion(programName: string, ident: string, specs: { CompletionSpec }): string
+	local nextCases: { string } = {}
+	local candidateCases: { string } = {}
+
+	for _, spec in specs do
+		for _, cmd in spec.commands do
+			local key = `{spec.path}|{cmd}`
+			local nextPath = if spec.path == "" then cmd else `{spec.path} {cmd}`
+			table.insert(nextCases, `        case '{escapeSingleQuotedShell(key)}'`)
+			table.insert(nextCases, `            echo '{escapeSingleQuotedShell(nextPath)}'`)
+			table.insert(nextCases, "            return")
+		end
+
+		local values: { string } = {}
+		for _, cmd in spec.commands do
+			table.insert(values, `'` .. escapeSingleQuotedShell(cmd) .. `'`)
+		end
+		for _, opt in spec.options do
+			table.insert(values, `'` .. escapeSingleQuotedShell(opt) .. `'`)
+		end
+		table.insert(candidateCases, `        case '{escapeSingleQuotedShell(spec.path)}'`)
+		if #values > 0 then
+			table.insert(candidateCases, "            printf '%s\\n' " .. table.concat(values, " "))
+		else
+			table.insert(candidateCases, "            return")
+		end
+	end
+
+	return table.concat({
+		`function __{ident}_next_path`,
+		"    set -l path $argv[1]",
+		"    set -l word $argv[2]",
+		'    switch "$path|$word"',
+		#nextCases > 0 and table.concat(nextCases, "\n") or "        case '*'",
+		"        case '*'",
+		"            echo $path",
+		"    end",
+		"end",
+		"",
+		`function __{ident}_path`,
+		"    set -l tokens (commandline -opc)",
+		"    set -l path ''",
+		"    for word in $tokens[2..-1]",
+		"        if string match -rq '^-' -- $word",
+		"            continue",
+		"        end",
+		`        set path (__{ident}_next_path $path $word)`,
+		"    end",
+		"    echo $path",
+		"end",
+		"",
+		`function __{ident}_candidates`,
+		"    set -l path $argv[1]",
+		"    switch $path",
+		table.concat(candidateCases, "\n"),
+		"        case '*'",
+		"            return",
+		"    end",
+		"end",
+		"",
+		`complete -c {programName} -f -a '(__{ident}_candidates (__{ident}_path))'`,
+	}, "\n")
+end
+
+local function renderPowerShellCompletion(programName: string, ident: string, specs: { CompletionSpec }): string
+	local nextCases = {}
+	local candidateCases = {}
+
+	for _, spec in specs do
+		for _, cmd in spec.commands do
+			local key = `{spec.path}|{cmd}`
+			local nextPath = if spec.path == "" then cmd else `{spec.path} {cmd}`
+			table.insert(
+				nextCases,
+				`            '{escapePowerShellSingleQuoted(key)}' \{ return '{escapePowerShellSingleQuoted(nextPath)}' \}`
+			)
+		end
+
+		local values = {}
+		for _, cmd in spec.commands do
+			table.insert(values, "'" .. escapePowerShellSingleQuoted(cmd) .. "'")
+		end
+		for _, opt in spec.options do
+			table.insert(values, "'" .. escapePowerShellSingleQuoted(opt) .. "'")
+		end
+		local candidateBlock = if #values > 0 then "@(" .. table.concat(values, ", ") .. ")" else "@()"
+		table.insert(
+			candidateCases,
+			`            '{escapePowerShellSingleQuoted(spec.path)}' \{ return {candidateBlock} \}`
+		)
+	end
+
+	return table.concat({
+		`Register-ArgumentCompleter -Native -CommandName '{escapePowerShellSingleQuoted(programName)}' -ScriptBlock \{`,
+		"    param($wordToComplete, $commandAst, $cursorPosition)",
+		"",
+		`    function __{ident}_NextPath([string]$path, [string]$word) \{`,
+		'        switch ("$path|$word") {',
+		#nextCases > 0 and table.concat(nextCases, "\n") or "            default { return $path }",
+		"            default { return $path }",
+		"        }",
+		"    }",
+		"",
+		`    function __{ident}_Candidates([string]$path) \{`,
+		"        switch ($path) {",
+		table.concat(candidateCases, "\n"),
+		"            default { return @() }",
+		"        }",
+		"    }",
+		"",
+		"    $tokens = @()",
+		"    foreach ($element in $commandAst.CommandElements) {",
+		"        $tokens += $element.Extent.Text",
+		"    }",
+		"",
+		"    $path = ''",
+		"    for ($i = 1; $i -lt $tokens.Count; $i++) {",
+		"        $word = $tokens[$i]",
+		"        if ($word -like '-*') {",
+		"            continue",
+		"        }",
+		`        $path = __{ident}_NextPath $path $word`,
+		"    }",
+		"",
+		`    foreach ($candidate in (__{ident}_Candidates $path)) \{`,
+		'        if ($candidate -like "$wordToComplete*") {',
+		"            [System.Management.Automation.CompletionResult]::new($candidate, $candidate, 'ParameterValue', $candidate)",
+		"        }",
+		"    }",
+		"}",
+	}, "\n")
+end
+
+--[=[
+	Generates a shell completion script for this parser.
+
+	Supports `"bash"`, `"zsh"`, `"fish"`, and `"powershell"`, and generates
+	subcommand-aware completions for commands and flags/options.
+]=]
+function Parser.generateCompletion(
+	self: Parser,
+	shell: "bash" | "zsh" | "fish" | "powershell",
+	programName: string?
+): string
+	local prog = programName or self.name
+	local ident = completionIdent(prog)
+	local specs = {}
+	buildCompletionSpecs(self, "", specs)
+
+	if shell == "bash" then
+		return renderBashCompletion(prog, ident, specs)
+	elseif shell == "zsh" then
+		return renderZshCompletion(prog, ident, specs)
+	elseif shell == "fish" then
+		return renderFishCompletion(prog, ident, specs)
+	elseif shell == "powershell" then
+		return renderPowerShellCompletion(prog, ident, specs)
+	end
+
+	error(`Unsupported shell '{shell}'`)
 end
 
 --[=[
@@ -338,10 +982,11 @@ function Parser.generateHelp(self: Parser): string
 	-- Usage line
 	local usage = `Usage: {self.name}`
 	for _, pos in self.positionals do
+		local name = if pos.variadic then `{pos.name}...` else pos.name
 		if pos.optional then
-			usage ..= ` [{pos.name}]`
+			usage ..= ` [{name}]`
 		else
-			usage ..= ` <{pos.name}>`
+			usage ..= ` <{name}>`
 		end
 	end
 	if next(self.subCommands) then
@@ -360,7 +1005,8 @@ function Parser.generateHelp(self: Parser): string
 		table.insert(lines, "")
 		table.insert(lines, "Arguments:")
 		for _, pos in self.positionals do
-			local label = if pos.optional then `  [{pos.name}]` else `  <{pos.name}>`
+			local name = if pos.variadic then `{pos.name}...` else pos.name
+			local label = if pos.optional then `  [{name}]` else `  <{name}>`
 			local desc = pos.description or ""
 			local typeHint = `({pos.type})`
 			table.insert(lines, `{label}  {typeHint}  {desc}`)
@@ -396,8 +1042,11 @@ function Parser.generateHelp(self: Parser): string
 			local short = if opt.shortName then `-{opt.shortName}, ` else "    "
 			local req = if opt.optional then "(optional)" else "(required)"
 			local def = if opt.default ~= nil then ` [default: {opt.default}]` else ""
+			local arity = opt.arity or 1
+			local valueLabel = if arity == 1 then `<{opt.type}>` else `<{opt.type} x{arity}>`
+			local multiple = if opt.multiple then " (repeatable)" else ""
 			local desc = opt.description or ""
-			table.insert(lines, `  {short}--{opt.longName} <{opt.type}>  {req}{def}  {desc}`)
+			table.insert(lines, `  {short}--{opt.longName} {valueLabel}  {req}{multiple}{def}  {desc}`)
 		end
 	end
 
@@ -430,10 +1079,15 @@ end
 ]=]
 function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 	local args: { string } = arguments or os.cliargs()
+	if maybeEmitCompletionCandidates(self, args) then
+		return {}
+	end
 
 	local result: { [string]: any } = {}
+	local provided: { [string]: boolean } = {}
 	local positionalIndex = 1
 	local i = 1
+	local optionsEnded = false
 
 	-- Initialize flag defaults to false
 	for _, flag in self.flags do
@@ -451,66 +1105,67 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 	for _, opt in self.options do
 		if opt.default ~= nil then
 			result[opt.longName] = opt.default
+		elseif opt.multiple then
+			result[opt.longName] = {}
 		end
 	end
 
-	-- Helper: find a flag by short name
-	local function findFlagByShort(short: string): typeof(self.flags[1])?
-		for _, flag in self.flags do
-			if flag.shortName == short then
-				return flag
+	local function appendOptionValue(opt: OptionSpec, value: any)
+		if opt.multiple then
+			local values = result[opt.longName]
+			if values == nil then
+				values = {}
+				result[opt.longName] = values
 			end
+			if opt.arity == 1 then
+				table.insert(values, value)
+			else
+				for _, item in value do
+					table.insert(values, item)
+				end
+			end
+		else
+			result[opt.longName] = value
 		end
-		return nil
+		provided[opt.longName] = true
 	end
 
-	-- Helper: find an option by short name
-	local function findOptionByShort(short: string): typeof(self.options[1])?
-		for _, opt in self.options do
-			if opt.shortName == short then
-				return opt
-			end
-		end
-		return nil
-	end
+	local function consumeOptionValues(opt: OptionSpec, inlineValue: string?, currentIndex: number): number
+		local arity = opt.arity or 1
+		local values = {}
 
-	-- Helper: find a flag by long name
-	local function findFlagByLong(long: string): typeof(self.flags[1])?
-		for _, flag in self.flags do
-			if flag.longName == long then
-				return flag
+		if inlineValue ~= nil then
+			if arity ~= 1 then
+				error(`Option '--{opt.longName}' does not support inline values when arity is greater than 1`)
 			end
+			appendOptionValue(opt, coerce(inlineValue, opt.type))
+			return currentIndex
 		end
-		return nil
-	end
 
-	-- Helper: find an option by long name
-	local function findOptionByLong(long: string): typeof(self.options[1])?
-		for _, opt in self.options do
-			if opt.longName == long then
-				return opt
+		for _ = 1, arity do
+			currentIndex += 1
+			if currentIndex > #args then
+				error(`Option '--{opt.longName}' expects {arity} value(s)`)
 			end
+			table.insert(values, coerce(args[currentIndex], opt.type))
 		end
-		return nil
-	end
 
-	-- Helper: coerce a value to the expected type
-	local function coerce(value: string, expectedType: "string" | "number"): string | number
-		if expectedType == "number" then
-			local n = tonumber(value)
-			if n == nil then
-				error(`Expected a number, got '{value}'`)
-			end
-			return n
+		if arity == 1 then
+			appendOptionValue(opt, values[1])
+		else
+			appendOptionValue(opt, values)
 		end
-		return value
+
+		return currentIndex
 	end
 
 	while i <= #args do
 		local arg = args[i]
 
 		-- Long option/flag: --name or --name=value
-		if string.sub(arg, 1, 2) == "--" then
+		if not optionsEnded and arg == "--" then
+			optionsEnded = true
+		elseif not optionsEnded and string.sub(arg, 1, 2) == "--" then
 			local body = string.sub(arg, 3)
 			local eqPos = string.find(body, "=")
 
@@ -518,52 +1173,42 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 				-- --key=value form
 				local key = string.sub(body, 1, eqPos - 1)
 				local value = string.sub(body, eqPos + 1)
-				local opt = findOptionByLong(key)
+				local opt = findOptionByLong(self, key)
 				if not opt then
 					error(`Unknown option '--{key}'`)
 				end
-				result[opt.longName] = coerce(value, opt.type)
+				i = consumeOptionValues(opt, value, i)
 			else
 				-- Could be a flag or an option expecting next arg
-				local flag = findFlagByLong(body)
+				local flag = findFlagByLong(self, body)
 				if flag then
 					result[flag.longName] = true
+					provided[flag.longName] = true
 				else
-					local opt = findOptionByLong(body)
+					local opt = findOptionByLong(self, body)
 					if not opt then
 						error(`Unknown flag or option '--{body}'`)
 					end
-					i += 1
-					if i > #args then
-						error(`Option '--{body}' expects a value`)
-					end
-					result[opt.longName] = coerce(args[i], opt.type)
+					i = consumeOptionValues(opt, nil, i)
 				end
 			end
 
 		-- Short option/flag(s): -h, -ho, -ho 5
-		elseif string.sub(arg, 1, 1) == "-" and #arg > 1 then
+		elseif not optionsEnded and string.sub(arg, 1, 1) == "-" and #arg > 1 then
 			local chars = string.sub(arg, 2)
 			local j = 1
 			while j <= #chars do
 				local ch = string.sub(chars, j, j)
-				local flag = findFlagByShort(ch)
-				local opt = findOptionByShort(ch)
+				local flag = findFlagByShort(self, ch)
+				local opt = findOptionByShort(self, ch)
 
 				if flag and not opt then
 					result[flag.longName] = true
+					provided[flag.longName] = true
 				elseif opt then
 					-- Option consumes the rest of the merged chars or next argument
 					local rest = string.sub(chars, j + 1)
-					if #rest > 0 then
-						result[opt.longName] = coerce(rest, opt.type)
-					else
-						i += 1
-						if i > #args then
-							error(`Option '-{ch}' expects a value`)
-						end
-						result[opt.longName] = coerce(args[i], opt.type)
-					end
+					i = consumeOptionValues(opt, if #rest > 0 then rest else nil, i)
 					break -- rest was consumed
 				else
 					error(`Unknown flag or option '-{ch}'`)
@@ -599,22 +1244,37 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 				error(`Unexpected argument '{arg}'`)
 			end
 			local pos = self.positionals[positionalIndex]
-			result[pos.name] = coerce(arg, pos.type)
-			positionalIndex += 1
+			if pos.variadic then
+				local values = result[pos.name]
+				if values == nil then
+					values = {}
+					result[pos.name] = values
+				end
+				table.insert(values, coerce(arg, pos.type))
+			else
+				result[pos.name] = coerce(arg, pos.type)
+				positionalIndex += 1
+			end
 		end
 
 		i += 1
 	end
 
 	-- Help: invoke handler before validation
-	if result.help == true then
+	if self._helpEnabled and result.help == true then
 		self._helpHandler(self)
+		result.help = nil
+		return result
 	end
-	result.help = nil
+	if self._helpEnabled then
+		result.help = nil
+	end
 
 	-- Validate required positionals were provided
 	for idx, pos in self.positionals do
-		if not pos.optional and result[pos.name] == nil then
+		local value = result[pos.name]
+		local missing = value == nil or (pos.variadic and #value == 0)
+		if not pos.optional and missing then
 			error(`Missing required positional argument '{pos.name}'`)
 		end
 	end
@@ -623,6 +1283,45 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 	for _, opt in self.options do
 		if not opt.optional and result[opt.longName] == nil then
 			error(`Missing required option '--{opt.longName}'`)
+		end
+	end
+
+	-- Validate mutually exclusive groups
+	for _, group in self.mutexGroups do
+		local seen = 0
+		local seenNames = {}
+
+		for _, name in group.names do
+			local known = false
+			for _, flag in self.flags do
+				if flag.longName == name then
+					known = true
+					break
+				end
+			end
+			if not known then
+				for _, opt in self.options do
+					if opt.longName == name then
+						known = true
+						break
+					end
+				end
+			end
+			if not known then
+				error(`Unknown flag/option '{name}' in mutually exclusive group`)
+			end
+
+			if provided[name] then
+				seen += 1
+				table.insert(seenNames, name)
+			end
+		end
+
+		if seen > 1 then
+			error(`Arguments {table.concat(seenNames, ", ")} are mutually exclusive`)
+		end
+		if group.required and seen == 0 then
+			error(`One of {table.concat(group.names, ", ")} is required`)
 		end
 	end
 

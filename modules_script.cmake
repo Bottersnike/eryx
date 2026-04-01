@@ -9,6 +9,9 @@ add_luau_script_module(http/
     src/modules/http/HttpConnection.luau
     src/modules/http/HttpServer.luau
     src/modules/http/ServerResponse.luau
+    src/modules/http/Session.luau
+    src/modules/http/App.luau
+    src/modules/http/ServerSession.luau
 )
 add_luau_script_module(encoding/
     src/modules/encoding/init.luau

@@ -134,6 +134,7 @@ export type ArticleSidebarSection = {
 type ANode = {
 	children: { [string]: ANode },
 	insertionOrder: number, -- preserves the order from collectArticles
+	pathKey: string,
 	name: string?, -- the article's registration key
 	sitePath: string?,
 	title: string?,
@@ -145,7 +146,8 @@ local insertionCounter = 0
 local function toArticleSidebar(
 	tree: { [string]: ANode },
 	activePage: string?,
-	folderTitles: { [string]: string }?
+	folderTitles: { [string]: string }?,
+	folderOrder: { [string]: number }?
 ): ({ ArticleSidebarEntry }, boolean)
 	local result: { ArticleSidebarEntry } = {}
 	local anyActive = false
@@ -160,14 +162,14 @@ local function toArticleSidebar(
 		local children: { ArticleSidebarEntry }? = nil
 		local childActive = false
 		if hasChildren then
-			children, childActive = toArticleSidebar(node.children, activePage, folderTitles)
+			children, childActive = toArticleSidebar(node.children, activePage, folderTitles, folderOrder)
 			if childActive then
 				anyActive = true
 			end
 		end
 
 		-- Resolve display name: article title > folder title from .meta > stem
-		local displayName = node.title or (if folderTitles then folderTitles[node.name or stem] else nil) or stem
+		local displayName = node.title or (if folderTitles then folderTitles[node.pathKey] else nil) or stem
 
 		local entry: ArticleSidebarEntry = {
 			displayName = displayName,
@@ -177,13 +179,27 @@ local function toArticleSidebar(
 			children = children,
 		}
 		-- Carry insertion order for sorting
-		(entry :: any)._order = node.insertionOrder
+		(entry :: any)._order = node.insertionOrder;
+		(entry :: any)._metaOrder = if folderOrder then folderOrder[node.pathKey] else nil
 		table.insert(result, entry)
 	end
 
 	-- Sort by insertion order — this preserves the order from collectArticles,
 	-- which already handles .meta children lists and alphabetical fallback.
 	table.sort(result, function(a: ArticleSidebarEntry, b: ArticleSidebarEntry)
+		local aMeta = (a :: any)._metaOrder
+		local bMeta = (b :: any)._metaOrder
+		if aMeta ~= nil or bMeta ~= nil then
+			if aMeta == nil then
+				return false
+			end
+			if bMeta == nil then
+				return true
+			end
+			if aMeta ~= bMeta then
+				return aMeta < bMeta
+			end
+		end
 		return (a :: any)._order < (b :: any)._order
 	end)
 
@@ -213,7 +229,8 @@ local function buildSidebarArticleSections(
 	activePage: string?,
 	getLink: (article: any) -> string,
 	sectionTitles: { [string]: string }?,
-	folderTitles: { [string]: string }?
+	folderTitles: { [string]: string }?,
+	folderOrder: { [string]: number }?
 ): ArticleSidebarResult
 	-- Build the full tree
 	local tree: { [string]: ANode } = {}
@@ -229,10 +246,12 @@ local function buildSidebarArticleSections(
 		end
 
 		local cur = tree
+		local pathKey = ""
 		for i, part in parts do
+			pathKey = if pathKey == "" then part else pathKey .. "/" .. part
 			if not cur[part] then
 				insertionCounter += 1
-				cur[part] = { children = {}, insertionOrder = insertionCounter }
+				cur[part] = { children = {}, insertionOrder = insertionCounter, pathKey = pathKey }
 			end
 			if i == #parts then
 				cur[part].name = articleInfo.name
@@ -252,6 +271,19 @@ local function buildSidebarArticleSections(
 		table.insert(sorted, { stem = stem, node = node })
 	end
 	table.sort(sorted, function(a, b)
+		local aMeta = if folderOrder then folderOrder[a.node.pathKey] else nil
+		local bMeta = if folderOrder then folderOrder[b.node.pathKey] else nil
+		if aMeta ~= nil or bMeta ~= nil then
+			if aMeta == nil then
+				return false
+			end
+			if bMeta == nil then
+				return true
+			end
+			if aMeta ~= bMeta then
+				return aMeta < bMeta
+			end
+		end
 		return a.node.insertionOrder < b.node.insertionOrder
 	end)
 
@@ -263,7 +295,7 @@ local function buildSidebarArticleSections(
 		if hasChildren then
 			-- Folder → becomes a titled section
 			local title = node.title or (if sectionTitles then sectionTitles[stem] else nil) or formatFolderName(stem)
-			local entries, _ = toArticleSidebar(node.children, activePage, folderTitles)
+			local entries, _ = toArticleSidebar(node.children, activePage, folderTitles, folderOrder)
 			table.insert(sections, { title = title, entries = entries })
 		else
 			-- Loose top-level article

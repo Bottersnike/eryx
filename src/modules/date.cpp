@@ -309,6 +309,41 @@ ZonedInstant add_years(lua_State* L, const ZonedInstant& z, int years) {
     return add_months(L, z, years * 12);
 }
 
+std::string relative_time(const ZonedInstant& target, const ZonedInstant& base) {
+    using namespace std::chrono;
+
+    auto delta = diff(target, base);
+    bool future = delta >= Duration::zero();
+    auto absDelta = future ? delta : -delta;
+
+    auto make_phrase = [&](int64_t value, const char* unit) {
+        std::string label = value == 1 ? unit : std::string(unit) + "s";
+        return future ? std::format("in {} {}", value, label)
+                      : std::format("{} {} ago", value, label);
+    };
+
+    auto secondsCount = duration_cast<std::chrono::seconds>(absDelta).count();
+    if (secondsCount < 5) return "just now";
+    if (secondsCount < 45) return future ? "in a few seconds" : "a few seconds ago";
+    if (secondsCount < 90) return make_phrase(1, "minute");
+
+    auto minutesCount = duration_cast<std::chrono::minutes>(absDelta).count();
+    if (minutesCount < 45) return make_phrase(minutesCount, "minute");
+    if (minutesCount < 90) return make_phrase(1, "hour");
+
+    auto hoursCount = duration_cast<std::chrono::hours>(absDelta).count();
+    if (hoursCount < 22) return make_phrase(hoursCount, "hour");
+    if (hoursCount < 36) return make_phrase(1, "day");
+
+    auto daysCount =
+        duration_cast<std::chrono::duration<int64_t, std::ratio<86400>>>(absDelta).count();
+    if (daysCount < 26) return make_phrase(daysCount, "day");
+    if (daysCount < 45) return make_phrase(1, "month");
+    if (daysCount < 320) return make_phrase((daysCount + 15) / 30, "month");
+    if (daysCount < 548) return make_phrase(1, "year");
+    return make_phrase((daysCount + 182) / 365, "year");
+}
+
 // Format the local time using a std::chrono-compatible format string (%Y, %m, %d, %H, %M, %S …).
 // For fixed-offset instants, %z/%Ez/%Z are substituted with the literal offset string.
 std::string format_custom(lua_State* L, const ZonedInstant& z, const std::string& fmt) {
@@ -763,6 +798,21 @@ static int dt_addyears(lua_State* L) {
 }
 
 // date.parse(str, fmt, zone?) – parse using a std::chrono format string
+static int dt_relative(lua_State* L) {
+    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    tzdate::ZonedInstant base;
+
+    if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
+        LuaDateTime* other = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
+        base = other->instant;
+    } else {
+        base = tzdate::date_now();
+    }
+
+    lua_pushstring(L, tzdate::relative_time(dt->instant, base).c_str());
+    return 1;
+}
+
 static int date_parse(lua_State* L) {
     const char* s = luaL_checkstring(L, 1);
     const char* fmt = luaL_checkstring(L, 2);
@@ -1014,6 +1064,8 @@ LUAU_MODULE_EXPORT int luauopen_date(lua_State* L) {
     lua_setfield(L, -2, "addMonths");
     lua_pushcfunction(L, dt_addyears, "addYears");
     lua_setfield(L, -2, "addYears");
+    lua_pushcfunction(L, dt_relative, "relative");
+    lua_setfield(L, -2, "relative");
     lua_pop(L, 1);
 
     // Duration metatable

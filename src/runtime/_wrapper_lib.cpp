@@ -783,13 +783,7 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
         auto* ex = (LuaException*)p;
         if (!ex->traceback.empty()) return;  // already populated
 
-        lua_Debug ar;
-        for (int level = 1; lua_getinfo(L, level, "sln", &ar); level++) {
-            if (strcmp(ar.source, "=[C]") == 0) continue;
-            ex->traceback.push_back({ ar.source, ar.short_src, ar.currentline,
-                                      ar.name ? ar.name : "<top level>",
-                                      getSourceLine(ar.source, ar.currentline) });
-        }
+        eryx_exception_populate_tb(L, ex, 1);
     };
 
     // Enable Native CodeGen

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -34,21 +35,31 @@ typedef struct _LuaFrame {
     std::string function;
     std::string lineContext;
 } LuaFrame;
+typedef struct _LuaExceptionSnapshot {
+    std::string type;
+    std::string message;
+    std::vector<LuaFrame> traceback;
+    std::unique_ptr<_LuaExceptionSnapshot> parent;
+} LuaExceptionSnapshot;
 typedef struct _LuaException {
     uint32_t tag = LUA_EXCEPTION_TAG;
     const char* type;
     std::string message;
     std::vector<LuaFrame> traceback;
     const void* extra;
+    std::unique_ptr<LuaExceptionSnapshot> parent;
+    int pendingTracebackSkip = 0;
     int dataRef = LUA_NOREF;  // Registry ref to the original error value
 } LuaException;
 
 LuaException* eryx_get_exception(lua_State* L, int idx);
+std::unique_ptr<LuaExceptionSnapshot> eryx_copy_exception(const LuaException* exception);
 
 void eryx_exception_push_keyboard_interrupt(lua_State* L);
 void eryx_exception_push_exception(lua_State* L, const char* type, const char* message,
                                    const void* extra);
-std::string eryx_format_exception(lua_State* L, int idx);
+void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initialLevel = 0);
+std::string eryx_format_exception(lua_State* L, int idx, bool useAnsi = false);
 
 // If the value at the top of the stack is not already a LuaException, replaces it
 // with one. Traceback is walked from L's current call stack - valid after

@@ -34,13 +34,11 @@ local function erroringFn()
 end
 local ok, err = pcall(erroringFn)
 if not ok then
-    const exception = require("@eryx/exception")
-
-    -- err is now an Exception
+    -- err is an Exception, not the string we originally errored with
     print(err.type)  -- Outputs "thrown"
     print(err.message)  -- Outputs "Hello errors"
     print(err.traceback)  -- Outputs the traceback table
-    print(exception.format(err))
+    print(require("@eryx/exception").format(err))
 end
 ```
 

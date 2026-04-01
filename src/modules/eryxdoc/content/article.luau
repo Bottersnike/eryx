@@ -17,6 +17,11 @@ export type SidebarArticle = {
 	summary: string?,
 }
 
+export type GeneratedSectionPage = {
+	title: string,
+	article: any,
+}
+
 local Article = {}
 Article.__index = Article
 
@@ -30,6 +35,7 @@ type ArticleFields = {
 	hero: ArticleMeta?,
 	body: string,
 	sourceFilename: string,
+	generatedSectionPages: { GeneratedSectionPage }?,
 }
 export type Article = setmetatable<ArticleFields, typeof(Article)>
 
@@ -105,6 +111,22 @@ end
 function Article.fromFile(path: string): Article
 	local source = fs.openSync(path):readSync()
 	return Article.fromSource(source, path)
+end
+
+function Article.generated(
+	title: string,
+	sourceFilename: string,
+	body: string?,
+	summary: string?,
+	generatedSectionPages: { GeneratedSectionPage }?
+): Article
+	return setmetatable({
+		title = title,
+		summary = summary,
+		sourceFilename = sourceFilename,
+		body = body or "",
+		generatedSectionPages = generatedSectionPages,
+	}, Article)
 end
 
 function Article.generateToc(self: Article): { markdown.TocEntry }

@@ -76,6 +76,7 @@ Signal.__index = Signal
 
 export type Signal<T...> = setmetatable<{
 	_head: Connection<T...>?,
+	_errorSignal: Signal<any, Connection<T...>>?,
 }, typeof(Signal)>
 
 --[=[
@@ -90,6 +91,7 @@ export type Signal<T...> = setmetatable<{
 function Signal.new<T...>(): Signal<T...>
 	local this = {
 		_head = nil :: Connection<T...>?,
+		_errorSignal = nil :: Signal<any, Connection<T...>>?,
 	}
 
 	return setmetatable(this, Signal)
@@ -126,9 +128,25 @@ function Signal.fire<T...>(self: Signal<T...>, ...: T...): boolean
 		return false
 	end
 
+	local args = table.pack(...)
 	for _, handler in handlers do
 		if handler.connected then
-			task.spawn(handler._fn :: any, ...)
+			task.spawn(function()
+				local ok, err = pcall(function()
+					(handler._fn :: any)(table.unpack(args, 1, args.n))
+				end)
+
+				if ok then
+					return
+				end
+
+				local errorSignal = self._errorSignal
+				if errorSignal then
+					errorSignal:fire(err, handler)
+				else
+					error(err)
+				end
+			end)
 		end
 	end
 	return true
@@ -168,6 +186,40 @@ function Signal.disconnectAll<T...>(self: Signal<T...>)
 		node = next
 	end
 	self._head = nil
+end
+
+--[=[
+	Returns a lazily-created signal that fires when any handler connected to
+	this signal raises an error. The error signal fires with `(err, connection)`.
+
+	If no error handlers are connected, handler errors are re-thrown so they
+	remain visible rather than being silently swallowed.
+
+	```luau
+	local sig = Signal.new()
+
+	sig:errorSignal():connect(function(err)
+		warn("signal handler failed:", err)
+	end)
+	```
+]=]
+function Signal.errorSignal<T...>(self: Signal<T...>): Signal<any, Connection<T...>>
+	if not self._errorSignal then
+		self._errorSignal = Signal.new()
+	end
+	return self._errorSignal
+end
+
+--[=[
+	Connects a callback that will be invoked whenever one of this signal's
+	handlers raises an error. The callback receives the thrown value and the
+	connection whose handler failed.
+]=]
+function Signal.connectError<T...>(
+	self: Signal<T...>,
+	callback: (err: any, connection: Connection<T...>) -> ()
+): Connection<any, Connection<T...>>
+	return self:errorSignal():connect(callback)
 end
 
 --[=[

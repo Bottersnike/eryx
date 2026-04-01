@@ -141,6 +141,27 @@ local ListItemRule: types.BlockRule<"list_item", ListItem> = {
 		return false -- don't close the list item
 	end,
 
+	setsBlankFlag = true,
+	wrapperType = "list",
+	createWrapper = function(_firstBlock): types.AnyBlockNode
+		return {
+			type = "list",
+			maybeLoose = false,
+			loose = false,
+			children = {},
+		}
+	end,
+	onBeforeChildMount = function(container, _child, blankSinceLast, openStack)
+		if #openStack >= 2 then
+			local parentList = openStack[#openStack - 1]
+			if parentList.type == "list" or parentList.type == "ordered_list" then
+				if (parentList :: any).maybeLoose or (blankSinceLast and #container.children > 0) then
+					(parentList :: any).loose = true
+				end
+			end
+		end
+	end,
+
 	toHtml = function(block, rules, config): string
 		local annotation = ""
 		if config.annotateHtml then
@@ -213,6 +234,21 @@ local ListRule: types.BlockRule<"list", {
 			if i.type == "list_item" then
 				i.loose = block.loose
 			end
+		end
+	end,
+	canContainParagraph = false,
+	acceptsNewChild = function(wrapper, newBlock): boolean
+		if newBlock.type ~= "list_item" then
+			return false
+		end
+		if #wrapper.children > 0 and (wrapper.children[1] :: any).marker ~= (newBlock :: any).marker then
+			return false
+		end
+		return true
+	end,
+	onBeforeChildMount = function(container, _child, blankSinceLast, _openStack)
+		if (container :: any).maybeLoose or (blankSinceLast and #(container :: any).children > 0) then
+			(container :: any).loose = true
 		end
 	end,
 

@@ -145,6 +145,13 @@ local TabPanelRule: types.BlockRule<"tab_panel", TabPanelBlock> = {
 			breakAfterOpen = false,
 		}
 	end,
+	wrapperType = "tab_group",
+	createWrapper = function(_firstBlock): types.AnyBlockNode
+		return {
+			type = "tab_group",
+			children = {},
+		}
+	end,
 	toHtml = function(block, rules, config)
 		local chunks: { string } = {}
 		local activeAttr = if block.active then ` active=""` else ""
@@ -165,6 +172,16 @@ local TabGroupRule: types.BlockRule<"tab_group", { children: { TabPanelBlock } }
 	name = "tab_group",
 	continueBlock = function(_block, _line: string, cursor: tabUtil.LineCursor): types.ContinueResult
 		return { matched = true, cursor = cursor }
+	end,
+	canContainParagraph = false,
+	acceptsNewChild = function(_wrapper, newBlock): boolean
+		if newBlock.type ~= "tab_panel" then
+			return false
+		end
+		if (newBlock :: any)._forceNewGroup then
+			return false
+		end
+		return true
 	end,
 	postProcessDocument = function(doc)
 		local function setDefaultTab(node: types.AnyBlockNode)

@@ -21,6 +21,11 @@ int exception_new(lua_State* L) {
     exception->type = ETYPE_USER;
     exception->message = message;
 
+    LuaException* e = eryx_get_exception(L, 2);
+    if (e) {
+        exception->parent = eryx_copy_exception(e);
+    }
+
     // Traceback will be populated at the time we call error()
 
     return 1;
@@ -28,7 +33,8 @@ int exception_new(lua_State* L) {
 
 int exception_format(lua_State* L) {
     luaL_checkudata(L, 1, EXCEPTION_METATABLE);
-    lua_pushstring(L, eryx_format_exception(L, 1).c_str());
+    bool useAnsi = luaL_optboolean(L, 2, false);
+    lua_pushstring(L, eryx_format_exception(L, 1, useAnsi).c_str());
     return 1;
 }
 

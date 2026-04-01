@@ -2,19 +2,34 @@
     <main class="main-content">
         <div class="container article-content">
             {% if not (_pageContext and _pageContext.name == "index") then %}
-            <nav class="breadcrumbs" aria-label="Breadcrumbs">
-                <a href="{{ global.siteRoot }}">Home</a>
+            <ol class="breadcrumbs" aria-label="Breadcrumbs" vocab="https://schema.org/" typeof="BreadcrumbList">
+                <li property="itemListElement" typeof="ListItem">
+                    <a property="item" typeof="WebPage" href="{{ global.siteRoot }}">
+                        <span property="name">Home</span>
+                    </a>
+                    <meta property="position" content="1">
+                </li>
+                {% set finalCrumb = 2 %}
                 {% for _, crumb in breadcrumbs do %}
                 <span class="breadcrumb-sep">/</span>
-                {% if crumb.link then %}
-                <a href="{{ crumb.link }}">{{ crumb.label | escape }}</a>
-                {% else %}
-                <span>{{ crumb.label | escape }}</span>
-                {% end %}
+                <li property="itemListElement" typeof="ListItem">
+                    {% if crumb.link then %}
+                    <a property="item" typeof="WebPage" href="{{ crumb.link }}">
+                        <span property="name">{{ crumb.label | escape }}</span>
+                    </a>
+                    {% else %}
+                    <span property="name">{{ crumb.label | escape }}</span>
+                    {% end %}
+                    <meta property="position" content="{{ crumb.position }}">
+                    {% set finalCrumb = crumb.next %}
+                </li>
                 {% end %}
                 <span class="breadcrumb-sep">/</span>
-                <span class="breadcrumb-current">{{ article.title | escape }}</span>
-            </nav>
+                <li property="itemListElement" typeof="ListItem">
+                    <span property="name" class="breadcrumb-current">{{ article.title | escape }}</span>
+                    <meta property="position" content="{{ finalCrumb }}">
+                </li>
+            </ol>
             {% end %}
 
             {% if article.hero then %}
@@ -42,6 +57,18 @@
             {% if article.lastUpdated then %}
             <div class="last-updated">Last updated: {{ article.lastUpdated }}</div>
             {% end %}
+            {% end %}
+            {% if article.generatedSectionPages and article.generatedSectionPages | length > 0 then %}
+            <section class="section-page-list">
+                <h2>Pages in this section</h2>
+                <ul class="section-page-list-items">
+                    {% for _, page in article.generatedSectionPages do %}
+                    <li>
+                        <a href="{{ page.article | webPath }}">{{ page.title | escape }}</a>
+                    </li>
+                    {% end %}
+                </ul>
+            </section>
             {% end %}
             {{ article.body | markdown }}
 

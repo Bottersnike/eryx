@@ -3,8 +3,9 @@
 
 	Built on top of `@eryx/_socket` and `@eryx/_ssl`, this module provides
 	both one-shot convenience functions and lower-level connection and
-	server classes for HTTP and HTTPS, with cookie jar and multipart
-	form data support.
+	server classes for HTTP and HTTPS, with cookie jars, pooled sessions,
+	streaming request and response bodies, multipart/form helpers, and
+	HTTP/1.1 trailer support.
 
 	**Client - one-shot request:**
 	```luau
@@ -42,6 +43,17 @@
 	})
 	```
 
+	**Session with connection reuse:**
+	```luau
+	local session = http.Session.new({
+	    connectTimeout = 2,
+	    readTimeout = 10,
+	    maxConnectionsPerHost = 4,
+	})
+	local resp = session:get("https://example.com/api")
+	session:close()
+	```
+
 	**Server:**
 	```luau
 	local server = http.HttpServer.new(function(req, res)
@@ -65,17 +77,44 @@ local http = {}
 
 local request = require("@self/request")
 local multipart = require("@self/multipart")
+local util = require("@self/util")
 
 http.HttpServer = require("@self/HttpServer")
+http.App = require("@self/App")
+http.Router = http.App
+http.ServerSession = require("@self/ServerSession")
 http.CookieJar = require("@self/CookieJar")
 http.HttpConnection = require("@self/HttpConnection")
+http.Session = require("@self/Session")
 http.ServerResponse = require("@self/ServerResponse")
+http.createApp = function(options)
+	return http.App.new(options)
+end
+http.createRouter = http.createApp
+http.createMemorySessionStore = function()
+	return http.ServerSession.memoryStore()
+end
+http.createFileSessionStore = function(directory)
+	return http.ServerSession.fileStore(directory)
+end
+http.createSqliteSessionStore = function(database, tableName)
+	return http.ServerSession.sqliteStore(database, tableName)
+end
 http.request = request.request
+http.stream = request.stream
 http.get = request.get
 http.post = request.post
 http.put = request.put
 http.delete = request.delete
 http.head = request.head
+http.raiseForStatus = request.raiseForStatus
+http.decodeJsonBody = request.decodeJsonBody
+http.decodeFormBody = request.decodeFormBody
+http.decodeMultipartBody = request.decodeMultipartBody
+http.parseQuery = util.decodeForm
+http.formEncode = util.encodeForm
+http.formDecode = util.decodeForm
 http.multipartEncode = multipart.encodeFields
+http.multipartDecode = multipart.parse
 
 return table.freeze(http)

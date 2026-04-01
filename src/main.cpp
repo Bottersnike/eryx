@@ -7,10 +7,15 @@
 #include <mach-o/dyld.h>
 #endif
 
+#include <algorithm>
 #include <cctype>
 #include <cerrno>
 #include <cstdarg>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
+#include <vector>
 
 #include "isocline.h"
 
@@ -66,8 +71,14 @@ static BOOL WINAPI main_ctrl_handler(DWORD type) {
 static void main_sigint_handler(int) { g_main_interrupted = true; }
 #endif
 
+static bool should_use_ansi_for_fd(int fd) {
+    if (std::getenv("NO_COLOR")) return false;
+    if (std::getenv("FORCE_COLOR")) return true;
+    return uv_guess_handle(fd) == UV_TTY;
+}
+
 void eryx_print_error(lua_State* L, int idx) {
-    fprintf(stderr, "%s\n", eryx_format_exception(L, idx).c_str());
+    fprintf(stderr, "%s\n", eryx_format_exception(L, idx, should_use_ansi_for_fd(2)).c_str());
 }
 
 bool eryx_has_work(EryxRuntime* rt) { return !rt->threads.empty() || uv_loop_alive(rt->loop); }
@@ -434,7 +445,7 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
     std::string bytecode = Luau::compile(source, opts);
 
     if (luau_load(L, "=stdin", bytecode.data(), bytecode.size(), 0) != 0) {
-        std::string error = eryx_format_exception(L, -1);
+        std::string error = eryx_format_exception(L, -1, should_use_ansi_for_fd(1));
         lua_settop(L, base);
         return ReplRunResult{ false, false, 0, error };
     }
@@ -458,7 +469,7 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
                     return ReplRunResult{ false, true, code, std::string() };
                 }
 
-                std::string error = eryx_format_exception(L, -1);
+                std::string error = eryx_format_exception(L, -1, should_use_ansi_for_fd(1));
 
                 lua_settop(L, base);
                 return ReplRunResult{ false, false, 0, error };
@@ -480,7 +491,7 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
             return ReplRunResult{ false, true, code, std::string() };
         }
 
-        std::string error = eryx_format_exception(L, -1);
+        std::string error = eryx_format_exception(L, -1, should_use_ansi_for_fd(1));
 
         lua_settop(L, base);
         return ReplRunResult{ false, false, 0, error };
@@ -600,6 +611,364 @@ static std::filesystem::path getScriptsDir() {
 #endif
 }
 
+static std::string shell_single_quote(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 8);
+    for (char ch : value) {
+        if (ch == '\'') {
+            out += "'\"'\"'";
+        } else {
+            out += ch;
+        }
+    }
+    return out;
+}
+
+static std::string powershell_single_quote(const std::string& value) {
+    std::string out;
+    out.reserve(value.size() + 4);
+    for (char ch : value) {
+        if (ch == '\'') {
+            out += "''";
+        } else {
+            out += ch;
+        }
+    }
+    return out;
+}
+
+static bool is_completion_shell(const std::string& shell) {
+    return shell == "bash" || shell == "zsh" || shell == "fish" || shell == "powershell";
+}
+
+static std::filesystem::path completion_debug_log_path() {
+    const char* env = std::getenv("ERYX_COMPLETION_DEBUG");
+    if (!env || !*env) return {};
+
+    if (strcmp(env, "1") == 0) {
+        return std::filesystem::temp_directory_path() / "eryx-completion.log";
+    }
+
+    return std::filesystem::path(env);
+}
+
+static void completion_debug_log(const std::string& message) {
+    std::filesystem::path path = completion_debug_log_path();
+    if (path.empty()) return;
+
+    std::ofstream out(path, std::ios::app | std::ios::binary);
+    if (!out) return;
+
+    out << message << "\n";
+}
+
+static std::vector<std::string> list_builtin_scripts() {
+    namespace fs = std::filesystem;
+    std::vector<std::string> names;
+    fs::path scriptsDir = getScriptsDir();
+
+    if (!fs::exists(scriptsDir) || !fs::is_directory(scriptsDir)) return names;
+
+    for (const auto& entry : fs::directory_iterator(scriptsDir)) {
+        if (!entry.is_regular_file()) continue;
+        fs::path path = entry.path();
+        if (path.extension() == ".luau") {
+            names.push_back(path.stem().string());
+        }
+    }
+
+    std::sort(names.begin(), names.end());
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return names;
+}
+
+static void print_completion_candidates(std::vector<std::string> values) {
+    std::sort(values.begin(), values.end());
+    values.erase(std::unique(values.begin(), values.end()), values.end());
+    for (const std::string& value : values) {
+        std::cout << value << "\n";
+    }
+}
+
+static void set_process_env(const char* key, const char* value) {
+#ifdef _WIN32
+    _putenv_s(key, value ? value : "");
+#else
+    if (value) {
+        setenv(key, value, 1);
+    } else {
+        unsetenv(key);
+    }
+#endif
+}
+
+struct ScopedEnvVar {
+    std::string key;
+    bool hadValue = false;
+    std::string previousValue;
+
+    ScopedEnvVar(const char* envKey, const char* envValue) : key(envKey) {
+        const char* existing = std::getenv(envKey);
+        if (existing) {
+            hadValue = true;
+            previousValue = existing;
+        }
+        set_process_env(envKey, envValue);
+    }
+
+    ~ScopedEnvVar() {
+        if (hadValue) {
+            set_process_env(key.c_str(), previousValue.c_str());
+        } else {
+            set_process_env(key.c_str(), nullptr);
+        }
+    }
+};
+
+static int main_complete_script(const std::filesystem::path& scriptPath, int cliOffset,
+                                const char* shell) {
+    completion_debug_log("main_complete_script: path=" + scriptPath.string() + " cliOffset=" +
+                         std::to_string(cliOffset) + " shell=" + (shell ? shell : ""));
+
+    std::ifstream f(scriptPath, std::ios::binary);
+    if (!f) {
+        completion_debug_log("main_complete_script: failed to read script");
+        std::cerr << "Failed to read " << scriptPath << std::endl;
+        return 1;
+    }
+
+    std::string source((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+    if (source.find("@eryx/argparse") == std::string::npos) {
+        completion_debug_log("main_complete_script: script does not use @eryx/argparse");
+        return 0;
+    }
+    completion_debug_log("main_complete_script: invoking script in completion mode");
+    ScopedEnvVar completionMode("ERYX_ARGPARSE_COMPLETE", "1");
+    ScopedEnvVar completionShell("ERYX_ARGPARSE_COMPLETE_SHELL", shell ? shell : "");
+
+    eryx_set_cliargs_offset(cliOffset);
+    return main_script(scriptPath.string().c_str(), source);
+}
+
+static std::string render_completion_script(const std::string& programName,
+                                            const std::string& shell) {
+    const std::string shellProgram = shell_single_quote(programName);
+    const std::string powershellProgram = powershell_single_quote(programName);
+
+    if (shell == "bash") {
+        return "__eryx_dynamic_complete() {\n"
+               "    local cur i\n"
+               "    local -a words suggestions\n"
+               "    cur=\"${COMP_WORDS[COMP_CWORD]}\"\n"
+               "    words=()\n"
+               "    for ((i = 1; i < COMP_CWORD; i++)); do\n"
+               "        words+=(\"${COMP_WORDS[i]}\")\n"
+               "    done\n"
+               "    mapfile -t suggestions < <('" +
+               shellProgram +
+               "' __complete bash \"${words[@]}\" 2>/dev/null)\n"
+               "    if (( ${#suggestions[@]} > 0 )); then\n"
+               "        COMPREPLY=( $(compgen -W \"$(printf '%s ' \"${suggestions[@]}\")\" -- "
+               "\"$cur\") )\n"
+               "    else\n"
+               "        COMPREPLY=( $(compgen -f -- \"$cur\") )\n"
+               "    fi\n"
+               "    return 0\n"
+               "}\n"
+               "complete -o bashdefault -o default -F __eryx_dynamic_complete '" +
+               shellProgram + "'\n";
+    }
+
+    if (shell == "zsh") {
+        return "__eryx_dynamic_complete() {\n"
+               "    local -a tokens suggestions filtered\n"
+               "    local cur\n"
+               "    local debug_path\n"
+               "    cur=${words[CURRENT]}\n"
+               "    tokens=(${words[2,CURRENT-1]})\n"
+               "    debug_path=${ERYX_COMPLETION_DEBUG:-}\n"
+               "    if [[ -n \"$debug_path\" ]]; then\n"
+               "        if [[ \"$debug_path\" == \"1\" ]]; then\n"
+               "            debug_path=${TMPDIR:-/tmp}/eryx-completion.log\n"
+               "        fi\n"
+               "        print -r -- \"zsh wrapper: cur=$cur tokens=${(j: :)tokens}\" >> "
+               "\"$debug_path\"\n"
+               "    fi\n"
+               "    suggestions=(${(f)\"$('" +
+               shellProgram +
+               "' __complete zsh ${tokens[@]} 2>/dev/null)\"})\n"
+               "    if [[ -n \"$debug_path\" ]]; then\n"
+               "        print -r -- \"zsh wrapper: suggestions=${(j:,:)suggestions}\" >> "
+               "\"$debug_path\"\n"
+               "    fi\n"
+               "    filtered=(${(M)suggestions:#" +
+               "${cur}" +
+               "*})\n"
+               "    if (( ${#filtered[@]} > 0 )); then\n"
+               "        compadd -Q -- ${filtered[@]}\n"
+               "    else\n"
+               "        _files\n"
+               "    fi\n"
+               "}\n"
+               "compdef __eryx_dynamic_complete '" +
+               shellProgram + "'\n";
+    }
+
+    if (shell == "fish") {
+        return "function __eryx_dynamic_complete\n"
+               "    set -l tokens (commandline -opc)\n"
+               "    if test (count $tokens) -gt 0\n"
+               "        set -e tokens[1]\n"
+               "    end\n"
+               "    '" +
+               shellProgram +
+               "' __complete fish $tokens 2>/dev/null\n"
+               "end\n"
+               "complete -c '" +
+               shellProgram + "' -a '(__eryx_dynamic_complete)'\n";
+    }
+
+    if (shell == "powershell") {
+        return "$__eryxCommandNames = "
+               "[System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::"
+               "OrdinalIgnoreCase)\n"
+               "$null = $__eryxCommandNames.Add('" +
+               powershellProgram +
+               "')\n"
+               "$__eryxLeaf = [System.IO.Path]::GetFileName('" +
+               powershellProgram +
+               "')\n"
+               "if ($__eryxLeaf) {\n"
+               "    $null = $__eryxCommandNames.Add($__eryxLeaf)\n"
+               "    $null = $__eryxCommandNames.Add('.\\' + $__eryxLeaf)\n"
+               "    if ($__eryxLeaf.EndsWith('.exe', "
+               "[System.StringComparison]::OrdinalIgnoreCase)) {\n"
+               "        $__eryxStem = [System.IO.Path]::GetFileNameWithoutExtension($__eryxLeaf)\n"
+               "        if ($__eryxStem) {\n"
+               "            $null = $__eryxCommandNames.Add($__eryxStem)\n"
+               "            $null = $__eryxCommandNames.Add('.\\' + $__eryxStem)\n"
+               "        }\n"
+               "    }\n"
+               "}\n"
+               "$__eryxScriptBlock = {\n"
+               "    param($wordToComplete, $commandAst, $cursorPosition)\n"
+               "\n"
+               "    $tokens = @()\n"
+               "    foreach ($element in $commandAst.CommandElements | Select-Object -Skip 1) {\n"
+               "        if ($element.Extent.EndOffset -lt $cursorPosition) {\n"
+               "            $tokens += $element.Extent.Text\n"
+               "        }\n"
+               "    }\n"
+               "\n"
+               "    $__eryxDebugPath = $env:ERYX_COMPLETION_DEBUG\n"
+               "    if ($__eryxDebugPath) {\n"
+               "        if ($__eryxDebugPath -eq '1') {\n"
+               "            $__eryxDebugPath = Join-Path $env:TEMP 'eryx-completion.log'\n"
+               "        }\n"
+               "        Add-Content -LiteralPath $__eryxDebugPath -Value (\"pwsh wrapper: word=\" "
+               "+ $wordToComplete + \" tokens=\" + ($tokens -join ' '))\n"
+               "    }\n"
+               "\n"
+               "    $candidates = & '" +
+               powershellProgram +
+               "' __complete powershell @tokens 2>$null\n"
+               "    if ($__eryxDebugPath) {\n"
+               "        Add-Content -LiteralPath $__eryxDebugPath -Value (\"pwsh wrapper: "
+               "candidates=\" + ($candidates -join ','))\n"
+               "    }\n"
+               "    foreach ($candidate in $candidates) {\n"
+               "        if ($candidate -like \"$wordToComplete*\") {\n"
+               "            [System.Management.Automation.CompletionResult]::new($candidate, "
+               "$candidate, 'ParameterValue', $candidate)\n"
+               "        }\n"
+               "    }\n"
+               "}\n"
+               "foreach ($__eryxName in $__eryxCommandNames) {\n"
+               "    Register-ArgumentCompleter -Native -CommandName $__eryxName -ScriptBlock "
+               "$__eryxScriptBlock\n"
+               "}\n";
+    }
+
+    return "";
+}
+
+static int main_complete(int argc, const char* argv[]) {
+    namespace fs = std::filesystem;
+
+    if (argc < 2) {
+        main_raise_usage(argv, "__complete [shell] [words...]");
+        return -1;
+    }
+
+    std::string shell = "generic";
+    int wordsStart = 2;
+    if (argc >= 3 && is_completion_shell(argv[2])) {
+        shell = argv[2];
+        wordsStart = 3;
+    }
+
+    std::vector<std::string> words;
+    for (int i = wordsStart; i < argc; ++i) {
+        words.emplace_back(argv[i]);
+    }
+    {
+        std::ostringstream ss;
+        ss << "main_complete: shell=" << shell << " words=";
+        for (size_t i = 0; i < words.size(); ++i) {
+            if (i) ss << " ";
+            ss << words[i];
+        }
+        completion_debug_log(ss.str());
+    }
+
+    if (words.empty()) {
+        auto builtins = list_builtin_scripts();
+        builtins.push_back("completion");
+        builtins.push_back("run");
+        completion_debug_log("main_complete: returning top-level candidates");
+        print_completion_candidates(builtins);
+        return 0;
+    }
+
+    if (words[0] == "run") {
+        if (words.size() < 2) return 0;
+
+        fs::path scriptPath = words[1];
+        if (fs::exists(scriptPath)) {
+            completion_debug_log("main_complete: dispatching to run script " + scriptPath.string());
+            return main_complete_script(scriptPath, wordsStart + 2, shell.c_str());
+        }
+        completion_debug_log("main_complete: run script does not exist");
+        return 0;
+    }
+
+    if (words[0] == "completion") {
+        completion_debug_log("main_complete: returning completion shell names");
+        print_completion_candidates({ "bash", "fish", "powershell", "zsh" });
+        return 0;
+    }
+
+    if (words[0].find('.') == std::string::npos && !fs::exists(words[0])) {
+        fs::path builtinPath = getScriptsDir() / (words[0] + ".luau");
+        if (fs::exists(builtinPath)) {
+            completion_debug_log("main_complete: dispatching to builtin script " +
+                                 builtinPath.string());
+            return main_complete_script(builtinPath, wordsStart + 1, shell.c_str());
+        }
+        completion_debug_log("main_complete: builtin script not found for " + words[0]);
+    }
+
+    fs::path scriptPath = words[0];
+    if (fs::exists(scriptPath)) {
+        completion_debug_log("main_complete: dispatching to explicit script " +
+                             scriptPath.string());
+        return main_complete_script(scriptPath, wordsStart + 1, shell.c_str());
+    }
+
+    completion_debug_log("main_complete: no completion target matched");
+    return 0;
+}
+
 // Try to run a built-in script from the scripts/ directory next to the executable.
 // Returns -1 if the script doesn't exist (caller should fall through).
 int main_builtin_script(int argc, const char* argv[], const char* name) {
@@ -669,6 +1038,26 @@ int main(int argc, const char* argv[]) {
     }
     const char* command = argv[1];
     const char* filename = argv[1];
+
+    if (strcmp(command, "__complete") == 0) {
+        return main_complete(argc, argv);
+    }
+
+    if (strcmp(command, "completion") == 0) {
+        if (argc < 3) {
+            main_raise_usage(argv, "completion <bash|zsh|fish|powershell>");
+            return -1;
+        }
+
+        std::string output = render_completion_script(argv[0], argv[2]);
+        if (output.empty()) {
+            std::cerr << "Unsupported shell '" << argv[2] << "'" << std::endl;
+            return 1;
+        }
+
+        std::cout << output;
+        return 0;
+    }
 
     if (strcmp(command, "run") == 0) {
         if (argc < 3) {

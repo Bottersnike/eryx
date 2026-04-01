@@ -11,11 +11,213 @@ extern "C" {
 }
 #endif
 
+#include <cctype>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
+#include <memory>
 
 #include "../vfs.hpp"
 #include "embedded_modules.h"
+
+constexpr int RETHROW_MAGIC = -3558;
+static const char* ERYX_PENDING_ERROR_SKIP = "_ERYX_PENDING_ERROR_SKIP";
+
+struct ExceptionFormatStyle {
+    bool ansi = false;
+
+    const char* reset() const { return ansi ? "\x1b[0m" : ""; }
+    const char* bold() const { return ansi ? "\x1b[1m" : ""; }
+    const char* dim() const { return ansi ? "\x1b[2m" : ""; }
+    const char* red() const { return ansi ? "\x1b[31m" : ""; }
+    const char* yellow() const { return ansi ? "\x1b[33m" : ""; }
+    const char* cyan() const { return ansi ? "\x1b[36m" : ""; }
+};
+
+static std::unique_ptr<LuaExceptionSnapshot> copy_exception_snapshot(
+    const LuaExceptionSnapshot* snapshot) {
+    if (!snapshot) return nullptr;
+
+    auto copy = std::make_unique<LuaExceptionSnapshot>();
+    copy->type = snapshot->type;
+    copy->message = snapshot->message;
+    copy->traceback = snapshot->traceback;
+    copy->parent = copy_exception_snapshot(snapshot->parent.get());
+    return copy;
+}
+
+std::unique_ptr<LuaExceptionSnapshot> eryx_copy_exception(const LuaException* exception) {
+    if (!exception) return nullptr;
+
+    auto copy = std::make_unique<LuaExceptionSnapshot>();
+    copy->type = exception->type ? exception->type : "";
+    copy->message = exception->message;
+    copy->traceback = exception->traceback;
+    copy->parent = copy_exception_snapshot(exception->parent.get());
+    return copy;
+}
+
+static void push_exception_snapshot(lua_State* L, const LuaExceptionSnapshot* snapshot) {
+    if (!snapshot) {
+        lua_pushnil(L);
+        return;
+    }
+
+    lua_createtable(L, 0, 4);
+
+    lua_pushlstring(L, snapshot->message.c_str(), snapshot->message.size());
+    lua_setfield(L, -2, "message");
+
+    lua_pushlstring(L, snapshot->type.c_str(), snapshot->type.size());
+    lua_setfield(L, -2, "type");
+
+    lua_createtable(L, snapshot->traceback.size(), 0);
+    for (size_t i = 0; i < snapshot->traceback.size(); i++) {
+        const LuaFrame& f = snapshot->traceback[i];
+
+        lua_createtable(L, 0, 5);
+        lua_pushlstring(L, f.source.c_str(), f.source.size());
+        lua_setfield(L, -2, "source");
+        lua_pushlstring(L, f.short_src.c_str(), f.short_src.size());
+        lua_setfield(L, -2, "short_src");
+        lua_pushinteger(L, f.line);
+        lua_setfield(L, -2, "line");
+        lua_pushlstring(L, f.function.c_str(), f.function.size());
+        lua_setfield(L, -2, "functionName");
+        lua_pushlstring(L, f.lineContext.c_str(), f.lineContext.size());
+        lua_setfield(L, -2, "lineContext");
+
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
+    }
+    lua_setfield(L, -2, "traceback");
+
+    push_exception_snapshot(L, snapshot->parent.get());
+    lua_setfield(L, -2, "parent");
+}
+
+static void set_pending_error_skip(lua_State* L, int skip) {
+    lua_getfield(L, LUA_REGISTRYINDEX, ERYX_PENDING_ERROR_SKIP);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushthread(L);
+        lua_pushinteger(L, skip);
+        lua_rawset(L, -3);
+        lua_setfield(L, LUA_REGISTRYINDEX, ERYX_PENDING_ERROR_SKIP);
+        return;
+    }
+
+    lua_pushthread(L);
+    lua_pushinteger(L, skip);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+}
+
+static int take_pending_error_skip(lua_State* L) {
+    int skip = 0;
+
+    lua_getfield(L, LUA_REGISTRYINDEX, ERYX_PENDING_ERROR_SKIP);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return 0;
+    }
+
+    lua_pushthread(L);
+    lua_rawget(L, -2);
+    if (lua_isnumber(L, -1)) {
+        skip = static_cast<int>(lua_tointeger(L, -1));
+    }
+    lua_pop(L, 1);
+
+    lua_pushthread(L);
+    lua_pushnil(L);
+    lua_rawset(L, -3);
+    lua_pop(L, 1);
+
+    return skip;
+}
+
+static void format_exception_into(std::ostringstream& ss, const char* type,
+                                  const std::string& message,
+                                  const std::vector<LuaFrame>& traceback,
+                                  const LuaExceptionSnapshot* parent,
+                                  const ExceptionFormatStyle& style) {
+    if (parent) {
+        format_exception_into(ss, parent->type.c_str(), parent->message, parent->traceback,
+                              parent->parent.get(), style);
+        ss << style.dim() << " --> " << style.reset() << style.bold() << "rethrown as"
+           << style.reset() << std::endl;
+    }
+
+    ss << style.red() << style.bold() << type << style.reset() << ": " << style.bold() << message
+       << style.reset() << std::endl;
+
+    if (traceback.empty()) {
+        return;
+    }
+
+    int gutterWidth = std::to_string(traceback[0].line).length();
+
+    ss << style.yellow() << style.bold() << "Traceback (most recent call last):" << style.reset()
+       << std::endl;
+
+    int maxLocationWidth = 0;
+    std::vector<std::string> pathStrings;
+    std::vector<std::string> lineStrings;
+    for (const auto& f : traceback) {
+        std::string path = std::string(f.short_src);
+        std::string line = std::to_string(f.line);
+        pathStrings.push_back(path);
+        lineStrings.push_back(line);
+
+        int locationWidth = static_cast<int>(path.length() + 1 + line.length());
+        if (locationWidth > maxLocationWidth) maxLocationWidth = locationWidth;
+    }
+
+    int numberingBase = static_cast<int>(traceback.size());
+    for (int i = static_cast<int>(traceback.size()) - 1; i >= 0; i--) {
+        if (traceback[i].line == RETHROW_MAGIC) {
+            ss << style.dim() << " --> " << style.reset() << style.cyan()
+               << traceback[i + 1].short_src << style.reset() << ":" << style.yellow()
+               << traceback[i + 1].line << style.reset() << std::endl;
+            if (traceback[i + 1].source[0] == '@') {
+                ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
+                   << std::endl;
+                ss << " " << style.yellow() << traceback[i + 1].line << style.reset() << " "
+                   << style.dim() << "|" << style.reset() << " " << traceback[i + 1].lineContext
+                   << std::endl;
+                ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
+                   << std::endl;
+            }
+
+            ss << style.dim() << "  --> propagated through" << style.reset();
+            numberingBase = i;
+        } else {
+            std::string location = pathStrings[i] + ":";
+            ss << style.dim() << "  [" << -(i - numberingBase + 1) << "] " << style.reset()
+               << style.cyan() << std::left << std::setw(maxLocationWidth - lineStrings[i].length())
+               << location.c_str() << style.reset() << style.yellow() << lineStrings[i]
+               << style.reset();
+
+            if (traceback[i].function.length()) {
+                ss << "  " << style.dim() << "in" << style.reset() << " " << traceback[i].function;
+            }
+        }
+
+        ss << std::endl;
+    }
+
+    ss << style.dim() << " --> " << style.reset() << style.cyan() << traceback[0].short_src
+       << style.reset() << ":" << style.yellow() << traceback[0].line << style.reset() << std::endl;
+    if (traceback[0].source[0] == '@') {
+        ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
+           << std::endl;
+        ss << " " << style.yellow() << traceback[0].line << style.reset() << " " << style.dim()
+           << "|" << style.reset() << " " << traceback[0].lineContext << std::endl;
+        ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
+           << std::endl;
+    }
+}
 
 int exception_tostring(lua_State* L) {
     LuaException* exception = (LuaException*)luaL_checkudata(L, 1, EXCEPTION_METATABLE);
@@ -53,6 +255,10 @@ int exception_index(lua_State* L) {
         } else {
             lua_pushnil(L);
         }
+        return 1;
+    }
+    if (strcmp(key, "parent") == 0) {
+        push_exception_snapshot(L, exception->parent.get());
         return 1;
     }
     if (strcmp(key, "traceback") == 0) {
@@ -169,22 +375,16 @@ std::string getSourceLine(const char* source, int line) {
     return lstrip(text);
 }
 
-void eryx_exception_push_exception(lua_State* L, const char* type, const char* message,
-                                   const void* extra) {
-    lua_checkstack(L, 3);  // need space for userdata + metatable + getfield
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-    luaL_getmetatable(L, EXCEPTION_METATABLE);
-    lua_setmetatable(L, -2);
-    exception->type = type;
-    exception->message = message;
-    exception->extra = extra;
-
+void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initialLevel) {
     lua_Debug ar;
-    for (int level = 0; lua_getinfo(L, level, "sln", &ar); level++) {
+    std::vector<LuaFrame> newFrames;
+    int remainingSkip = exception->pendingTracebackSkip;
+    exception->pendingTracebackSkip = 0;
+
+    for (int level = initialLevel; lua_getinfo(L, level, "sln", &ar); level++) {
         // An =[C] at top level suggests we might have a unique type of error
         if (strcmp(ar.source, "=[C]") == 0) {
-            if (level == 0) {
+            if (level == initialLevel) {
                 if (strcmp(ar.name, "error") == 0) {
                     exception->type = ETYPE_THROWN;
                     continue;
@@ -203,6 +403,11 @@ void eryx_exception_push_exception(lua_State* L, const char* type, const char* m
             continue;
         }
 
+        if (remainingSkip > 0) {
+            remainingSkip--;
+            continue;
+        }
+
         // Otherwise, push this as a frame to the traceback
         LuaFrame frame = {
             ar.source ? std::string(ar.source) : "",
@@ -211,15 +416,45 @@ void eryx_exception_push_exception(lua_State* L, const char* type, const char* m
             ar.name ? std::string(ar.name) : "<top level>",
             getSourceLine(ar.source, ar.currentline),
         };
-        exception->traceback.push_back(frame);
+        newFrames.push_back(frame);
     }
+
+    if (!exception->traceback.empty()) {
+        // RETHROW: prepend
+        LuaFrame rethrowFrame = { "", "", RETHROW_MAGIC, "", "" };
+        newFrames.push_back(rethrowFrame);
+        exception->traceback.insert(exception->traceback.begin(), newFrames.begin(),
+                                    newFrames.end());
+
+    } else {
+        // FIRST THROW: just assign
+        exception->traceback = std::move(newFrames);
+    }
+}
+
+void eryx_exception_push_exception(lua_State* L, const char* type, const char* message,
+                                   const void* extra) {
+    lua_checkstack(L, 3);  // need space for userdata + metatable + getfield
+    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
+    new (exception) LuaException();
+    luaL_getmetatable(L, EXCEPTION_METATABLE);
+    lua_setmetatable(L, -2);
+    exception->type = type;
+    exception->message = message;
+    exception->extra = extra;
+
+    eryx_exception_populate_tb(L, exception, 0);
 }
 void eryx_exception_push_keyboard_interrupt(lua_State* L) {
     eryx_exception_push_exception(L, ETYPE_INTERRUPT, "keyboard interrupt", NULL);
 }
 
 void eryx_coerce_to_exception(lua_State* L) {
-    if (eryx_get_exception(L, -1)) return;
+    LuaException* e = eryx_get_exception(L, -1);
+    if (e) {
+        eryx_exception_populate_tb(L, e, 0);
+        return;
+    }
 
     // Need stack space for getfield, pushvalue, ref, and push_exception
     lua_checkstack(L, 4);
@@ -281,6 +516,9 @@ void eryx_coerce_to_exception(lua_State* L) {
     LuaException* exception = eryx_get_exception(L, -1);
     if (exception) {
         exception->dataRef = dataRef;
+        exception->pendingTracebackSkip = take_pending_error_skip(L);
+        exception->traceback.clear();
+        eryx_exception_populate_tb(L, exception, 0);
     }
 }
 
@@ -295,50 +533,14 @@ LuaException* eryx_get_exception(lua_State* L, int idx) {
     return exception;
 }
 
-std::string eryx_format_exception(lua_State* L, int idx) {
+std::string eryx_format_exception(lua_State* L, int idx, bool useAnsi) {
     LuaException* exception = eryx_get_exception(L, idx);
 
     if (exception) {
         std::ostringstream ss;
-
-        ss << exception->type << ": " << exception->message << std::endl;
-
-        if (exception->traceback.size()) {
-            // Construct initial error string
-            int gutterWidth = std::to_string(exception->traceback[0].line).length();
-
-            ss << "traceback:" << std::endl;
-
-            // Find the maximum width of the "file:line" string
-            int maxPathWidth = 0;
-            std::vector<std::string> locationStrings;
-            for (const auto& f : exception->traceback) {
-                std::string loc = std::string(f.short_src) + ":" + std::to_string(f.line);
-                locationStrings.push_back(loc);
-                if (loc.length() > maxPathWidth) maxPathWidth = loc.length();
-            }
-
-            // Construct traceback string
-            for (int i = exception->traceback.size() - 1; i >= 0; i--) {
-                ss << "  [" << i << "] " << std::left << std::setw(maxPathWidth)
-                   << locationStrings[i].c_str();
-
-                if (exception->traceback[i].function.length()) {
-                    ss << "  in " << exception->traceback[i].function;
-                }
-
-                ss << std::endl;
-            }
-
-            ss << " --> " << exception->traceback[0].short_src << ":"
-               << exception->traceback[0].line << std::endl;
-            if (exception->traceback[0].source[0] == '@') {
-                ss << " " << std::string(gutterWidth, ' ') << " |" << std::endl;
-                ss << " " << exception->traceback[0].line << " | "
-                   << exception->traceback[0].lineContext << std::endl;
-                ss << " " << std::string(gutterWidth, ' ') << " |" << std::endl;
-            }
-        }
+        ExceptionFormatStyle style{ useAnsi };
+        format_exception_into(ss, exception->type, exception->message, exception->traceback,
+                              exception->parent.get(), style);
 
         return ss.str();
         fprintf(stderr, "%s\n", ss.str().c_str());
@@ -489,6 +691,24 @@ static int eryx_xpcall(lua_State* L) {
     return lua_gettop(L);
 }
 
+static int eryx_error(lua_State* L) {
+    int level = luaL_optinteger(L, 2, 1);
+    lua_settop(L, 1);
+
+    if (LuaException* exception = eryx_get_exception(L, 1)) {
+        exception->pendingTracebackSkip = level > 1 ? level - 1 : 0;
+    } else if (lua_isstring(L, 1) && level > 0) {
+        set_pending_error_skip(L, level > 1 ? level - 1 : 0);
+        luaL_where(L, level);
+        lua_pushvalue(L, 1);
+        lua_concat(L, 2);
+    } else {
+        set_pending_error_skip(L, level > 1 ? level - 1 : 0);
+    }
+
+    lua_error(L);
+}
+
 void exception_lib_register(lua_State* L) {
     luaL_newmetatable(L, EXCEPTION_METATABLE);
 
@@ -507,6 +727,9 @@ void exception_lib_register(lua_State* L) {
     lua_setfield(L, -2, "__type");
 
     lua_pop(L, 1);
+
+    lua_pushcfunction(L, eryx_error, "error");
+    lua_setglobal(L, "error");
 
     // Replace pcall and xpcall with yieldable variants that rethrow uncatchable exceptions
     lua_pushcclosurek(L, eryx_pcall, "pcall", 0, eryx_pcall_cont);
