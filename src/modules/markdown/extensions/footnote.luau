@@ -113,6 +113,7 @@ local FootnoteDefinitionRule: types.BlockRule<"footnote_definition", FootnoteDef
 	postProcessDocument = function(doc)
 		local footnoteDefs: { [string]: FootnoteDefinitionBlock } = {}
 		local footnoteOrder: { string } = {} -- preserve definition order
+		local footnoteIndexByLabel: { [string]: number } = {}
 
 		local function extractFootnoteDefs(node: types.AnyBlockNode)
 			local children: { types.AnyBlockNode }? = (node :: any).children
@@ -138,8 +139,13 @@ local FootnoteDefinitionRule: types.BlockRule<"footnote_definition", FootnoteDef
 
 		extractFootnoteDefs(doc)
 
+		for i, label in footnoteOrder do
+			footnoteIndexByLabel[label] = i
+		end
+
 		doc.metadata.footnoteDefs = footnoteDefs
 		doc.metadata.footnoteOrder = footnoteOrder
+		doc.metadata.footnoteIndexByLabel = footnoteIndexByLabel
 
 		local orphans = {}
 		for _, i in footnoteDefs do
@@ -167,7 +173,7 @@ local FootnoteDefinitionRule: types.BlockRule<"footnote_definition", FootnoteDef
 
 		local chunks: { string } = {}
 		table.insert(chunks, `<section{class}>`)
-		table.insert(chunks, `<ol>`)
+		table.insert(chunks, `<ol{if config.annotateHtml then ' class="md-list md-ordered_list"' else ""}>`)
 		for _, label in footnoteOrder do
 			local fn = footnoteDefs[label]
 			if fn then

@@ -1,6 +1,6 @@
 # HTTP in Eryx
 
-[[http|@eryx/http]] is Eryx's HTTP/1.1 client and server library. It is designed to cover the common "just make a request" workflow, but it also scales down into lower-level transport control when you need connection reuse, streaming, long-polling, or protocol-aware server behavior.
+[[@eryx/http]] is Eryx's HTTP/1.1 client and server library. It is designed to cover the common "just make a request" workflow, but it also scales down into lower-level transport control when you need connection reuse, streaming, long-polling, or protocol-aware server behavior.
 
 At a high level, the module gives you five layers:
 
@@ -93,9 +93,9 @@ Use `http.App` when:
 
 ## Suggested Reading Order
 
-- [[Client Requests|./client]] for everyday client usage.
-- [[Sessions and Streaming|./sessions-and-streaming]] for reuse and large bodies.
-- [[Server|./server]] for serving requests.
-- [[App|./app]] for higher-level routed servers.
-- [[Forms and Multipart|./forms-and-multipart]] for structured request and response bodies.
-- [[Recipes|./recipes]] for copy-paste patterns.
+- [[Client Requests]] for everyday client usage.
+- [[Sessions and Streaming]] for reuse and large bodies.
+- [[Server]] for serving requests.
+- [[App]] for higher-level routed servers.
+- [[Forms and Multipart]] for structured request and response bodies.
+- [[Recipes]] for copy-paste patterns.

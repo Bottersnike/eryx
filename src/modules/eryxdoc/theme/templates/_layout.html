@@ -44,7 +44,7 @@
         {% end %}
         {% slot default %}{% end %}
 
-        <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button>
+        <!-- <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button> -->
         <button class="back-to-top" id="back-to-top" aria-label="Back to top">&uarr;</button>
 
         {% include "_footer.html" %}{% end %}
@@ -71,11 +71,169 @@
         </script>
 
         <script>
+            // Floating hover card for type references
+            (function () {
+                const card = document.createElement("div");
+                card.className = "type-hover-card";
+                card.setAttribute("aria-hidden", "true");
+                document.body.appendChild(card);
+
+                let activeTarget = null;
+                let hideTimer = null;
+                let showTimer = null;
+                let cardHovered = false;
+
+                function clearHideTimer() {
+                    if (hideTimer) {
+                        clearTimeout(hideTimer);
+                        hideTimer = null;
+                    }
+                }
+
+                function clearShowTimer() {
+                    if (showTimer) {
+                        clearTimeout(showTimer);
+                        showTimer = null;
+                    }
+                }
+
+                function scheduleHide() {
+                    clearHideTimer();
+                    clearShowTimer();
+                    hideTimer = setTimeout(function () {
+                        if (!cardHovered) {
+                            hideCard();
+                        }
+                    }, 90);
+                }
+
+                function hideCard() {
+                    clearHideTimer();
+                    clearShowTimer();
+                    activeTarget = null;
+                    cardHovered = false;
+                    card.classList.remove("visible");
+                    card.setAttribute("aria-hidden", "true");
+                }
+
+                function positionCard(target) {
+                    if (!target) return;
+
+                    const rect = target.getBoundingClientRect();
+                    const margin = 12;
+                    const viewportHeight = window.innerHeight;
+                    card.style.width = "auto";
+                    card.style.maxWidth = "";
+
+                    const cardRect = card.getBoundingClientRect();
+                    let left = rect.left;
+                    let top = rect.bottom + margin;
+
+                    if (left + cardRect.width > window.innerWidth - margin) {
+                        left = window.innerWidth - cardRect.width - margin;
+                    }
+                    if (left < margin) {
+                        left = margin;
+                    }
+
+                    if (top + cardRect.height > viewportHeight - margin) {
+                        top = rect.top - cardRect.height - margin;
+                    }
+                    if (top < margin) {
+                        top = margin;
+                    }
+
+                    card.style.left = left + "px";
+                    card.style.top = top + "px";
+                }
+
+                function showCard(target) {
+                    const hoverHtml = target && target.getAttribute("data-hover-html");
+                    if (!hoverHtml) return;
+
+                    clearHideTimer();
+                    clearShowTimer();
+                    activeTarget = target;
+                    card.innerHTML = hoverHtml;
+                    card.classList.add("visible");
+                    card.setAttribute("aria-hidden", "false");
+                    positionCard(target);
+                }
+
+                document.addEventListener("pointerenter", function (event) {
+                    const target = event.target.closest("[data-hover-html]");
+                    if (!target) return;
+                    clearShowTimer();
+                    showTimer = setTimeout(function () {
+                        showCard(target);
+                    }, 100);
+                }, true);
+
+                document.addEventListener("pointerleave", function (event) {
+                    const target = event.target.closest("[data-hover-html]");
+                    if (target && target === activeTarget) {
+                        scheduleHide();
+                    } else if (target) {
+                        clearShowTimer();
+                    }
+                }, true);
+
+                document.addEventListener("focusin", function (event) {
+                    const target = event.target.closest("[data-hover-html]");
+                    if (!target) return;
+                    showCard(target);
+                });
+
+                document.addEventListener("focusout", function (event) {
+                    const target = event.target.closest("[data-hover-html]");
+                    if (target && target === activeTarget) {
+                        scheduleHide();
+                    }
+                });
+
+                card.addEventListener("pointerenter", function () {
+                    cardHovered = true;
+                    clearHideTimer();
+                });
+
+                card.addEventListener("pointerleave", function () {
+                    cardHovered = false;
+                    scheduleHide();
+                });
+
+                card.addEventListener("transitionend", function (event) {
+                    if (event.propertyName !== "opacity") return;
+                    if (!card.classList.contains("visible")) {
+                        card.innerHTML = "";
+                    }
+                });
+
+                window.addEventListener("scroll", function () {
+                    if (activeTarget) {
+                        positionCard(activeTarget);
+                    }
+                }, { passive: true });
+
+                window.addEventListener("resize", function () {
+                    if (activeTarget) {
+                        positionCard(activeTarget);
+                    }
+                });
+
+                document.addEventListener("keydown", function (event) {
+                    if (event.key === "Escape") {
+                        hideCard();
+                    }
+                });
+            })();
+        </script>
+
+        <script>
             // Sidebar toggle and ToC scrolling logic
             (function () {
                 const btn = document.getElementById("sidebar-toggle");
                 const sb = document.getElementById("sidebar");
-                if (!sb) { btn.style.display = "none"; return; }
+                if (!sb) { btn.remove(); }
                 btn.addEventListener("click", function (e) {
                     e.stopPropagation();
                     sb.classList.toggle("open");
@@ -214,7 +372,7 @@
             })();
 
             // Add copy button to code blocks
-            document.querySelectorAll("pre").forEach(function (pre) {
+            document.querySelectorAll("pre.md-code_block").forEach(function (pre) {
                 var btn = document.createElement("button");
                 btn.className = "code-copy-btn";
                 btn.textContent = "Copy";

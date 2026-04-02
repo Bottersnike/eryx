@@ -1,6 +1,8 @@
 #include <fcntl.h>
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 #ifdef _WIN32
 #include <io.h>
@@ -122,14 +124,26 @@ static int64_t file_lseek(uv_file fd, int64_t offset, int whence) {
 static int64_t get_remaining_bytes(lua_State* L, LuaFile* f) {
     EryxRuntime* rt = eryx_get_runtime(L);
     uv_fs_t req;
-    uv_fs_fstat(rt->loop, &req, f->fd, nullptr);
+    int statResult = uv_fs_fstat(rt->loop, &req, f->fd, nullptr);
+    if (statResult < 0) {
+        uv_fs_req_cleanup(&req);
+        return 0;
+    }
     int64_t fileSize = (int64_t)req.statbuf.st_size;
     uv_fs_req_cleanup(&req);
 
+#ifdef _WIN32
+    // uv_fs_open descriptors can come from a different CRT than this module in
+    // some build/link setups. Calling _lseeki64 on those descriptors can trip
+    // a debug CRT assertion (_osfile(fh) & FOPEN). For default-size reads we
+    // only need an upper bound; returning file size is sufficient.
+    return fileSize > 0 ? fileSize : 0;
+#else
     int64_t pos = file_lseek(f->fd, 0, SEEK_CUR);
     if (pos < 0) pos = 0;
 
     return (fileSize > pos) ? (fileSize - pos) : 0;
+#endif
 }
 
 // Resolve read size: explicit int argument, or nil -> read remaining
@@ -262,9 +276,40 @@ static void void_async_cb(uv_fs_t* req) {
 // File:read(size?) / File:readSync(size?) -> string
 // ---------------------------------------------------------------------------
 
+static int file_readAllSync(lua_State* L, LuaFile* f, bool asBuffer) {
+    constexpr size_t chunkSize = 64 * 1024;
+    std::vector<char> chunk(chunkSize);
+    std::string out;
+
+    while (true) {
+        uv_buf_t uvBuf = uv_buf_init(chunk.data(), (unsigned int)chunk.size());
+        uv_fs_t req;
+        int result = uv_fs_read(eryx_get_runtime(L)->loop, &req, f->fd, &uvBuf, 1, -1, nullptr);
+        uv_fs_req_cleanup(&req);
+
+        if (result < 0) {
+            luaL_error(L, "read failed: %s", uv_strerror(result));
+            return 0;
+        }
+
+        if (result == 0) break;
+        out.append(chunk.data(), (size_t)result);
+    }
+
+    if (asBuffer) {
+        void* buf = lua_newbuffer(L, out.size());
+        if (!out.empty()) memcpy(buf, out.data(), out.size());
+    } else {
+        lua_pushlstring(L, out.data(), out.size());
+    }
+    return 1;
+}
+
 static int file_readSync(lua_State* L) {
     LuaFile* f = check_open_file(L);
     if (!f->canRead) luaL_error(L, "file not opened for reading");
+
+    if (lua_isnoneornil(L, 2)) return file_readAllSync(L, f, false);
 
     size_t size = get_read_size(L, f, 2);
     if (size == 0) {
@@ -318,6 +363,8 @@ static int file_read(lua_State* L) {
 static int file_readBufferSync(lua_State* L) {
     LuaFile* f = check_open_file(L);
     if (!f->canRead) luaL_error(L, "file not opened for reading");
+
+    if (lua_isnoneornil(L, 2)) return file_readAllSync(L, f, true);
 
     size_t size = get_read_size(L, f, 2);
     if (size == 0) {

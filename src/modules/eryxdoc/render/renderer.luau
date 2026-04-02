@@ -74,6 +74,7 @@ type RendererFields = {
 	},
 
 	markdown: markdown.Markdown,
+	hoverMarkdown: markdown.Markdown,
 	currentMod: modules.ModuleInfo?,
 }
 export type Renderer = setmetatable<RendererFields, typeof(Renderer)>
@@ -150,6 +151,19 @@ function Renderer.new(
 	setmetatable(this, Renderer)
 	this.markdown = markdown.Markdown.new({
 		extraInlineExtensions = {
+			wikilinkRuleBuilder(function(link: string): any
+				return this:_resolveWikiLinkInfo(link, this.currentMod)
+			end),
+		},
+		codeLanguages = {
+			["luau"] = highlight.highlightLuau,
+			["sh"] = highlight.highlightShell,
+		},
+		useCrlf = false,
+		annotateHtml = true,
+	})
+	this.hoverMarkdown = markdown.Markdown.new({
+		extraInlineExtensions = {
 			wikilinkRuleBuilder(function(link: string): string
 				return this:_resolveWikiLink(link, this.currentMod)
 			end),
@@ -169,6 +183,177 @@ function Renderer._resolveWikiLink(self: Renderer, rawLink: string, currentModul
 	return links.resolveWikiLink(rawLink, currentModule, self.modules, self.articles, function(item: any): string
 		return self:getLink(item)
 	end)
+end
+
+function Renderer._truncateDocForHover(self: Renderer, doc: string?): string?
+	if not doc or doc == "" then
+		return nil
+	end
+
+	local maxLines = 30
+	local maxChars = 900
+	local totalChars = 0
+	local fenceDepth = 0
+	local truncated = false
+	local kept: { string } = {}
+
+	for i, line in string.split(doc, "\n") do
+		if i > maxLines or totalChars + #line > maxChars then
+			truncated = true
+			break
+		end
+		table.insert(kept, line)
+		totalChars += #line + 1
+
+		if line:match("^%s*```") then
+			if fenceDepth == 0 then
+				fenceDepth = 1
+			else
+				fenceDepth = 0
+			end
+		end
+	end
+
+	if truncated and fenceDepth ~= 0 then
+		table.insert(kept, "```")
+	end
+	if truncated then
+		table.insert(kept, "")
+		table.insert(kept, "...")
+	end
+
+	return table.concat(kept, "\n")
+end
+
+function Renderer._renderTypeHoverHtml(self: Renderer, signatureText: string?): string?
+	if not signatureText or signatureText == "" then
+		return nil
+	end
+	return `<pre class="type-hover-card__code">{highlight.highlightSignature(signatureText)}</pre>`
+end
+
+function Renderer._renderSymbolHoverHtml(
+	self: Renderer,
+	currentMod: modules.ModuleInfo?,
+	signatureText: string?,
+	docText: string?
+): string?
+	if docText and docText ~= "" then
+		self.currentMod = currentMod
+		local docHtml = self.hoverMarkdown:renderHtml(self.hoverMarkdown:parse(docText))
+		local signatureHtml = if signatureText and signatureText ~= ""
+			then `<div class="type-hover-card__signature-inline">{highlight.highlightSignature(signatureText)}</div>`
+			else ""
+		return `<div class="type-hover-card__doc">{docHtml}{signatureHtml}</div>`
+	end
+	if signatureText and signatureText ~= "" then
+		return `<pre class="type-hover-card__code">{highlight.highlightSignature(signatureText)}</pre>`
+	end
+	return nil
+end
+
+function Renderer._findHoverSymbol(
+	self: Renderer,
+	currentMod: modules.ModuleInfo?,
+	core: string
+): { signature: string?, doc: string? }?
+	if not currentMod then
+		return nil
+	end
+
+	local cls, mem = core:match("^([^.]+)%.(.+)$")
+	if cls and mem then
+		local allClasses: { any } = {}
+		if currentMod.primaryExport then
+			table.insert(allClasses, currentMod.primaryExport)
+		end
+		for _, c in currentMod.classes do
+			table.insert(allClasses, c)
+		end
+		for _, t in currentMod.types do
+			table.insert(allClasses, t)
+		end
+		for _, owner in allClasses do
+			if owner.name == cls and owner.members then
+				for _, member in owner.members do
+					if member.name == mem then
+						return {
+							signature = member.signature,
+							doc = self:_truncateDocForHover(member.doc),
+						}
+					end
+				end
+			end
+		end
+	end
+
+	for _, f in currentMod.functions do
+		if f.name == core then
+			return {
+				signature = f.signature,
+				doc = self:_truncateDocForHover(f.doc),
+			}
+		end
+	end
+
+	local allTypes: { any } = {}
+	if currentMod.primaryExport then
+		table.insert(allTypes, currentMod.primaryExport)
+	end
+	for _, c in currentMod.classes do
+		table.insert(allTypes, c)
+	end
+	for _, t in currentMod.types do
+		table.insert(allTypes, t)
+	end
+	for _, t in allTypes do
+		if t.name == core then
+			return {
+				signature = t.signatureFull or t.name,
+				doc = self:_truncateDocForHover(t.doc),
+			}
+		end
+	end
+
+	return nil
+end
+
+function Renderer._resolveWikiLinkInfo(self: Renderer, rawLink: string, currentModule: modules.ModuleInfo?): any
+	local info = links.resolveWikiLinkInfo(
+		rawLink,
+		currentModule,
+		self.modules,
+		self.articles,
+		function(item: any): string
+			return self:getLink(item)
+		end
+	)
+
+	if info.kind == "article" and info.article then
+		local article = info.article
+		local excerpt = self:_truncateDocForHover(article.summary or article.body)
+		info.hoverHtml = self:_renderSymbolHoverHtml(nil, nil, excerpt)
+	elseif info.kind == "module" and info.module then
+		local mod = info.module
+		info.hoverHtml = self:_renderSymbolHoverHtml(mod, nil, self:_truncateDocForHover(mod.description))
+	elseif info.kind == "function" and info.module and info.symbolName then
+		local symbol = self:_findHoverSymbol(info.module, info.symbolName)
+		if symbol then
+			info.hoverHtml = self:_renderSymbolHoverHtml(info.module, symbol.signature, symbol.doc)
+		end
+	elseif info.kind == "member" and info.module and info.ownerName and info.symbolName then
+		local symbol = self:_findHoverSymbol(info.module, info.ownerName .. "." .. info.symbolName)
+		if symbol then
+			info.hoverHtml = self:_renderSymbolHoverHtml(info.module, symbol.signature, symbol.doc)
+		end
+	elseif (info.kind == "class" or info.kind == "type") and info.module and info.symbolName then
+		local symbol = self:_findHoverSymbol(info.module, info.symbolName)
+		if symbol then
+			info.hoverHtml = self:_renderSymbolHoverHtml(info.module, symbol.signature, symbol.doc)
+		end
+	end
+
+	return info
 end
 
 function Renderer._resolveTypeLink(self: Renderer, typeName: string, currentModule: modules.ModuleInfo): string?
@@ -345,6 +530,27 @@ function Renderer.renderPage(
 			number = "syn-num",
 		}
 		local out: { string } = {}
+		local function hoverAttr(part: any): string
+			if not part or not part.hoverText or part.hoverText == "" then
+				return ""
+			end
+			local hoverHtml = self:_renderTypeHoverHtml(part.hoverText)
+			if not hoverHtml then
+				return ""
+			end
+			return ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+		end
+		local function symbolHoverAttr(core: string): string
+			local symbol = self:_findHoverSymbol(currentMod, core)
+			if not symbol then
+				return ""
+			end
+			local hoverHtml = self:_renderSymbolHoverHtml(currentMod, symbol.signature, symbol.doc)
+			if not hoverHtml then
+				return ""
+			end
+			return ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+		end
 		local function resolveLocal(core: string): string?
 			if not currentMod then
 				return nil
@@ -385,10 +591,14 @@ function Renderer.renderPage(
 						local lastSeg = currentMod.qualifiedName:match("/([^/]+)$") or currentMod.qualifiedName
 						if left == lastSeg or left == currentMod.name then
 							link = resolveLocal(right)
+							core = right
 						end
 					end
 					if link then
-						table.insert(out, `<a class="sig-link syn-fn" href="{link}">{nameText}</a>`)
+						table.insert(
+							out,
+							`<a class="sig-link syn-fn" href="{link}"{symbolHoverAttr(core)}>{nameText}</a>`
+						)
 					else
 						table.insert(out, `<span class="syn-fn">{nameText}</span>`)
 					end
@@ -400,7 +610,10 @@ function Renderer.renderPage(
 					local core = part.text or ""
 					local link = resolveLocal(core)
 					if link then
-						table.insert(out, `<a class="sig-link syn-fn" href="{link}">{nameText}</a>`)
+						table.insert(
+							out,
+							`<a class="sig-link syn-fn" href="{link}"{symbolHoverAttr(core)}>{nameText}</a>`
+						)
 					else
 						table.insert(out, `<span class="syn-fn">{nameText}</span>`)
 					end
@@ -423,9 +636,9 @@ function Renderer.renderPage(
 				if part.typeRef then
 					local link = if currentMod then self:_resolveTypeLink(part.text, currentMod) else nil
 					if link then
-						table.insert(out, `<a class="type-link syn-type" href="{link}">{text}</a>`)
+						table.insert(out, `<a class="type-link syn-type" href="{link}"{hoverAttr(part)}>{text}</a>`)
 					else
-						table.insert(out, `<span class="syn-type">{text}</span>`)
+						table.insert(out, `<span class="syn-type"{hoverAttr(part)}>{text}</span>`)
 					end
 				elseif kind and kindToClass[kind] then
 					table.insert(out, `<span class="{kindToClass[kind]}">{text}</span>`)

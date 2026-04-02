@@ -38,6 +38,112 @@ local tpExtend = td.tpExtend
 
 local extract = {}
 
+local function genericName(g: any): string
+	if type(g) == "table" then
+		return tostring(g.name or "?")
+	end
+	return tostring(g)
+end
+
+local function renderGenerics(generics: { string }?): string
+	if not generics or #generics == 0 then
+		return ""
+	end
+	return "<" .. table.concat(generics, ", ") .. ">"
+end
+
+local function unwrapTypeOrPack(value: any): luau.AstType?
+	if type(value) ~= "table" then
+		return nil
+	end
+	if value.type then
+		return value :: luau.AstType
+	end
+	if value.kind and value.value and type(value.value) == "table" and value.value.type then
+		local inner = value.value
+		if value.kind == "Type" then
+			return inner :: luau.AstType
+		end
+		return nil
+	end
+	return nil
+end
+
+local function normalizeTypeList(typeList: any): ({ any }, any)
+	if type(typeList) ~= "table" then
+		return {}, nil
+	end
+	if type(typeList.types) == "table" then
+		return typeList.types, typeList.tail
+	end
+	return typeList, nil
+end
+
+local function stripInlineComments(signature: string?): string?
+	if not signature then
+		return nil
+	end
+
+	local cleaned: { string } = {}
+	for _, line in string.split(signature, "\n") do
+		local withoutComment = line:match("^(.-)%s*%-%-") or line
+		local trimmed = (withoutComment:gsub("%s+$", ""))
+		table.insert(cleaned, trimmed)
+	end
+
+	return table.concat(cleaned, "\n")
+end
+
+local function formatTypeHoverSignature(typeDoc: TypeDoc): string?
+	if not typeDoc.signatureFull then
+		return nil
+	end
+
+	local signature = stripInlineComments(typeDoc.signatureFull)
+	if not signature then
+		return nil
+	end
+
+	if typeDoc.exported then
+		return signature:gsub("^type%s+", "export type ", 1)
+	end
+
+	return signature
+end
+
+local MAX_HOVER_LINES = 200
+local MAX_HOVER_CHARS = 10000
+
+local function clampHoverText(signature: string?): string?
+	if not signature or signature == "" then
+		return signature
+	end
+
+	local lines = string.split(signature, "\n")
+	local truncated = false
+
+	if #lines > MAX_HOVER_LINES then
+		local trimmed: { string } = {}
+		for i = 1, MAX_HOVER_LINES do
+			table.insert(trimmed, lines[i])
+		end
+		lines = trimmed
+		truncated = true
+	end
+
+	local joined = table.concat(lines, "\n")
+	if #joined > MAX_HOVER_CHARS then
+		joined = joined:sub(1, MAX_HOVER_CHARS)
+		truncated = true
+	end
+
+	if truncated then
+		joined ..= "\n\n... hover truncated for large type"
+	end
+
+	return joined
+end
+
 function extract.extract(result: luau.ParseResult, sourceLines: { string }): ExtractedDocs
 	local commentBlocks, inlineComments = comments.collectComments(result, sourceLines)
 
@@ -92,6 +198,22 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			end
 		end
 		return nil
+	end
+
+	local function mergeDocText(primary: string?, secondary: string?): string?
+		if primary and secondary then
+			if primary == secondary then
+				return primary
+			end
+			if primary == "" then
+				return secondary
+			end
+			if secondary == "" then
+				return primary
+			end
+			return primary .. "\n\n" .. secondary
+		end
+		return primary or secondary
 	end
 
 	-- ── Collect returned names for export detection ──────────────────────
@@ -155,6 +277,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 	local classImplToType: { [string]: string } = {}
 	local suppressedTypes: { [string]: boolean } = {}
+	local typeMemberMixins: { [string]: { string } } = {}
 
 	-- ── Process a function statement/expression ─────────────────────────
 	local function processFunction(
@@ -242,50 +365,310 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	-- ── Process a type alias ─────────────────────────────────────────────
+	local function extractTableExpr(val: luau.AstExpr): luau.ExprTable?
+		if val.type == "ExprTable" then
+			return val :: luau.ExprTable
+		end
+		if val.type == "ExprCall" then
+			local call = val :: luau.ExprCall
+			if call.func and call.func.type == "ExprIndexName" then
+				local idx = call.func :: luau.ExprIndexName
+				if
+					idx.index == "freeze"
+					and idx.expr.type == "ExprGlobal"
+					and (idx.expr :: luau.ExprGlobal).name == "table"
+				then
+					if call.args and #call.args >= 1 and call.args[1].type == "ExprTable" then
+						return call.args[1] :: luau.ExprTable
+					end
+				end
+			end
+		end
+		return nil
+	end
+
+	local function buildTypeMembersFromTable(
+		tbl: luau.TypeTable,
+		findMemberDoc: (number) -> string?,
+		ownerName: string
+	): { FuncDoc }?
+		if not tbl.props then
+			return nil
+		end
+
+		local typeMembers: { FuncDoc } = {}
+		for _, prop in tbl.props do
+			table.insert(typeMembers, members.buildMember(prop, findMemberDoc, ownerName))
+		end
+		return typeMembers
+	end
+
+	local function appendMemberList(into: { FuncDoc }?, extra: { FuncDoc }?): { FuncDoc }?
+		if not extra or #extra == 0 then
+			return into
+		end
+		if not into then
+			into = {}
+		end
+		for _, member in extra do
+			table.insert(into, member)
+		end
+		return into
+	end
+
+	local function appendUniqueStrings(into: { string }?, extra: { string }?): { string }?
+		if not extra or #extra == 0 then
+			return into
+		end
+		if not into then
+			into = {}
+		end
+
+		local seen: { [string]: boolean } = {}
+		for _, value in into do
+			seen[value] = true
+		end
+		for _, value in extra do
+			if not seen[value] then
+				seen[value] = true
+				table.insert(into, value)
+			end
+		end
+		return into
+	end
+
+	local function collectExpandedTypeMembers(
+		typeNode: luau.AstType?,
+		findMemberDoc: (number) -> string?,
+		ownerName: string
+	): ({ FuncDoc }?, { string }?)
+		local collectedMembers: { FuncDoc }? = nil
+		local referencedTypes: { string }? = nil
+
+		local function visit(node: luau.AstType?)
+			if not node then
+				return
+			end
+
+			if node.type == "TypeTable" then
+				collectedMembers = appendMemberList(
+					collectedMembers,
+					buildTypeMembersFromTable(node :: luau.TypeTable, findMemberDoc, ownerName)
+				)
+			elseif node.type == "TypeIntersection" then
+				for _, part in (node :: luau.TypeIntersection).types do
+					visit(part)
+				end
+			elseif node.type == "TypeGroup" then
+				visit((node :: luau.TypeGroup).inner)
+			elseif node.type == "TypeReference" then
+				local ref = node :: luau.TypeReference
+				if ref.name == "setmetatable" and ref.parameters and #ref.parameters >= 1 then
+					visit(unwrapTypeOrPack(ref.parameters[1]))
+				elseif ref.name ~= "typeof" then
+					local refName = if ref.prefix then ref.prefix .. "." .. ref.name else ref.name
+					referencedTypes = appendUniqueStrings(referencedTypes, { refName })
+				end
+			end
+		end
+
+		visit(typeNode)
+		return collectedMembers, referencedTypes
+	end
+
+	local function rebuildTypeSignature(typeDoc: TypeDoc)
+		if not typeDoc.members or #typeDoc.members == 0 then
+			return
+		end
+
+		local function memberSignatureForType(member: FuncDoc): string?
+			if not member.signature then
+				return nil
+			end
+			if member.owner and member.signature:sub(1, #member.owner + 1) == member.owner .. "." then
+				return member.signature:sub(#member.owner + 1)
+			end
+			if member.owner and member.signature:sub(1, #member.owner + 1) == member.owner .. ":" then
+				return member.signature:sub(#member.owner + 1)
+			end
+			return member.signature
+		end
+
+		local function memberSignaturePartsForType(member: FuncDoc): { SignaturePart }?
+			if not member.signatureParts then
+				return nil
+			end
+
+			local parts = member.signatureParts :: { SignaturePart }
+			if
+				member.owner
+				and #parts >= 3
+				and parts[1].text == member.owner
+				and parts[2].kind == "punct"
+				and (parts[2].text == "." or parts[2].text == ":")
+				and parts[3].kind == "name"
+			then
+				local stripped: { SignaturePart } = {}
+				for i = 2, #parts do
+					table.insert(stripped, parts[i])
+				end
+				return stripped
+			end
+			return parts
+		end
+
+		local tableParts: { SignaturePart } = { tp("type ", false, "keyword") }
+		table.insert(tableParts, tp(typeDoc.name, true, "type"))
+		if typeDoc.generics and #typeDoc.generics > 0 then
+			table.insert(tableParts, tp(renderGenerics(typeDoc.generics), false, "punct"))
+		end
+		table.insert(tableParts, tp(" = {\n", false, "punct"))
+		for _, member in typeDoc.members do
+			local memberParts = memberSignaturePartsForType(member)
+			if memberParts then
+				table.insert(tableParts, tp("    ", false, "plain"))
+				tpExtend(tableParts, memberParts)
+				table.insert(tableParts, tp(",\n", false, "punct"))
+			end
+		end
+		table.insert(tableParts, tp("}", false, "punct"))
+
+		local memberLines: { string } = {}
+		for _, member in typeDoc.members do
+			local memberSignature = memberSignatureForType(member)
+			if memberSignature then
+				table.insert(memberLines, "    " .. memberSignature .. ",")
+			end
+		end
+
+		typeDoc.signatureParts = tableParts
+		typeDoc.signatureFull = "type "
+			.. typeDoc.name
+			.. renderGenerics(typeDoc.generics)
+			.. " = "
+			.. "{\n"
+			.. table.concat(memberLines, "\n")
+			.. "\n}"
+	end
+
+	local function mergeMembersUnique(into: { FuncDoc }, extra: { FuncDoc })
+		local seen: { [string]: boolean } = {}
+		for _, member in into do
+			seen[member.name .. "|" .. tostring(member.params ~= nil)] = true
+		end
+		for _, member in extra do
+			local key = member.name .. "|" .. tostring(member.params ~= nil)
+			if not seen[key] then
+				seen[key] = true
+				table.insert(into, member)
+			end
+		end
+	end
+
+	local function normalizeMemberOrder(typeDoc: TypeDoc)
+		if not typeDoc.members or #typeDoc.members == 0 then
+			return
+		end
+
+		local callableMembers: { FuncDoc } = {}
+		local fieldMembers: { FuncDoc } = {}
+
+		for _, member in typeDoc.members do
+			if member.params then
+				table.insert(callableMembers, member)
+			else
+				table.insert(fieldMembers, member)
+			end
+		end
+
+		local reordered: { FuncDoc } = {}
+		for _, member in callableMembers do
+			table.insert(reordered, member)
+		end
+		for _, member in fieldMembers do
+			table.insert(reordered, member)
+		end
+
+		typeDoc.members = reordered
+	end
+
+	local classImplDocs: { [string]: string } = {}
+	for _, stat in result.root.body do
+		if stat.type ~= "StatLocal" then
+			continue
+		end
+
+		local doc = findDocComment(stat.location.start.line)
+		if not doc then
+			continue
+		end
+
+		local localStat = stat :: luau.StatLocal
+		if not localStat.vars or not localStat.values then
+			continue
+		end
+
+		for i, varNode in localStat.vars do
+			if i ~= 1 then
+				continue
+			end
+
+			local val: luau.AstExpr? = localStat.values[i]
+			if not val or not varNode.name then
+				continue
+			end
+
+			if extractTableExpr(val) then
+				classImplDocs[varNode.name] = mergeDocText(classImplDocs[varNode.name], doc) :: string
+			end
+		end
+	end
+
 	local function processTypeAlias(stat: luau.StatTypeAlias, doc: string?)
 		local line = stat.location.start.line
 		local typeMembers: { FuncDoc }? = nil
 		local metamethods: { FuncDoc }? = nil
 		local aliasedType = stat.aliasedType
+		local mixinTypes: { string }? = nil
 
-		if aliasedType and aliasedType.type == "TypeTable" then
-			local tbl = aliasedType :: luau.TypeTable
-			if tbl.props then
-				typeMembers = {}
-				for _, prop in tbl.props do
-					local function findMemberDoc(nodeLine: number): string?
-						if nodeLine == line then
-							return nil
-						end
-						return findDocComment(nodeLine)
-					end
-					table.insert(typeMembers :: { FuncDoc }, members.buildMember(prop, findMemberDoc, stat.name))
-				end
+		local function findMemberDoc(nodeLine: number): string?
+			if nodeLine == line then
+				return nil
 			end
+			return findDocComment(nodeLine)
 		end
 
+		typeMembers, mixinTypes = collectExpandedTypeMembers(aliasedType, findMemberDoc, stat.name)
+
 		local generics: { string }? = nil
-		if stat.generics and #stat.generics > 0 then
+		local statAny = stat :: any
+		local hasGenerics = stat.generics and #stat.generics > 0
+		local hasGenericPacks = statAny.genericPacks and #statAny.genericPacks > 0
+		if hasGenerics or hasGenericPacks then
 			generics = {}
-			for _, g in stat.generics do
-				table.insert(generics :: { string }, g)
+			if hasGenerics then
+				for _, g in stat.generics do
+					table.insert(generics :: { string }, genericName(g))
+				end
+			end
+			if hasGenericPacks then
+				for _, gp in statAny.genericPacks do
+					table.insert(generics :: { string }, genericName(gp) .. "...")
+				end
 			end
 		end
 
 		local implTable, fieldsType, isInlineClass = classDetection.detectClassPattern(aliasedType)
+		if implTable then
+			doc = mergeDocText(doc, classImplDocs[implTable])
+		end
 
 		-- Pattern 3: inline setmetatable<{fields}, {meta}>
-		if isInlineClass and not typeMembers then
+		if isInlineClass then
 			local ref = aliasedType :: luau.TypeReference
 			local params = ref.parameters
-			local function findMemberDoc(nodeLine: number): string?
-				if nodeLine == line then
-					return nil
-				end
-				return findDocComment(nodeLine)
-			end
-			if params and #params >= 1 then
-				local p1 = params[1]
+			if (not typeMembers) and params and #params >= 1 then
+				local p1 = unwrapTypeOrPack(params[1])
 				if p1 and p1.type == "TypeTable" then
 					local tbl = p1 :: luau.TypeTable
 					if tbl.props then
@@ -300,7 +683,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				end
 			end
 			if params and #params >= 2 then
-				local p2 = params[2]
+				local p2 = unwrapTypeOrPack(params[2])
 				if p2 and p2.type == "TypeTable" then
 					local tbl = p2 :: luau.TypeTable
 					if tbl.props then
@@ -316,6 +699,10 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			end
 		end
 
+		if mixinTypes and #mixinTypes > 0 then
+			typeMemberMixins[stat.name] = mixinTypes
+		end
+
 		local parsed = if doc then parseDocTags(doc) else nil
 
 		-- @ignore: totally exclude from documentation
@@ -323,10 +710,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			return
 		end
 
-		local typePrefix = "type "
-			.. stat.name
-			.. (if generics and #generics > 0 then "<" .. table.concat(generics :: { string }, ", ") .. ">" else "")
-			.. " = "
+		local typePrefix = "type " .. stat.name .. renderGenerics(generics) .. " = "
 
 		-- Build signatureParts
 		local typeSignatureParts: { SignaturePart }? = nil
@@ -334,7 +718,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			local aliasParts: { SignaturePart } = { tp("type ", false, "keyword") }
 			table.insert(aliasParts, tp(stat.name, true, "type"))
 			if generics and #generics > 0 then
-				table.insert(aliasParts, tp("<" .. table.concat(generics :: { string }, ", ") .. ">", false, "punct"))
+				table.insert(aliasParts, tp(renderGenerics(generics), false, "punct"))
 			end
 			table.insert(aliasParts, tp(" = ", false, "punct"))
 			tpExtend(aliasParts, td.describeTypeParts(aliasedType))
@@ -343,7 +727,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			local tableParts: { SignaturePart } = { tp("type ", false, "keyword") }
 			table.insert(tableParts, tp(stat.name, true, "type"))
 			if generics and #generics > 0 then
-				table.insert(tableParts, tp("<" .. table.concat(generics :: { string }, ", ") .. ">", false, "punct"))
+				table.insert(tableParts, tp(renderGenerics(generics), false, "punct"))
 			end
 			table.insert(tableParts, tp(" = {\n", false, "punct"))
 			for _, m in typeMembers :: { FuncDoc } do
@@ -381,6 +765,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			classImplTable = implTable,
 			classFieldsType = fieldsType,
 			metamethods = metamethods,
+			aliasedTypeNode = aliasedType,
 		}
 		table.insert(typeDocs, typeDoc)
 
@@ -495,25 +880,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 					-- Table constructor: foo.bar = { ... } or foo.bar = table.freeze({ ... })
 					if val then
-						local tableExpr: luau.ExprTable? = nil
-						if val.type == "ExprTable" then
-							tableExpr = val :: luau.ExprTable
-						elseif val.type == "ExprCall" then
-							local call = val :: luau.ExprCall
-							if call.func and call.func.type == "ExprIndexName" then
-								local idx = call.func :: luau.ExprIndexName
-								if
-									idx.index == "freeze"
-									and idx.expr.type == "ExprGlobal"
-									and (idx.expr :: luau.ExprGlobal).name == "table"
-								then
-									if call.args and #call.args >= 1 and call.args[1].type == "ExprTable" then
-										tableExpr = call.args[1] :: luau.ExprTable
-									end
-								end
-							end
-						end
-
+						local tableExpr = extractTableExpr(val)
 						if tableExpr then
 							local ownerPath = exprToPath(var)
 							for _, item in tableExpr.items do
@@ -611,11 +978,210 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				if not t.members then
 					t.members = {}
 				end
-				for _, m in fieldsType.members do
-					table.insert(t.members, m)
+				mergeMembersUnique(t.members, fieldsType.members)
+			end
+		end
+
+		local mixins = typeMemberMixins[t.name]
+		if mixins and #mixins > 0 then
+			if not t.members then
+				t.members = {}
+			end
+			for _, mixinName in mixins do
+				local mixinType = typeByName[mixinName]
+				if mixinType and mixinType.members and #mixinType.members > 0 then
+					mergeMembersUnique(t.members, mixinType.members)
 				end
 			end
 		end
+
+		normalizeMemberOrder(t)
+		rebuildTypeSignature(t)
+	end
+
+	local function collectReferencedTypeDocs(
+		node: luau.AstType | luau.AstTypePack?,
+		seenRefs: { [string]: boolean },
+		out: { TypeDoc }
+	)
+		if not node then
+			return
+		end
+
+		if node.type == "TypeReference" then
+			local ref = node :: luau.TypeReference
+			if ref.name == "setmetatable" or ref.name == "typeof" then
+				if ref.parameters then
+					for _, parameter in ref.parameters do
+						collectReferencedTypeDocs(unwrapTypeOrPack(parameter), seenRefs, out)
+					end
+				end
+				return
+			end
+
+			local refName = if ref.prefix then ref.prefix .. "." .. ref.name else ref.name
+			local refType = typeByName[refName]
+			if refType and not seenRefs[refName] then
+				seenRefs[refName] = true
+				table.insert(out, refType)
+			end
+
+			if ref.parameters then
+				for _, parameter in ref.parameters do
+					collectReferencedTypeDocs(unwrapTypeOrPack(parameter), seenRefs, out)
+				end
+			end
+		elseif node.type == "TypeTable" then
+			local tbl = node :: luau.TypeTable
+			if tbl.props then
+				for _, prop in tbl.props do
+					collectReferencedTypeDocs(prop.type, seenRefs, out)
+				end
+			end
+			if tbl.indexer then
+				collectReferencedTypeDocs(tbl.indexer.indexType, seenRefs, out)
+				collectReferencedTypeDocs(tbl.indexer.resultType, seenRefs, out)
+			end
+		elseif node.type == "TypeFunction" then
+			local fn = node :: luau.TypeFunction
+			local argTypes, argTail = normalizeTypeList(fn.argTypes)
+			for _, argType in argTypes do
+				collectReferencedTypeDocs(argType, seenRefs, out)
+			end
+			collectReferencedTypeDocs(argTail, seenRefs, out)
+			collectReferencedTypeDocs(fn.returnTypes, seenRefs, out)
+		elseif node.type == "TypeUnion" then
+			for _, part in (node :: luau.TypeUnion).types do
+				collectReferencedTypeDocs(part, seenRefs, out)
+			end
+		elseif node.type == "TypeIntersection" then
+			for _, part in (node :: luau.TypeIntersection).types do
+				collectReferencedTypeDocs(part, seenRefs, out)
+			end
+		elseif node.type == "TypeGroup" then
+			collectReferencedTypeDocs((node :: luau.TypeGroup).inner, seenRefs, out)
+		elseif node.type == "TypePackExplicit" then
+			local pack = node :: luau.TypePackExplicit
+			if pack.types then
+				for _, part in pack.types do
+					collectReferencedTypeDocs(part, seenRefs, out)
+				end
+			end
+			collectReferencedTypeDocs(pack.tail, seenRefs, out)
+		elseif node.type == "TypePackVariadic" then
+			collectReferencedTypeDocs((node :: luau.TypePackVariadic).variadicType, seenRefs, out)
+		elseif node.type == "TypeError" then
+			for _, part in (node :: luau.TypeError).types do
+				collectReferencedTypeDocs(part, seenRefs, out)
+			end
+		end
+	end
+
+	local hoverTextCache: { [string]: string? } = {}
+	local function collectDirectTypeDependencies(typeDoc: TypeDoc): { TypeDoc }
+		local dependencies: { TypeDoc } = {}
+		if not typeDoc.aliasedTypeNode then
+			return dependencies
+		end
+
+		collectReferencedTypeDocs(typeDoc.aliasedTypeNode, { [typeDoc.name] = true }, dependencies)
+		return dependencies
+	end
+
+	local function buildTypeHoverText(typeDoc: TypeDoc): string?
+		local cached = hoverTextCache[typeDoc.name]
+		if cached ~= nil then
+			return cached
+		end
+
+		local sections: { string } = {}
+		local includedTypes: { [string]: boolean } = {}
+
+		local function addTypeSection(target: TypeDoc?)
+			if not target or includedTypes[target.name] then
+				return
+			end
+
+			local text = clampHoverText(formatTypeHoverSignature(target))
+			if not text or text == "" then
+				return
+			end
+
+			includedTypes[target.name] = true
+			table.insert(sections, text)
+		end
+
+		addTypeSection(typeDoc)
+
+		local queue = collectDirectTypeDependencies(typeDoc)
+		local index = 1
+		while index <= #queue do
+			local dependency = queue[index]
+			index += 1
+
+			if dependency and not includedTypes[dependency.name] then
+				addTypeSection(dependency)
+				for _, nested in collectDirectTypeDependencies(dependency) do
+					if not includedTypes[nested.name] then
+						table.insert(queue, nested)
+					end
+				end
+			end
+		end
+
+		local hoverText = if #sections > 0 then clampHoverText(table.concat(sections, "\n\n")) else nil
+		hoverTextCache[typeDoc.name] = hoverText
+		return hoverText
+	end
+
+	local function annotateSignatureParts(parts: { SignaturePart }?)
+		if not parts then
+			return
+		end
+		for _, part in parts do
+			if part.typeRef then
+				local refType = typeByName[part.text]
+				if refType then
+					part.hoverText = buildTypeHoverText(refType)
+				end
+			end
+		end
+	end
+
+	local function annotateSignatureMeta(meta: SignatureMeta?)
+		if not meta then
+			return
+		end
+		if meta.params then
+			for _, param in meta.params do
+				annotateSignatureParts(param.typeParts)
+			end
+		end
+		if meta.returns then
+			for _, ret in meta.returns do
+				annotateSignatureParts(ret.typeParts)
+			end
+		end
+	end
+
+	for _, t in typeDocs do
+		annotateSignatureParts(t.signatureParts)
+		if t.members then
+			for _, member in t.members do
+				annotateSignatureParts(member.signatureParts)
+				annotateSignatureMeta(member.signatureMeta)
+			end
+		end
+		if t.metamethods then
+			for _, member in t.metamethods do
+				annotateSignatureParts(member.signatureParts)
+				annotateSignatureMeta(member.signatureMeta)
+			end
+		end
+	end
+	for _, f in functions do
+		annotateSignatureParts(f.signatureParts)
+		annotateSignatureMeta(f.signatureMeta)
 	end
 
 	-- ── Detect primary export ────────────────────────────────────────────

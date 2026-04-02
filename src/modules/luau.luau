@@ -63,6 +63,49 @@ export type ParseOptions = {
 	captureComments: boolean?,
 }
 
+export type TableAccess = "Read" | "Write" | "ReadWrite"
+
+export type AttrType = "Checked" | "Native" | "Deprecated" | "Unknown"
+
+export type AstAttr = {
+	type: AttrType,
+	location: Location,
+	name: string?,
+	args: { AstExpr },
+	deprecatedInfo: {
+		deprecated: boolean,
+		use: string?,
+		reason: string?,
+	}?,
+}
+
+export type AstGenericType = {
+	name: string,
+	location: Location,
+	default: AstType?,
+}
+
+export type AstGenericTypePack = {
+	name: string,
+	location: Location,
+	default: AstTypePack?,
+}
+
+export type AstTypeOrPack = {
+	kind: "Type" | "TypePack" | "Unknown",
+	value: AstType | AstTypePack?,
+}
+
+export type AstTypeName = {
+	name: string,
+	location: Location,
+}
+
+export type AstTypeList = {
+	types: { AstType },
+	tail: AstTypePack?,
+}
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Type Nodes
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -70,20 +113,28 @@ export type ParseOptions = {
 export type TypeReference = {
 	type: "TypeReference",
 	location: Location,
+	hasParameterList: boolean,
 	name: string,
+	nameLocation: Location,
 	prefix: string?,
-	parameters: { AstType }?,
+	prefixLocation: Location?,
+	parameters: { AstTypeOrPack }?,
 }
 
 export type TypeTableProp = {
 	name: string,
 	type: AstType,
 	location: Location,
+	access: TableAccess,
+	accessLocation: Location?,
 }
 
 export type TypeTableIndexer = {
 	indexType: AstType,
 	resultType: AstType,
+	location: Location,
+	access: TableAccess,
+	accessLocation: Location?,
 }
 
 export type TypeTable = {
@@ -96,8 +147,11 @@ export type TypeTable = {
 export type TypeFunction = {
 	type: "TypeFunction",
 	location: Location,
-	argTypes: { AstType },
-	argNames: { string? },
+	attributes: { AstAttr }?,
+	generics: { AstGenericType }?,
+	genericPacks: { AstGenericTypePack }?,
+	argTypes: AstTypeList,
+	argNames: { AstTypeName? },
 	returnTypes: AstTypePack?,
 }
 
@@ -145,6 +199,9 @@ export type TypeGroup = {
 export type TypeError = {
 	type: "TypeError",
 	location: Location,
+	types: { AstType },
+	isMissing: boolean,
+	messageIndex: number,
 }
 
 export type TypeUnknown = {
@@ -206,6 +263,13 @@ export type AstLocal = {
 	name: string,
 	location: Location,
 	annotation: AstType?,
+	functionDepth: number,
+	loopDepth: number,
+	isConst: boolean,
+	shadow: {
+		name: string,
+		location: Location,
+	}?,
 }
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -233,12 +297,15 @@ export type ExprConstantNumber = {
 	type: "ExprConstantNumber",
 	location: Location,
 	value: number,
+	parseResult: "Ok" | "Imprecise" | "Malformed" | "BinOverflow" | "HexOverflow" | "Unknown",
 }
 
 export type ExprConstantString = {
 	type: "ExprConstantString",
 	location: Location,
 	value: string,
+	quoteStyle: "QuotedSimple" | "QuotedSingle" | "QuotedRaw" | "Unquoted" | "Unknown",
+	isQuoted: boolean,
 }
 
 export type ExprLocal = {
@@ -263,8 +330,10 @@ export type ExprCall = {
 	type: "ExprCall",
 	location: Location,
 	func: AstExpr,
+	typeArguments: { AstTypeOrPack }?,
 	args: { AstExpr },
 	self: boolean,
+	argLocation: Location,
 }
 
 export type ExprIndexName = {
@@ -272,6 +341,8 @@ export type ExprIndexName = {
 	location: Location,
 	expr: AstExpr,
 	index: string,
+	indexLocation: Location,
+	opPosition: Position,
 	op: string,
 }
 
@@ -285,14 +356,18 @@ export type ExprIndexExpr = {
 export type ExprFunction = {
 	type: "ExprFunction",
 	location: Location,
+	attributes: { AstAttr }?,
 	debugname: string?,
-	generics: { string }?,
-	genericPacks: { string }?,
+	generics: { AstGenericType }?,
+	genericPacks: { AstGenericTypePack }?,
 	args: { AstLocal },
 	vararg: boolean,
+	varargLocation: Location,
 	varargAnnotation: AstTypePack?,
 	returnAnnotation: AstTypePack?,
 	self: AstLocal?,
+	argLocation: Location?,
+	functionDepth: number,
 	body: Block,
 }
 
@@ -334,7 +409,9 @@ export type ExprIfElse = {
 	type: "ExprIfElse",
 	location: Location,
 	condition: AstExpr,
+	hasThen: boolean,
 	trueExpr: AstExpr,
+	hasElse: boolean,
 	falseExpr: AstExpr,
 }
 
@@ -345,9 +422,18 @@ export type ExprInterpString = {
 	expressions: { AstExpr },
 }
 
+export type ExprInstantiate = {
+	type: "ExprInstantiate",
+	location: Location,
+	expr: AstExpr,
+	typeArguments: { AstTypeOrPack },
+}
+
 export type ExprError = {
 	type: "ExprError",
 	location: Location,
+	expressions: { AstExpr },
+	messageIndex: number,
 }
 
 export type ExprUnknown = {
@@ -375,6 +461,7 @@ export type AstExpr =
 	| ExprTypeAssertion
 	| ExprIfElse
 	| ExprInterpString
+	| ExprInstantiate
 	| ExprError
 	| ExprUnknown
 
@@ -385,81 +472,106 @@ export type AstExpr =
 export type Block = {
 	type: "Block",
 	location: Location,
+	hasSemicolon: boolean,
 	body: { AstStat },
+	hasEnd: boolean,
 }
 
 export type StatIf = {
 	type: "StatIf",
 	location: Location,
+	hasSemicolon: boolean,
 	condition: AstExpr,
 	thenBody: Block,
 	elseBody: (Block | StatIf)?,
+	thenLocation: Location?,
+	elseLocation: Location?,
 }
 
 export type StatWhile = {
 	type: "StatWhile",
 	location: Location,
+	hasSemicolon: boolean,
 	condition: AstExpr,
 	body: Block,
+	hasDo: boolean,
+	doLocation: Location,
 }
 
 export type StatRepeat = {
 	type: "StatRepeat",
 	location: Location,
+	hasSemicolon: boolean,
 	condition: AstExpr,
 	body: Block,
+	hasUntil: boolean,
 }
 
 export type StatBreak = {
 	type: "StatBreak",
 	location: Location,
+	hasSemicolon: boolean,
 }
 
 export type StatContinue = {
 	type: "StatContinue",
 	location: Location,
+	hasSemicolon: boolean,
 }
 
 export type StatReturn = {
 	type: "StatReturn",
 	location: Location,
+	hasSemicolon: boolean,
 	list: { AstExpr },
 }
 
 export type StatExpr = {
 	type: "StatExpr",
 	location: Location,
+	hasSemicolon: boolean,
 	expr: AstExpr,
 }
 
 export type StatLocal = {
 	type: "StatLocal",
 	location: Location,
+	hasSemicolon: boolean,
 	vars: { AstLocal },
 	values: { AstExpr },
+	equalsSignLocation: Location?,
 }
 
 export type StatFor = {
 	type: "StatFor",
 	location: Location,
+	hasSemicolon: boolean,
 	var: AstLocal,
 	from: AstExpr,
 	to: AstExpr,
 	step: AstExpr?,
 	body: Block,
+	hasDo: boolean,
+	doLocation: Location,
 }
 
 export type StatForIn = {
 	type: "StatForIn",
 	location: Location,
+	hasSemicolon: boolean,
 	vars: { AstLocal },
 	values: { AstExpr },
 	body: Block,
+	hasIn: boolean,
+	inLocation: Location,
+	hasDo: boolean,
+	doLocation: Location,
 }
 
 export type StatAssign = {
 	type: "StatAssign",
 	location: Location,
+	hasSemicolon: boolean,
 	vars: { AstExpr },
 	values: { AstExpr },
 }
@@ -467,6 +579,7 @@ export type StatAssign = {
 export type StatCompoundAssign = {
 	type: "StatCompoundAssign",
 	location: Location,
+	hasSemicolon: boolean,
 	op: string,
 	var: AstExpr,
 	value: AstExpr,
@@ -475,6 +588,7 @@ export type StatCompoundAssign = {
 export type StatFunction = {
 	type: "StatFunction",
 	location: Location,
+	hasSemicolon: boolean,
 	name: AstExpr,
 	func: ExprFunction,
 }
@@ -482,6 +596,7 @@ export type StatFunction = {
 export type StatLocalFunction = {
 	type: "StatLocalFunction",
 	location: Location,
+	hasSemicolon: boolean,
 	name: AstLocal,
 	func: ExprFunction,
 }
@@ -489,34 +604,81 @@ export type StatLocalFunction = {
 export type StatTypeAlias = {
 	type: "StatTypeAlias",
 	location: Location,
+	hasSemicolon: boolean,
 	name: string,
+	nameLocation: Location,
 	exported: boolean,
 	aliasedType: AstType,
-	generics: { string }?,
+	generics: { AstGenericType }?,
+	genericPacks: { AstGenericTypePack }?,
+}
+
+export type StatTypeFunction = {
+	type: "StatTypeFunction",
+	location: Location,
+	hasSemicolon: boolean,
+	name: string,
+	nameLocation: Location,
+	body: ExprFunction,
+	exported: boolean,
+	hasErrors: boolean,
 }
 
 export type StatDeclareGlobal = {
 	type: "StatDeclareGlobal",
 	location: Location,
+	hasSemicolon: boolean,
 	name: string,
+	nameLocation: Location,
 	declaredType: AstType,
+}
+
+export type AstParamName = {
+	name: string,
+	location: Location,
 }
 
 export type StatDeclareFunction = {
 	type: "StatDeclareFunction",
 	location: Location,
+	hasSemicolon: boolean,
+	attributes: { AstAttr }?,
 	name: string,
+	nameLocation: Location,
+	generics: { AstGenericType }?,
+	genericPacks: { AstGenericTypePack }?,
+	params: AstTypeList,
+	paramNames: { AstParamName },
+	vararg: boolean,
+	varargLocation: Location,
+	returnTypes: AstTypePack,
+}
+
+export type AstDeclaredExternTypeProperty = {
+	name: string,
+	nameLocation: Location,
+	type: AstType,
+	isMethod: boolean,
+	location: Location,
 }
 
 export type StatDeclareExternType = {
 	type: "StatDeclareExternType",
 	location: Location,
+	hasSemicolon: boolean,
 	name: string,
+	superName: string?,
+	props: { AstDeclaredExternTypeProperty },
+	indexer: TypeTableIndexer?,
 }
 
 export type StatError = {
 	type: "StatError",
 	location: Location,
+	hasSemicolon: boolean,
+	expressions: { AstExpr },
+	statements: { AstStat },
+	messageIndex: number,
 }
 
 export type StatUnknown = {
@@ -542,6 +704,7 @@ export type AstStat =
 	| StatFunction
 	| StatLocalFunction
 	| StatTypeAlias
+	| StatTypeFunction
 	| StatDeclareGlobal
 	| StatDeclareFunction
 	| StatDeclareExternType
@@ -636,13 +799,48 @@ export type TypeErrorInfo = {
 	category: "TypeError" | "SyntaxError",
 }
 
+--- A lint diagnostic produced by Luau's built-in linter.
+export type LintInfo = {
+	--- Lint severity category.
+	severity: "error" | "warning",
+	--- Numeric lint code.
+	code: number,
+	--- Stable lint code name (for example `"LocalUnused"`).
+	name: string,
+	--- Human-readable lint message.
+	message: string,
+	--- Source location for the lint.
+	location: Location,
+}
+
+--- Lint diagnostics grouped by severity plus flattened ordering.
+export type LintResult = {
+	errors: { LintInfo },
+	warnings: { LintInfo },
+	all: { LintInfo },
+}
+
 --- The result returned by [[check]].
 export type CheckResult = {
 	--- Type errors found during checking (empty array if none).
 	errors: { TypeErrorInfo },
+	--- Built-in Luau lint diagnostics for this source.
+	lints: LintResult,
 	--- The source code with inferred type annotations attached.
 	--- Only present when `options.annotate` is `true`.
 	annotated: string?,
+}
+
+export type AnalysisTypeDetail = {
+	display: string,
+	kind: string,
+	[string]: any,
+}
+
+export type TypeAtResult = {
+	display: string,
+	source: "Expression" | "Binding" | "ScopeBinding",
+	type: AnalysisTypeDetail,
 }
 
 --- Options for [[typeAt]].
@@ -653,6 +851,8 @@ export type TypeAtOptions = {
 	definitions: { DefinitionSource }?,
 	--- Absolute file path of the source. Enables require() resolution.
 	filePath: string?,
+	--- If true, return a structured type object instead of just a string.
+	detailed: boolean?,
 }
 
 --- Options for [[autocomplete]].
@@ -663,6 +863,8 @@ export type AutocompleteOptions = {
 	definitions: { DefinitionSource }?,
 	--- Absolute file path of the source. Enables require() resolution.
 	filePath: string?,
+	--- If true, include `typeDetail` for each typed autocomplete entry.
+	detailed: boolean?,
 }
 
 --- An autocompletion entry.
@@ -679,6 +881,8 @@ export type AutocompleteEntry = {
 		| "Unknown",
 	--- The inferred type of this entry (absent for keywords).
 	type: string?,
+	--- Structured type metadata (when `options.detailed` is true).
+	typeDetail: AnalysisTypeDetail?,
 	--- Whether this entry is deprecated.
 	deprecated: boolean?,
 	--- Whether this entry's type matches what's expected at the cursor.
@@ -809,7 +1013,8 @@ end
 	Returns a [[CheckResult]] containing any type errors found. When
 	`options.annotate` is `true`, also returns the source code rewritten
 	with inferred type annotations attached to every binding and
-	expression.
+	expression. The result also includes built-in Luau lints under
+	`result.lints`.
 
 	```luau
 	local result = luau.check(source, { mode = "strict", annotate = true })
@@ -851,7 +1056,7 @@ end
 	@param options Type inference options.
 	@return string? -- The inferred type as a string, or nil.
 ]=]
-function luau.typeAt(source: string, line: number, column: number, options: TypeAtOptions?): string?
+function luau.typeAt(source: string, line: number, column: number, options: TypeAtOptions?): (string | TypeAtResult)?
 	return nil :: any
 end
 

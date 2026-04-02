@@ -80,7 +80,7 @@ The standard library is the core selling point for Eryx. Each available library 
 | Library             | Status                 | Description                                       |
 | ------------------- | ---------------------- | ------------------------------------------------- |
 | [[@eryx/http]]      | Mostly complete[^http] | HTTP client and server                            |
-| [[@eryx/net]]       | Partial[^net]          | Basic TCP client and server                       |
+| [[@eryx/net]]       | Complete               | Basic TCP client and server                       |
 | [[@eryx/websocket]] | Partial[^websocket]    | Websocket client and server                       |
 | [[@eryx/mime]]      | Unusable[^mime]        | MIME format detection                             |
 | [[@eryx/_socket]]   | Complete               | Low level BSD-style socket interface              |
@@ -94,8 +94,6 @@ The standard library is the core selling point for Eryx. Each available library 
 | JWT                 | Planned                | Creation and manipulation of JWTs                 |
 
 [^http]: Lacks proxy support
-
-[^net]: No UDP, no IPv6, no socket options, no concurrent server patterns
 
 [^websocket]: Immature implementation lacking many features. Not sufficient tested
 

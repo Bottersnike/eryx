@@ -217,6 +217,9 @@ set(ERYX_EMBED_SCRIPT_ENTRIES  "" CACHE INTERNAL "")  # "module_path;src_file" p
 # Actually produce the primary Eryx executable
 add_executable(eryx src/main.cpp)
 set_target_properties(eryx PROPERTIES CXX_STANDARD 23)
+if(MSVC)  # The new solver needs a rediculous amount of stack
+    target_link_options(eryx PRIVATE "/STACK:4194304")
+endif()
 
 target_compile_definitions(eryx PRIVATE LUAU_GIT_HASH="${LUAU_GIT_HASH}")
 target_compile_definitions(eryx PRIVATE LUAU_APPROX_VERSION="${LUAU_APPROX_VERSION}")

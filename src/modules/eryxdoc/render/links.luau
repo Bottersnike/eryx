@@ -4,6 +4,15 @@
 local modules = require("../content/modules")
 local warnings = require("../warnings")
 
+export type ResolvedWikiLink = {
+	href: string,
+	kind: "article" | "module" | "class" | "type" | "function" | "member",
+	module: modules.ModuleInfo?,
+	article: any?,
+	symbolName: string?,
+	ownerName: string?,
+}
+
 -- Resolves a bare name to an HTML anchor within a module.
 -- Returns the anchor string (with leading #), or nil if not found.
 local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
@@ -29,6 +38,50 @@ local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
 	for _, c in mod.constants do
 		if c.name == name then
 			return "#const-" .. (c.owner or "") .. "." .. name
+		end
+	end
+	return nil
+end
+
+local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): ResolvedWikiLink?
+	for _, f in mod.functions do
+		if f.name == name then
+			local sep = if f.isMethod then ":" else "."
+			return {
+				href = "#fn-" .. (f.owner or "") .. sep .. f.name,
+				kind = "function",
+				module = mod,
+				symbolName = f.name,
+				ownerName = f.owner,
+			}
+		end
+	end
+	if mod.primaryExport and mod.primaryExport.name == name then
+		return {
+			href = "#class-" .. name,
+			kind = "class",
+			module = mod,
+			symbolName = name,
+		}
+	end
+	for _, c in mod.classes do
+		if c.name == name then
+			return {
+				href = "#class-" .. name,
+				kind = "class",
+				module = mod,
+				symbolName = name,
+			}
+		end
+	end
+	for _, t in mod.types do
+		if t.name == name then
+			return {
+				href = "#type-" .. name,
+				kind = "type",
+				module = mod,
+				symbolName = name,
+			}
 		end
 	end
 	return nil
@@ -60,16 +113,59 @@ local function resolveClassMember(mod: modules.ModuleInfo, className: string, me
 	return nil
 end
 
+local function resolveClassMemberInfo(mod: modules.ModuleInfo, className: string, memberName: string): ResolvedWikiLink?
+	local allClasses: { any } = {}
+	if mod.primaryExport then
+		table.insert(allClasses, mod.primaryExport)
+	end
+	for _, c in mod.classes do
+		table.insert(allClasses, c)
+	end
+	for _, cls in allClasses do
+		if cls.name == className then
+			if cls.members then
+				for _, m in cls.members do
+					if m.name == memberName then
+						return {
+							href = "#method-" .. className .. ":" .. memberName,
+							kind = "member",
+							module = mod,
+							symbolName = memberName,
+							ownerName = className,
+						}
+					end
+				end
+			end
+			return {
+				href = "#class-" .. className,
+				kind = "class",
+				module = mod,
+				symbolName = className,
+			}
+		end
+	end
+	return nil
+end
+
+local function withHrefPrefix(info: ResolvedWikiLink?, prefix: string, trailingAnchor: string): ResolvedWikiLink?
+	if not info then
+		return nil
+	end
+	local clone = table.clone(info)
+	clone.href = prefix .. info.href .. trailingAnchor
+	return clone
+end
+
 -- Resolves a wikilink target to a full URL.
 -- Priority: explicit @-path → dotted class.member (local then cross-module) →
 -- bare name (local → article → module last-segment).
-local function resolveWikiLink(
+local function resolveWikiLinkInfo(
 	rawLink: string,
 	currentModule: modules.ModuleInfo?,
 	allModules: { [string]: modules.ModuleInfo },
 	articles: { { name: string, article: any } },
 	getLink: (any) -> string
-): string
+): ResolvedWikiLink
 	-- Split trailing anchor: "Title#heading" → core="Title", trailingAnchor="#heading"
 	local trailingAnchor = ""
 	local core = rawLink
@@ -81,7 +177,10 @@ local function resolveWikiLink(
 
 	-- Bare anchor: [[#heading]] links within the current page
 	if core == "" and trailingAnchor ~= "" then
-		return trailingAnchor
+		return {
+			href = trailingAnchor,
+			kind = "article",
+		}
 	end
 
 	-- ── 1. Fully-qualified "@prefix/…" path ───────────────────────────────
@@ -94,15 +193,26 @@ local function resolveWikiLink(
 			local mod = allModules[modPath]
 			if mod then
 				local clsName, mbrName = member:match("^([^.]+)%.(.+)$")
-				local anchor = if clsName and mbrName
-					then resolveClassMember(mod, clsName :: string, mbrName :: string)
-					else resolveInModule(mod, member)
-				return getLink(mod) .. (anchor or "#" .. member) .. trailingAnchor
+				local info = if clsName and mbrName
+					then resolveClassMemberInfo(mod, clsName :: string, mbrName :: string)
+					else resolveInModuleInfo(mod, member)
+				if info then
+					return withHrefPrefix(info, getLink(mod), trailingAnchor) :: ResolvedWikiLink
+				end
+				return {
+					href = getLink(mod) .. "#" .. member .. trailingAnchor,
+					kind = "module",
+					module = mod,
+				}
 			end
 		end
 		local mod = allModules[core]
 		if mod then
-			return getLink(mod) .. trailingAnchor
+			return {
+				href = getLink(mod) .. trailingAnchor,
+				kind = "module",
+				module = mod,
+			}
 		end
 	end
 
@@ -113,26 +223,33 @@ local function resolveWikiLink(
 		local member = core:sub(dotPos + 1)
 
 		if currentModule then
-			local anchor = resolveClassMember(currentModule, prefix, member)
-			if anchor then
-				return getLink(currentModule) .. anchor .. trailingAnchor
+			local info = resolveClassMemberInfo(currentModule, prefix, member)
+			if info then
+				return withHrefPrefix(info, getLink(currentModule), trailingAnchor) :: ResolvedWikiLink
 			end
 		end
 
 		for _, mod in allModules do
 			local lastSeg = mod.qualifiedName:match("/([^/]+)$") or mod.qualifiedName
 			if lastSeg == prefix then
-				local anchor = resolveInModule(mod, member)
-				return getLink(mod) .. (anchor or "#" .. member) .. trailingAnchor
+				local info = resolveInModuleInfo(mod, member)
+				if info then
+					return withHrefPrefix(info, getLink(mod), trailingAnchor) :: ResolvedWikiLink
+				end
+				return {
+					href = getLink(mod) .. "#" .. member .. trailingAnchor,
+					kind = "module",
+					module = mod,
+				}
 			end
 		end
 	end
 
 	-- ── 3. Bare name ────────────────────────────────────────────────────────
 	if currentModule then
-		local anchor = resolveInModule(currentModule, core)
-		if anchor then
-			return getLink(currentModule) .. anchor .. trailingAnchor
+		local info = resolveInModuleInfo(currentModule, core)
+		if info then
+			return withHrefPrefix(info, getLink(currentModule), trailingAnchor) :: ResolvedWikiLink
 		end
 	end
 
@@ -144,7 +261,11 @@ local function resolveWikiLink(
 	-- Pass 1: exact match on name or title
 	for _, articleInfo in articles do
 		if articleInfo.name == core or articleInfo.article.title == core then
-			return getLink(articleInfo.article) .. trailingAnchor
+			return {
+				href = getLink(articleInfo.article) .. trailingAnchor,
+				kind = "article",
+				article = articleInfo.article,
+			}
 		end
 	end
 
@@ -155,32 +276,61 @@ local function resolveWikiLink(
 
 		-- Case-insensitive title
 		if title:lower() == coreLower then
-			return getLink(articleInfo.article) .. trailingAnchor
+			return {
+				href = getLink(articleInfo.article) .. trailingAnchor,
+				kind = "article",
+				article = articleInfo.article,
+			}
 		end
 
 		-- Last segment of name (e.g. "getting-started" matches "guide/getting-started")
 		local lastSeg = name:match("[^/]+$") or name
 		if lastSeg == core or lastSeg == coreSlug then
-			return getLink(articleInfo.article) .. trailingAnchor
+			return {
+				href = getLink(articleInfo.article) .. trailingAnchor,
+				kind = "article",
+				article = articleInfo.article,
+			}
 		end
 
 		-- Slug of title (e.g. "Getting Started" matches article titled "Getting Started"
 		-- via slug "getting-started")
 		local titleSlug = title:lower():gsub("[%s_]+", "-")
 		if titleSlug == coreSlug then
-			return getLink(articleInfo.article) .. trailingAnchor
+			return {
+				href = getLink(articleInfo.article) .. trailingAnchor,
+				kind = "article",
+				article = articleInfo.article,
+			}
 		end
 	end
 
 	for _, mod in allModules do
 		local lastSeg = mod.qualifiedName:match("/([^/]+)$") or mod.qualifiedName
 		if lastSeg == core then
-			return getLink(mod) .. trailingAnchor
+			return {
+				href = getLink(mod) .. trailingAnchor,
+				kind = "module",
+				module = mod,
+			}
 		end
 	end
 
 	warnings.warn("Unresolved wikilink [[" .. rawLink .. "]]")
-	return "#" .. core
+	return {
+		href = "#" .. core,
+		kind = "article",
+	}
+end
+
+local function resolveWikiLink(
+	rawLink: string,
+	currentModule: modules.ModuleInfo?,
+	allModules: { [string]: modules.ModuleInfo },
+	articles: { { name: string, article: any } },
+	getLink: (any) -> string
+): string
+	return resolveWikiLinkInfo(rawLink, currentModule, allModules, articles, getLink).href
 end
 
 -- Resolves a type name to a URL, checking the current module first then all modules.
@@ -211,6 +361,8 @@ end
 return {
 	resolveInModule = resolveInModule,
 	resolveClassMember = resolveClassMember,
+	resolveClassMemberInfo = resolveClassMemberInfo,
 	resolveWikiLink = resolveWikiLink,
+	resolveWikiLinkInfo = resolveWikiLinkInfo,
 	resolveTypeLink = resolveTypeLink,
 }

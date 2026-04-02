@@ -427,7 +427,6 @@ end
 -- while preserving the full structured data in the table.
 local function rethrowError(err: any)
 	local data = extractErrorData(err)
-	print("!!", data)
 	if typeof(data) == "table" and data.message then
 		if data.filepath then
 			error(exception.new(`template {data.filepath}:{data.line}:{data.col}: {data.message}`, err), 3)

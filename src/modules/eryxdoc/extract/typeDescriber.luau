@@ -33,6 +33,29 @@ end
 
 local describer = {}
 
+local function normalizeTypeList(typeList: any): ({ any }, any)
+	if type(typeList) ~= "table" then
+		return {}, nil
+	end
+
+	-- New shape: { types = {...}, tail = ... }
+	if type(typeList.types) == "table" then
+		return typeList.types, typeList.tail
+	end
+
+	-- Old shape: direct array
+	return typeList, nil
+end
+
+local function unwrapTypeOrPack(value: any): any
+	-- New shape for generic params in TypeReference / calls:
+	-- { kind = "Type"|"TypePack", value = ... }
+	if type(value) == "table" and value.kind and value.value ~= nil then
+		return value.value
+	end
+	return value
+end
+
 function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { SignaturePart }
 	if node == nil then
 		return { tp("any", true, "type") }
@@ -52,7 +75,8 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 				if i > 1 then
 					table.insert(parts, tp(", ", false, "punct"))
 				end
-				tpExtend(parts, describer.describeTypeParts(p))
+				local inner = unwrapTypeOrPack(p)
+				tpExtend(parts, describer.describeTypeParts(inner))
 			end
 			table.insert(parts, tp(">", false, "punct"))
 		end
@@ -96,16 +120,28 @@ function describer.describeTypeParts(node: luau.AstType | luau.AstTypePack): { S
 		local fn = node :: luau.TypeFunction
 		local parts: { SignaturePart } = { tp("(", false, "punct"), tp("(", false, "punct") }
 		if fn.argTypes then
-			for i, a in fn.argTypes do
+			local argTypes = fn.argTypes
+			local argTail = nil
+			argTypes, argTail = normalizeTypeList(fn.argTypes)
+
+			for i, a in argTypes do
 				if i > 1 then
 					table.insert(parts, tp(", ", false, "punct"))
 				end
 				local argName = if fn.argNames and fn.argNames[i] then fn.argNames[i] else nil
 				if argName then
-					table.insert(parts, tp(argName :: string, false, "param"))
+					local renderedName = if type(argName) == "table" then argName.name else argName
+					table.insert(parts, tp(renderedName :: string, false, "param"))
 					table.insert(parts, tp(": ", false, "punct"))
 				end
 				tpExtend(parts, describer.describeTypeParts(a))
+			end
+
+			if argTail then
+				if #argTypes > 0 then
+					table.insert(parts, tp(", ", false, "punct"))
+				end
+				tpExtend(parts, describer.describeTypeParts(argTail))
 			end
 		end
 		table.insert(parts, tp(") \xe2\x86\x92 ", false, "punct"))

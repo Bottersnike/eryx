@@ -20,6 +20,24 @@ local tp = td.tp
 local tpExtend = td.tpExtend
 local partsToString = td.partsToString
 
+local function genericName(g: any): string
+	if type(g) == "table" then
+		return tostring(g.name or "?")
+	end
+	return tostring(g)
+end
+
+local function normalizeGenerics(generics: { any }?): { string }
+	local out: { string } = {}
+	if not generics then
+		return out
+	end
+	for _, g in generics do
+		table.insert(out, genericName(g))
+	end
+	return out
+end
+
 -- Extract raw signature data from an ExprFunction AST node.
 local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	local params: { string } = {}
@@ -92,14 +110,18 @@ local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	-- Generics (generics/genericPacks fields on ExprFunction)
 	local generics: { string }? = nil
 	local funcAny = funcNode :: any
-	if funcAny.generics and #funcAny.generics > 0 then
+	local hasGenerics = funcAny.generics and #funcAny.generics > 0
+	local hasGenericPacks = funcAny.genericPacks and #funcAny.genericPacks > 0
+	if hasGenerics or hasGenericPacks then
 		generics = {}
-		for _, g in funcAny.generics :: { string } do
-			table.insert(generics :: { string }, g)
+		if hasGenerics then
+			for _, g in funcAny.generics do
+				table.insert(generics :: { string }, genericName(g))
+			end
 		end
-		if funcAny.genericPacks then
-			for _, gp in funcAny.genericPacks :: { string } do
-				table.insert(generics :: { string }, gp .. "...")
+		if hasGenericPacks then
+			for _, gp in funcAny.genericPacks do
+				table.insert(generics :: { string }, genericName(gp) .. "...")
 			end
 		end
 	end
@@ -119,11 +141,12 @@ local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 end
 
 -- Format generics as "<T, U, V...>" or "" if none.
-local function formatGenerics(generics: { string }?): string
-	if not generics or #(generics :: { string }) == 0 then
+local function formatGenerics(generics: { any }?): string
+	local normalized = normalizeGenerics(generics)
+	if #normalized == 0 then
 		return ""
 	end
-	return "<" .. table.concat(generics :: { string }, ", ") .. ">"
+	return "<" .. table.concat(normalized, ", ") .. ">"
 end
 
 -- Build signatureParts (structured token array) for a function.
@@ -134,17 +157,18 @@ local function buildParts(
 	retParts: { SignaturePart }?,
 	owner: string?,
 	isMethod: boolean?,
-	generics: { string }?
+	generics: { any }?
 ): { SignaturePart }
 	local parts: { SignaturePart } = {}
+	local normalizedGenerics = normalizeGenerics(generics)
 	if owner then
 		table.insert(parts, tp(owner, false, "name"))
 		table.insert(parts, tp(if isMethod then ":" else ".", false, "punct"))
 	end
 	table.insert(parts, tp(name, false, "name"))
-	if generics and #(generics :: { string }) > 0 then
+	if #normalizedGenerics > 0 then
 		table.insert(parts, tp("<", false, "punct"))
-		for i, g in generics :: { string } do
+		for i, g in normalizedGenerics do
 			if i > 1 then
 				table.insert(parts, tp(", ", false, "punct"))
 			end
@@ -187,7 +211,7 @@ local function buildMeta(
 	retNode: (luau.AstType | luau.AstTypePack)?,
 	owner: string?,
 	isMethod: boolean?,
-	generics: { string }?,
+	generics: { any }?,
 	parsedDoc: ParsedDoc?
 ): SignatureMeta
 	local paramDescriptions: { [string]: string } = {}
@@ -240,7 +264,7 @@ local function buildMeta(
 		name = name,
 		owner = owner,
 		isMethod = isMethod,
-		generics = generics,
+		generics = normalizeGenerics(generics),
 		params = paramsMeta,
 		returns = returnsMeta,
 	}

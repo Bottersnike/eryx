@@ -56,12 +56,12 @@ local function prepareConfig(config: MarkdownConfig): MarkdownConfig
 	end
 	if not config.inlineExtensions then
 		-- Default to enabling all extensions
-		realConfig.inlineExtensions = INLINE_EXTENSIONS
+		realConfig.inlineExtensions = table.clone(INLINE_EXTENSIONS)
 	else
 		realConfig.inlineExtensions = table.clone(config.inlineExtensions)
 	end
 	if not config.inlineEmphasisExtensions then
-		realConfig.inlineEmphasisExtensions = INLINE_EMPHASIS_EXTENSIONS
+		realConfig.inlineEmphasisExtensions = table.clone(INLINE_EMPHASIS_EXTENSIONS)
 	else
 		realConfig.inlineEmphasisExtensions = table.clone(config.inlineEmphasisExtensions)
 	end

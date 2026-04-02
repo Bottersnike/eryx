@@ -8,6 +8,7 @@ type ParsedDoc = doctags.ParsedDoc
 export type SignaturePart = {
 	text: string,
 	typeRef: boolean?,
+	hoverText: string?,
 	kind: ("type" | "param" | "punct" | "keyword" | "name" | "plain")?,
 }
 
@@ -69,6 +70,7 @@ export type TypeDoc = {
 	classFieldsType: string?,
 	isPrimaryExport: boolean?,
 	metamethods: { FuncDoc }?,
+	aliasedTypeNode: luau.AstType?,
 }
 
 export type ConstDoc = {

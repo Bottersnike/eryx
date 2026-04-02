@@ -4,6 +4,19 @@
 
 local luau = require("@eryx/luau")
 
+local function unwrapTypeOrPack(value: any): luau.AstType?
+	if type(value) ~= "table" then
+		return nil
+	end
+	if value.type then
+		return value :: luau.AstType
+	end
+	if value.kind == "Type" and value.value and type(value.value) == "table" and value.value.type then
+		return value.value :: luau.AstType
+	end
+	return nil
+end
+
 -- Detects three class patterns in a type alias's aliased type:
 --   Pattern 1: typeof(setmetatable({} :: Fields, Impl))
 --   Pattern 2: setmetatable<FieldsType, typeof(ImplTable)>
@@ -56,12 +69,12 @@ local function detectClassPattern(aliasedType: luau.AstType): (string?, string?,
 			local params = ref.parameters
 			if #params >= 2 then
 				local fieldsName: string? = nil
-				local p1 = params[1]
+				local p1 = unwrapTypeOrPack(params[1])
 				if p1 and p1.type == "TypeReference" then
 					fieldsName = (p1 :: luau.TypeReference).name
 				end
 				local implName: string? = nil
-				local p2 = params[2]
+				local p2 = unwrapTypeOrPack(params[2])
 				if p2 and p2.type == "TypeTypeof" then
 					local inner = (p2 :: luau.TypeTypeof).expr
 					if inner then
@@ -80,7 +93,7 @@ local function detectClassPattern(aliasedType: luau.AstType): (string?, string?,
 
 			-- Pattern 3: setmetatable<{fields}, {meta}> (inline, no named impl)
 			if #params >= 1 then
-				local p1 = params[1]
+				local p1 = unwrapTypeOrPack(params[1])
 				if p1 and p1.type == "TypeTable" then
 					return nil, nil, true
 				end

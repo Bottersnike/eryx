@@ -69,15 +69,26 @@ return function(linkResolver): types.InlineRule
 			return true, scan + 2
 		end,
 		toHtml = function(
-			node: { type: "wikilink", target: string, children: { types.InlineNode } },
+			node: { type: "wikilink", target: any, children: { types.InlineNode } },
 			rules,
 			config
 		): string
-			return `<a class="md-wikilink" href={html.renderURL(node.target)}>{html.renderInline(
-				node.children,
-				rules,
-				config
-			)}</a>`
+			local href = if type(node.target) == "table" then node.target.href else node.target
+			local extraAttrs = ""
+			if type(node.target) == "table" then
+				if node.target.className and node.target.className ~= "" then
+					extraAttrs ..= ` class="md-wikilink {html.renderLiteral(node.target.className)}"`
+				end
+				if node.target.hoverHtml and node.target.hoverHtml ~= "" then
+					extraAttrs ..= ` data-hover-html="{html.renderLiteral(node.target.hoverHtml)}"`
+				end
+			end
+			if extraAttrs == "" then
+				extraAttrs = ' class="md-wikilink"'
+			elseif not extraAttrs:find('class="', 1, true) then
+				extraAttrs = ` class="md-wikilink"{extraAttrs}`
+			end
+			return `<a{extraAttrs} href={html.renderURL(href)}>{html.renderInline(node.children, rules, config)}</a>`
 		end,
 	}
 end

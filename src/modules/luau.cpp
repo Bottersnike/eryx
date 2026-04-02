@@ -30,7 +30,9 @@
 
 #include <cstdio>
 #include <cstring>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "../runtime/lconfig.hpp"
@@ -98,6 +100,7 @@ static void push_expr(lua_State* L, AstExpr* expr);
 static void push_stat(lua_State* L, AstStat* stat);
 static void push_type(lua_State* L, AstType* type);
 static void push_typepack(lua_State* L, AstTypePack* tp);
+static void push_local(lua_State* L, AstLocal* local);
 
 // Stack safety: ensure room for at least `n` extra Lua-stack slots.
 // Raises a clean Lua error if the stack cannot grow (tree too deep).
@@ -124,6 +127,181 @@ static void push_name(lua_State* L, const AstName& name) {
         lua_pushnil(L);
 }
 
+static void push_optional_name(lua_State* L, const std::optional<AstName>& name) {
+    if (name)
+        push_name(L, *name);
+    else
+        lua_pushnil(L);
+}
+
+static void push_optional_location(lua_State* L, const std::optional<Location>& loc) {
+    if (loc)
+        push_location(L, *loc);
+    else
+        lua_pushnil(L);
+}
+
+static const char* table_access_to_string(AstTableAccess access) {
+    switch (access) {
+        case AstTableAccess::Read:
+            return "Read";
+        case AstTableAccess::Write:
+            return "Write";
+        case AstTableAccess::ReadWrite:
+        default:
+            return "ReadWrite";
+    }
+}
+
+static const char* attr_type_to_string(AstAttr::Type type) {
+    switch (type) {
+        case AstAttr::Checked:
+            return "Checked";
+        case AstAttr::Native:
+            return "Native";
+        case AstAttr::Deprecated:
+            return "Deprecated";
+        case AstAttr::Unknown:
+        default:
+            return "Unknown";
+    }
+}
+
+static const char* number_parse_result_to_string(ConstantNumberParseResult result) {
+    switch (result) {
+        case ConstantNumberParseResult::Ok:
+            return "Ok";
+        case ConstantNumberParseResult::Imprecise:
+            return "Imprecise";
+        case ConstantNumberParseResult::Malformed:
+            return "Malformed";
+        case ConstantNumberParseResult::BinOverflow:
+            return "BinOverflow";
+        case ConstantNumberParseResult::HexOverflow:
+            return "HexOverflow";
+        default:
+            return "Unknown";
+    }
+}
+
+static const char* quote_style_to_string(AstExprConstantString::QuoteStyle quoteStyle) {
+    switch (quoteStyle) {
+        case AstExprConstantString::QuotedSimple:
+            return "QuotedSimple";
+        case AstExprConstantString::QuotedSingle:
+            return "QuotedSingle";
+        case AstExprConstantString::QuotedRaw:
+            return "QuotedRaw";
+        case AstExprConstantString::Unquoted:
+            return "Unquoted";
+        default:
+            return "Unknown";
+    }
+}
+
+static void push_type_or_pack(lua_State* L, const AstTypeOrPack& v) {
+    lua_createtable(L, 0, 2);
+    if (v.type) {
+        lua_pushstring(L, "Type");
+        lua_setfield(L, -2, "kind");
+        push_type(L, v.type);
+        lua_setfield(L, -2, "value");
+    } else if (v.typePack) {
+        lua_pushstring(L, "TypePack");
+        lua_setfield(L, -2, "kind");
+        push_typepack(L, v.typePack);
+        lua_setfield(L, -2, "value");
+    } else {
+        lua_pushstring(L, "Unknown");
+        lua_setfield(L, -2, "kind");
+        lua_pushnil(L);
+        lua_setfield(L, -2, "value");
+    }
+}
+
+static void push_ast_attr(lua_State* L, AstAttr* attr) {
+    if (!attr) {
+        lua_pushnil(L);
+        return;
+    }
+    lua_createtable(L, 0, 6);
+    lua_pushstring(L, attr_type_to_string(attr->type));
+    lua_setfield(L, -2, "type");
+    push_location(L, attr->location);
+    lua_setfield(L, -2, "location");
+    push_name(L, attr->name);
+    lua_setfield(L, -2, "name");
+    push_array<AstExpr>(L, attr->args, push_expr);
+    lua_setfield(L, -2, "args");
+
+    if (attr->type == AstAttr::Deprecated) {
+        AstAttr::DeprecatedInfo info = attr->deprecatedInfo();
+        lua_createtable(L, 0, 3);
+        lua_pushboolean(L, info.deprecated);
+        lua_setfield(L, -2, "deprecated");
+        if (info.use.has_value()) {
+            lua_pushlstring(L, info.use->data(), info.use->size());
+            lua_setfield(L, -2, "use");
+        }
+        if (info.reason.has_value()) {
+            lua_pushlstring(L, info.reason->data(), info.reason->size());
+            lua_setfield(L, -2, "reason");
+        }
+        lua_setfield(L, -2, "deprecatedInfo");
+    }
+}
+
+static void push_generic_type(lua_State* L, AstGenericType* generic) {
+    if (!generic) {
+        lua_pushnil(L);
+        return;
+    }
+    lua_createtable(L, 0, 3);
+    push_name(L, generic->name);
+    lua_setfield(L, -2, "name");
+    push_location(L, generic->location);
+    lua_setfield(L, -2, "location");
+    if (generic->defaultValue) {
+        push_type(L, generic->defaultValue);
+        lua_setfield(L, -2, "default");
+    }
+}
+
+static void push_generic_typepack(lua_State* L, AstGenericTypePack* generic) {
+    if (!generic) {
+        lua_pushnil(L);
+        return;
+    }
+    lua_createtable(L, 0, 3);
+    push_name(L, generic->name);
+    lua_setfield(L, -2, "name");
+    push_location(L, generic->location);
+    lua_setfield(L, -2, "location");
+    if (generic->defaultValue) {
+        push_typepack(L, generic->defaultValue);
+        lua_setfield(L, -2, "default");
+    }
+}
+
+static void push_type_list(lua_State* L, const AstTypeList& list) {
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, (int)list.types.size, 0);
+    for (size_t i = 0; i < list.types.size; i++) {
+        push_type(L, list.types.data[i]);
+        lua_rawseti(L, -2, (int)(i + 1));
+    }
+    lua_setfield(L, -2, "types");
+    if (list.tailType) {
+        push_typepack(L, list.tailType);
+        lua_setfield(L, -2, "tail");
+    }
+}
+
+static void set_stat_common(lua_State* L, AstStat* stat) {
+    lua_pushboolean(L, stat->hasSemicolon);
+    lua_setfield(L, -2, "hasSemicolon");
+}
+
 // ---------------------------------------------------------------------------
 // Type serialisation
 // ---------------------------------------------------------------------------
@@ -136,22 +314,24 @@ static void push_type(lua_State* L, AstType* type) {
 
     if (auto* t = type->as<AstTypeReference>()) {
         begin_node(L, "TypeReference", t->location);
+        lua_pushboolean(L, t->hasParameterList);
+        lua_setfield(L, -2, "hasParameterList");
         push_name(L, t->name);
         lua_setfield(L, -2, "name");
+        push_location(L, t->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
         if (t->prefix) {
             push_name(L, *t->prefix);
             lua_setfield(L, -2, "prefix");
         }
+        if (t->prefixLocation) {
+            push_location(L, *t->prefixLocation);
+            lua_setfield(L, -2, "prefixLocation");
+        }
         if (t->parameters.size > 0) {
             lua_createtable(L, (int)t->parameters.size, 0);
             for (size_t i = 0; i < t->parameters.size; i++) {
-                auto& p = t->parameters.data[i];
-                if (p.type)
-                    push_type(L, p.type);
-                else if (p.typePack)
-                    push_typepack(L, p.typePack);
-                else
-                    lua_pushnil(L);
+                push_type_or_pack(L, t->parameters.data[i]);
                 lua_rawseti(L, -2, (int)(i + 1));
             }
             lua_setfield(L, -2, "parameters");
@@ -160,38 +340,75 @@ static void push_type(lua_State* L, AstType* type) {
         begin_node(L, "TypeTable", t->location);
         lua_createtable(L, (int)t->props.size, 0);
         for (size_t i = 0; i < t->props.size; i++) {
-            lua_createtable(L, 0, 3);
+            lua_createtable(L, 0, 5);
             push_name(L, t->props.data[i].name);
             lua_setfield(L, -2, "name");
             push_type(L, t->props.data[i].type);
             lua_setfield(L, -2, "type");
             push_location(L, t->props.data[i].location);
             lua_setfield(L, -2, "location");
+            lua_pushstring(L, table_access_to_string(t->props.data[i].access));
+            lua_setfield(L, -2, "access");
+            if (t->props.data[i].accessLocation) {
+                push_location(L, *t->props.data[i].accessLocation);
+                lua_setfield(L, -2, "accessLocation");
+            }
             lua_rawseti(L, -2, (int)(i + 1));
         }
         lua_setfield(L, -2, "props");
         if (t->indexer) {
-            lua_createtable(L, 0, 2);
+            lua_createtable(L, 0, 5);
             push_type(L, t->indexer->indexType);
             lua_setfield(L, -2, "indexType");
             push_type(L, t->indexer->resultType);
             lua_setfield(L, -2, "resultType");
+            push_location(L, t->indexer->location);
+            lua_setfield(L, -2, "location");
+            lua_pushstring(L, table_access_to_string(t->indexer->access));
+            lua_setfield(L, -2, "access");
+            if (t->indexer->accessLocation) {
+                push_location(L, *t->indexer->accessLocation);
+                lua_setfield(L, -2, "accessLocation");
+            }
             lua_setfield(L, -2, "indexer");
         }
     } else if (auto* t = type->as<AstTypeFunction>()) {
         begin_node(L, "TypeFunction", t->location);
-        // arg types
-        lua_createtable(L, (int)t->argTypes.types.size, 0);
-        for (size_t i = 0; i < t->argTypes.types.size; i++) {
-            push_type(L, t->argTypes.types.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
+        if (t->attributes.size > 0) {
+            lua_createtable(L, (int)t->attributes.size, 0);
+            for (size_t i = 0; i < t->attributes.size; i++) {
+                push_ast_attr(L, t->attributes.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "attributes");
         }
+        if (t->generics.size > 0) {
+            lua_createtable(L, (int)t->generics.size, 0);
+            for (size_t i = 0; i < t->generics.size; i++) {
+                push_generic_type(L, t->generics.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "generics");
+        }
+        if (t->genericPacks.size > 0) {
+            lua_createtable(L, (int)t->genericPacks.size, 0);
+            for (size_t i = 0; i < t->genericPacks.size; i++) {
+                push_generic_typepack(L, t->genericPacks.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "genericPacks");
+        }
+        push_type_list(L, t->argTypes);
         lua_setfield(L, -2, "argTypes");
         // arg names (optional per-arg)
         lua_createtable(L, (int)t->argNames.size, 0);
         for (size_t i = 0; i < t->argNames.size; i++) {
             if (t->argNames.data[i].has_value()) {
+                lua_createtable(L, 0, 2);
                 push_name(L, t->argNames.data[i]->first);
+                lua_setfield(L, -2, "name");
+                push_location(L, t->argNames.data[i]->second);
+                lua_setfield(L, -2, "location");
             } else {
                 lua_pushnil(L);
             }
@@ -238,7 +455,18 @@ static void push_type(lua_State* L, AstType* type) {
         push_type(L, t->type);
         lua_setfield(L, -2, "inner");
     } else if (type->as<AstTypeError>()) {
+        auto* t = type->as<AstTypeError>();
         begin_node(L, "TypeError", type->location);
+        lua_createtable(L, (int)t->types.size, 0);
+        for (size_t i = 0; i < t->types.size; i++) {
+            push_type(L, t->types.data[i]);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "types");
+        lua_pushboolean(L, t->isMissing);
+        lua_setfield(L, -2, "isMissing");
+        lua_pushinteger(L, (lua_Integer)t->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
     } else {
         begin_node(L, "TypeUnknown", type->location);
     }
@@ -287,14 +515,28 @@ static void push_local(lua_State* L, AstLocal* local) {
         lua_pushnil(L);
         return;
     }
-    lua_createtable(L, 0, 3);
+    lua_createtable(L, 0, 7);
     push_name(L, local->name);
     lua_setfield(L, -2, "name");
     push_location(L, local->location);
     lua_setfield(L, -2, "location");
+    lua_pushinteger(L, (lua_Integer)local->functionDepth);
+    lua_setfield(L, -2, "functionDepth");
+    lua_pushinteger(L, (lua_Integer)local->loopDepth);
+    lua_setfield(L, -2, "loopDepth");
+    lua_pushboolean(L, local->isConst);
+    lua_setfield(L, -2, "isConst");
     if (local->annotation) {
         push_type(L, local->annotation);
         lua_setfield(L, -2, "annotation");
+    }
+    if (local->shadow) {
+        lua_createtable(L, 0, 2);
+        push_name(L, local->shadow->name);
+        lua_setfield(L, -2, "name");
+        push_location(L, local->shadow->location);
+        lua_setfield(L, -2, "location");
+        lua_setfield(L, -2, "shadow");
     }
 }
 
@@ -322,10 +564,16 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         begin_node(L, "ExprConstantNumber", e->location);
         lua_pushnumber(L, e->value);
         lua_setfield(L, -2, "value");
+        lua_pushstring(L, number_parse_result_to_string(e->parseResult));
+        lua_setfield(L, -2, "parseResult");
     } else if (auto* e = expr->as<AstExprConstantString>()) {
         begin_node(L, "ExprConstantString", e->location);
         lua_pushlstring(L, e->value.data, e->value.size);
         lua_setfield(L, -2, "value");
+        lua_pushstring(L, quote_style_to_string(e->quoteStyle));
+        lua_setfield(L, -2, "quoteStyle");
+        lua_pushboolean(L, e->isQuoted());
+        lua_setfield(L, -2, "isQuoted");
     } else if (auto* e = expr->as<AstExprLocal>()) {
         begin_node(L, "ExprLocal", e->location);
         push_local(L, e->local);
@@ -342,10 +590,20 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         begin_node(L, "ExprCall", e->location);
         push_expr(L, e->func);
         lua_setfield(L, -2, "func");
+        if (e->typeArguments.size > 0) {
+            lua_createtable(L, (int)e->typeArguments.size, 0);
+            for (size_t i = 0; i < e->typeArguments.size; i++) {
+                push_type_or_pack(L, e->typeArguments.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "typeArguments");
+        }
         push_array<AstExpr>(L, e->args, push_expr);
         lua_setfield(L, -2, "args");
         lua_pushboolean(L, e->self);
         lua_setfield(L, -2, "self");
+        push_location(L, e->argLocation);
+        lua_setfield(L, -2, "argLocation");
     } else if (auto* e = expr->as<AstExprIndexName>()) {
         // ---- Iterative index-name chain (a.b.c.d) ----
         std::vector<AstExprIndexName*> idxChain;
@@ -367,6 +625,10 @@ static void push_expr(lua_State* L, AstExpr* expr) {
             lua_remove(L, -2);            // pop original leftVal
             push_name(L, idx->index);
             lua_setfield(L, -2, "index");
+            push_location(L, idx->indexLocation);
+            lua_setfield(L, -2, "indexLocation");
+            push_position(L, idx->opPosition);
+            lua_setfield(L, -2, "opPosition");
             lua_pushlstring(L, &idx->op, 1);
             lua_setfield(L, -2, "op");
             // Stack: [..., idxTable] - becomes leftVal for next level
@@ -379,13 +641,21 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         lua_setfield(L, -2, "index");
     } else if (auto* e = expr->as<AstExprFunction>()) {
         begin_node(L, "ExprFunction", e->location);
+        if (e->attributes.size > 0) {
+            lua_createtable(L, (int)e->attributes.size, 0);
+            for (size_t i = 0; i < e->attributes.size; i++) {
+                push_ast_attr(L, e->attributes.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "attributes");
+        }
         push_name(L, e->debugname);
         lua_setfield(L, -2, "debugname");
         // generics
         if (e->generics.size > 0) {
             lua_createtable(L, (int)e->generics.size, 0);
             for (size_t i = 0; i < e->generics.size; i++) {
-                push_name(L, e->generics.data[i]->name);
+                push_generic_type(L, e->generics.data[i]);
                 lua_rawseti(L, -2, (int)(i + 1));
             }
             lua_setfield(L, -2, "generics");
@@ -393,7 +663,7 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         if (e->genericPacks.size > 0) {
             lua_createtable(L, (int)e->genericPacks.size, 0);
             for (size_t i = 0; i < e->genericPacks.size; i++) {
-                push_name(L, e->genericPacks.data[i]->name);
+                push_generic_typepack(L, e->genericPacks.data[i]);
                 lua_rawseti(L, -2, (int)(i + 1));
             }
             lua_setfield(L, -2, "genericPacks");
@@ -407,6 +677,8 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         lua_setfield(L, -2, "args");
         lua_pushboolean(L, e->vararg);
         lua_setfield(L, -2, "vararg");
+        push_location(L, e->varargLocation);
+        lua_setfield(L, -2, "varargLocation");
         if (e->varargAnnotation) {
             push_typepack(L, e->varargAnnotation);
             lua_setfield(L, -2, "varargAnnotation");
@@ -419,6 +691,12 @@ static void push_expr(lua_State* L, AstExpr* expr) {
             push_local(L, e->self);
             lua_setfield(L, -2, "self");
         }
+        if (e->argLocation) {
+            push_location(L, *e->argLocation);
+            lua_setfield(L, -2, "argLocation");
+        }
+        lua_pushinteger(L, (lua_Integer)e->functionDepth);
+        lua_setfield(L, -2, "functionDepth");
         // body
         push_stat(L, e->body);
         lua_setfield(L, -2, "body");
@@ -493,8 +771,12 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         begin_node(L, "ExprIfElse", e->location);
         push_expr(L, e->condition);
         lua_setfield(L, -2, "condition");
+        lua_pushboolean(L, e->hasThen);
+        lua_setfield(L, -2, "hasThen");
         push_expr(L, e->trueExpr);
         lua_setfield(L, -2, "trueExpr");
+        lua_pushboolean(L, e->hasElse);
+        lua_setfield(L, -2, "hasElse");
         push_expr(L, e->falseExpr);
         lua_setfield(L, -2, "falseExpr");
     } else if (auto* e = expr->as<AstExprInterpString>()) {
@@ -508,8 +790,22 @@ static void push_expr(lua_State* L, AstExpr* expr) {
         lua_setfield(L, -2, "strings");
         push_array<AstExpr>(L, e->expressions, push_expr);
         lua_setfield(L, -2, "expressions");
+    } else if (auto* e = expr->as<AstExprInstantiate>()) {
+        begin_node(L, "ExprInstantiate", e->location);
+        push_expr(L, e->expr);
+        lua_setfield(L, -2, "expr");
+        lua_createtable(L, (int)e->typeArguments.size, 0);
+        for (size_t i = 0; i < e->typeArguments.size; i++) {
+            push_type_or_pack(L, e->typeArguments.data[i]);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "typeArguments");
     } else if (auto* e = expr->as<AstExprError>()) {
         begin_node(L, "ExprError", e->location);
+        push_array<AstExpr>(L, e->expressions, push_expr);
+        lua_setfield(L, -2, "expressions");
+        lua_pushinteger(L, (lua_Integer)e->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
     } else {
         begin_node(L, "ExprUnknown", expr->location);
     }
@@ -527,8 +823,11 @@ static void push_stat(lua_State* L, AstStat* stat) {
 
     if (auto* s = stat->as<AstStatBlock>()) {
         begin_node(L, "Block", s->location);
+        set_stat_common(L, s);
         push_array<AstStat>(L, s->body, push_stat);
         lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->hasEnd);
+        lua_setfield(L, -2, "hasEnd");
     } else if (auto* s = stat->as<AstStatIf>()) {
         // ---- Iterative if / elseif chain ----
         // Each elseif is a nested AstStatIf in the else branch.  Rather
@@ -544,10 +843,19 @@ static void push_stat(lua_State* L, AstStat* stat) {
         for (auto* node : ifChain) {
             ensure_stack(L, 20);
             begin_node(L, "StatIf", node->location);
+            set_stat_common(L, node);
             push_expr(L, node->condition);
             lua_setfield(L, -2, "condition");
             push_stat(L, node->thenbody);
             lua_setfield(L, -2, "thenBody");
+            if (node->thenLocation) {
+                push_location(L, *node->thenLocation);
+                lua_setfield(L, -2, "thenLocation");
+            }
+            if (node->elseLocation) {
+                push_location(L, *node->elseLocation);
+                lua_setfield(L, -2, "elseLocation");
+            }
         }
 
         // Handle final else body (non-if) on the last node
@@ -564,30 +872,43 @@ static void push_stat(lua_State* L, AstStat* stat) {
         // Top of stack is the outermost StatIf table.
     } else if (auto* s = stat->as<AstStatWhile>()) {
         begin_node(L, "StatWhile", s->location);
+        set_stat_common(L, s);
         push_expr(L, s->condition);
         lua_setfield(L, -2, "condition");
         push_stat(L, s->body);
         lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->hasDo);
+        lua_setfield(L, -2, "hasDo");
+        push_location(L, s->doLocation);
+        lua_setfield(L, -2, "doLocation");
     } else if (auto* s = stat->as<AstStatRepeat>()) {
         begin_node(L, "StatRepeat", s->location);
+        set_stat_common(L, s);
         push_expr(L, s->condition);
         lua_setfield(L, -2, "condition");
         push_stat(L, s->body);
         lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->DEPRECATED_hasUntil);
+        lua_setfield(L, -2, "hasUntil");
     } else if (stat->as<AstStatBreak>()) {
         begin_node(L, "StatBreak", stat->location);
+        set_stat_common(L, stat);
     } else if (stat->as<AstStatContinue>()) {
         begin_node(L, "StatContinue", stat->location);
+        set_stat_common(L, stat);
     } else if (auto* s = stat->as<AstStatReturn>()) {
         begin_node(L, "StatReturn", s->location);
+        set_stat_common(L, s);
         push_array<AstExpr>(L, s->list, push_expr);
         lua_setfield(L, -2, "list");
     } else if (auto* s = stat->as<AstStatExpr>()) {
         begin_node(L, "StatExpr", s->location);
+        set_stat_common(L, s);
         push_expr(L, s->expr);
         lua_setfield(L, -2, "expr");
     } else if (auto* s = stat->as<AstStatLocal>()) {
         begin_node(L, "StatLocal", s->location);
+        set_stat_common(L, s);
         // vars
         lua_createtable(L, (int)s->vars.size, 0);
         for (size_t i = 0; i < s->vars.size; i++) {
@@ -597,8 +918,13 @@ static void push_stat(lua_State* L, AstStat* stat) {
         lua_setfield(L, -2, "vars");
         push_array<AstExpr>(L, s->values, push_expr);
         lua_setfield(L, -2, "values");
+        if (s->equalsSignLocation) {
+            push_location(L, *s->equalsSignLocation);
+            lua_setfield(L, -2, "equalsSignLocation");
+        }
     } else if (auto* s = stat->as<AstStatFor>()) {
         begin_node(L, "StatFor", s->location);
+        set_stat_common(L, s);
         push_local(L, s->var);
         lua_setfield(L, -2, "var");
         push_expr(L, s->from);
@@ -611,8 +937,13 @@ static void push_stat(lua_State* L, AstStat* stat) {
         }
         push_stat(L, s->body);
         lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->hasDo);
+        lua_setfield(L, -2, "hasDo");
+        push_location(L, s->doLocation);
+        lua_setfield(L, -2, "doLocation");
     } else if (auto* s = stat->as<AstStatForIn>()) {
         begin_node(L, "StatForIn", s->location);
+        set_stat_common(L, s);
         lua_createtable(L, (int)s->vars.size, 0);
         for (size_t i = 0; i < s->vars.size; i++) {
             push_local(L, s->vars.data[i]);
@@ -623,14 +954,24 @@ static void push_stat(lua_State* L, AstStat* stat) {
         lua_setfield(L, -2, "values");
         push_stat(L, s->body);
         lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->hasIn);
+        lua_setfield(L, -2, "hasIn");
+        push_location(L, s->inLocation);
+        lua_setfield(L, -2, "inLocation");
+        lua_pushboolean(L, s->hasDo);
+        lua_setfield(L, -2, "hasDo");
+        push_location(L, s->doLocation);
+        lua_setfield(L, -2, "doLocation");
     } else if (auto* s = stat->as<AstStatAssign>()) {
         begin_node(L, "StatAssign", s->location);
+        set_stat_common(L, s);
         push_array<AstExpr>(L, s->vars, push_expr);
         lua_setfield(L, -2, "vars");
         push_array<AstExpr>(L, s->values, push_expr);
         lua_setfield(L, -2, "values");
     } else if (auto* s = stat->as<AstStatCompoundAssign>()) {
         begin_node(L, "StatCompoundAssign", s->location);
+        set_stat_common(L, s);
         std::string opStr = toString(s->op);
         lua_pushstring(L, opStr.c_str());
         lua_setfield(L, -2, "op");
@@ -640,20 +981,25 @@ static void push_stat(lua_State* L, AstStat* stat) {
         lua_setfield(L, -2, "value");
     } else if (auto* s = stat->as<AstStatFunction>()) {
         begin_node(L, "StatFunction", s->location);
+        set_stat_common(L, s);
         push_expr(L, s->name);
         lua_setfield(L, -2, "name");
         push_expr(L, s->func);
         lua_setfield(L, -2, "func");
     } else if (auto* s = stat->as<AstStatLocalFunction>()) {
         begin_node(L, "StatLocalFunction", s->location);
+        set_stat_common(L, s);
         push_local(L, s->name);
         lua_setfield(L, -2, "name");
         push_expr(L, s->func);
         lua_setfield(L, -2, "func");
     } else if (auto* s = stat->as<AstStatTypeAlias>()) {
         begin_node(L, "StatTypeAlias", s->location);
+        set_stat_common(L, s);
         push_name(L, s->name);
         lua_setfield(L, -2, "name");
+        push_location(L, s->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
         lua_pushboolean(L, s->exported);
         lua_setfield(L, -2, "exported");
         push_type(L, s->type);
@@ -661,27 +1007,139 @@ static void push_stat(lua_State* L, AstStat* stat) {
         if (s->generics.size > 0) {
             lua_createtable(L, (int)s->generics.size, 0);
             for (size_t i = 0; i < s->generics.size; i++) {
-                push_name(L, s->generics.data[i]->name);
+                push_generic_type(L, s->generics.data[i]);
                 lua_rawseti(L, -2, (int)(i + 1));
             }
             lua_setfield(L, -2, "generics");
         }
-    } else if (auto* s = stat->as<AstStatDeclareGlobal>()) {
-        begin_node(L, "StatDeclareGlobal", s->location);
+        if (s->genericPacks.size > 0) {
+            lua_createtable(L, (int)s->genericPacks.size, 0);
+            for (size_t i = 0; i < s->genericPacks.size; i++) {
+                push_generic_typepack(L, s->genericPacks.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "genericPacks");
+        }
+    } else if (auto* s = stat->as<AstStatTypeFunction>()) {
+        begin_node(L, "StatTypeFunction", s->location);
+        set_stat_common(L, s);
         push_name(L, s->name);
         lua_setfield(L, -2, "name");
+        push_location(L, s->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
+        push_expr(L, s->body);
+        lua_setfield(L, -2, "body");
+        lua_pushboolean(L, s->exported);
+        lua_setfield(L, -2, "exported");
+        lua_pushboolean(L, s->hasErrors);
+        lua_setfield(L, -2, "hasErrors");
+    } else if (auto* s = stat->as<AstStatDeclareGlobal>()) {
+        begin_node(L, "StatDeclareGlobal", s->location);
+        set_stat_common(L, s);
+        push_name(L, s->name);
+        lua_setfield(L, -2, "name");
+        push_location(L, s->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
         push_type(L, s->type);
         lua_setfield(L, -2, "declaredType");
     } else if (auto* s = stat->as<AstStatDeclareFunction>()) {
         begin_node(L, "StatDeclareFunction", s->location);
+        set_stat_common(L, s);
+        if (s->attributes.size > 0) {
+            lua_createtable(L, (int)s->attributes.size, 0);
+            for (size_t i = 0; i < s->attributes.size; i++) {
+                push_ast_attr(L, s->attributes.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "attributes");
+        }
         push_name(L, s->name);
         lua_setfield(L, -2, "name");
+        push_location(L, s->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
+        if (s->generics.size > 0) {
+            lua_createtable(L, (int)s->generics.size, 0);
+            for (size_t i = 0; i < s->generics.size; i++) {
+                push_generic_type(L, s->generics.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "generics");
+        }
+        if (s->genericPacks.size > 0) {
+            lua_createtable(L, (int)s->genericPacks.size, 0);
+            for (size_t i = 0; i < s->genericPacks.size; i++) {
+                push_generic_typepack(L, s->genericPacks.data[i]);
+                lua_rawseti(L, -2, (int)(i + 1));
+            }
+            lua_setfield(L, -2, "genericPacks");
+        }
+        push_type_list(L, s->params);
+        lua_setfield(L, -2, "params");
+        lua_createtable(L, (int)s->paramNames.size, 0);
+        for (size_t i = 0; i < s->paramNames.size; i++) {
+            lua_createtable(L, 0, 2);
+            push_name(L, s->paramNames.data[i].first);
+            lua_setfield(L, -2, "name");
+            push_location(L, s->paramNames.data[i].second);
+            lua_setfield(L, -2, "location");
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "paramNames");
+        lua_pushboolean(L, s->vararg);
+        lua_setfield(L, -2, "vararg");
+        push_location(L, s->varargLocation);
+        lua_setfield(L, -2, "varargLocation");
+        push_typepack(L, s->retTypes);
+        lua_setfield(L, -2, "returnTypes");
     } else if (auto* s = stat->as<AstStatDeclareExternType>()) {
         begin_node(L, "StatDeclareExternType", s->location);
+        set_stat_common(L, s);
         push_name(L, s->name);
         lua_setfield(L, -2, "name");
+        push_optional_name(L, s->superName);
+        lua_setfield(L, -2, "superName");
+        lua_createtable(L, (int)s->props.size, 0);
+        for (size_t i = 0; i < s->props.size; i++) {
+            lua_createtable(L, 0, 6);
+            push_name(L, s->props.data[i].name);
+            lua_setfield(L, -2, "name");
+            push_location(L, s->props.data[i].nameLocation);
+            lua_setfield(L, -2, "nameLocation");
+            push_type(L, s->props.data[i].ty);
+            lua_setfield(L, -2, "type");
+            lua_pushboolean(L, s->props.data[i].isMethod);
+            lua_setfield(L, -2, "isMethod");
+            push_location(L, s->props.data[i].location);
+            lua_setfield(L, -2, "location");
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "props");
+        if (s->indexer) {
+            lua_createtable(L, 0, 5);
+            push_type(L, s->indexer->indexType);
+            lua_setfield(L, -2, "indexType");
+            push_type(L, s->indexer->resultType);
+            lua_setfield(L, -2, "resultType");
+            push_location(L, s->indexer->location);
+            lua_setfield(L, -2, "location");
+            lua_pushstring(L, table_access_to_string(s->indexer->access));
+            lua_setfield(L, -2, "access");
+            if (s->indexer->accessLocation) {
+                push_location(L, *s->indexer->accessLocation);
+                lua_setfield(L, -2, "accessLocation");
+            }
+            lua_setfield(L, -2, "indexer");
+        }
     } else if (stat->as<AstStatError>()) {
+        auto* s = stat->as<AstStatError>();
         begin_node(L, "StatError", stat->location);
+        set_stat_common(L, s);
+        push_array<AstExpr>(L, s->expressions, push_expr);
+        lua_setfield(L, -2, "expressions");
+        push_array<AstStat>(L, s->statements, push_stat);
+        lua_setfield(L, -2, "statements");
+        lua_pushinteger(L, (lua_Integer)s->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
     } else {
         begin_node(L, "StatUnknown", stat->location);
     }

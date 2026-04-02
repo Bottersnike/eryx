@@ -1,6 +1,6 @@
 # Client Requests
 
-For most scripts, the top-level functions on [[http|@eryx/http]] are the right place to start.
+For most scripts, the top-level functions on [[@eryx/http]] are the right place to start.
 
 ## Basic Requests
 
@@ -191,4 +191,4 @@ local response = http.head("https://example.com/file.zip")
 print(response.headers["content-length"])
 ```
 
-If you are moving beyond simple request-response flows, continue with [[Sessions and Streaming|./sessions-and-streaming]].
+If you are moving beyond simple request-response flows, continue with [[Sessions and Streaming]].

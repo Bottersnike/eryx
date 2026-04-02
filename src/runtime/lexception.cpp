@@ -450,6 +450,18 @@ void eryx_exception_push_keyboard_interrupt(lua_State* L) {
 }
 
 void eryx_coerce_to_exception(lua_State* L) {
+    if (lua_gettop(L) < 1) {
+        eryx_exception_push_exception(L, ETYPE_RUNTIME, "<missing error object>", nullptr);
+
+        LuaException* exception = eryx_get_exception(L, -1);
+        if (exception) {
+            exception->pendingTracebackSkip = take_pending_error_skip(L);
+            exception->traceback.clear();
+            eryx_exception_populate_tb(L, exception, 0);
+        }
+        return;
+    }
+
     LuaException* e = eryx_get_exception(L, -1);
     if (e) {
         eryx_exception_populate_tb(L, e, 0);
@@ -581,18 +593,22 @@ static int eryx_pcall_cont(lua_State* L, int status) {
         lua_pushboolean(L, true);
         lua_insert(L, 1);
         return lua_gettop(L);
-    } else {
-        // Error path – check for uncatchable exceptions
-        if (is_uncatchable_exception(L, -1)) {
-            lua_error(L);  // rethrow past this pcall
-            return 0;
-        }
-        eryx_coerce_to_exception(L);
-        lua_rawcheckstack(L, 1);
-        lua_pushboolean(L, false);
-        lua_insert(L, -2);
-        return 2;
     }
+
+    // Yielded pcall resumes with the error object in the first result slot.
+    // Normalize the frame so later code can safely treat it as the top value.
+    lua_settop(L, 1);
+
+    if (is_uncatchable_exception(L, -1)) {
+        lua_error(L);  // rethrow past this pcall
+        return 0;
+    }
+
+    eryx_coerce_to_exception(L);
+    lua_rawcheckstack(L, 1);
+    lua_pushboolean(L, false);
+    lua_insert(L, -2);
+    return 2;
 }
 
 static int eryx_pcall(lua_State* L) {

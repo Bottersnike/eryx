@@ -2,7 +2,7 @@
 
 `http.HttpServer` lets you serve HTTP or HTTPS directly from Luau.
 
-If you want higher-level routing, middleware, named routes, groups, or mounted sub-apps, start with [[App|./app]] instead and treat `HttpServer` as the low-level escape hatch.
+If you want higher-level routing, middleware, named routes, groups, or mounted sub-apps, start with [[App]] instead and treat `HttpServer` as the low-level escape hatch.
 
 ## Minimal Server
 
@@ -240,4 +240,4 @@ The server already handles several important HTTP/1.1 rules for you:
 - oversized headers and bodies are rejected
 - response bodies are suppressed when the protocol requires that
 
-For structured request bodies, continue with [[Forms and Multipart|./forms-and-multipart]].
+For structured request bodies, continue with [[Forms and Multipart]].

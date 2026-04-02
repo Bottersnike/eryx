@@ -6,13 +6,17 @@
 #include "lexception.hpp"
 
 // Analysis headers (available because LuauShared links Luau.Analysis)
+#include <cstdarg>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <string>
+#include <unordered_set>
 
 #include "Luau/AstQuery.h"
 #include "Luau/Autocomplete.h"
@@ -24,7 +28,9 @@
 #include "Luau/ModuleResolver.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/ToString.h"
+#include "Luau/Type.h"
 #include "Luau/TypeAttach.h"
+#include "Luau/TypePack.h"
 #include "lprint.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
@@ -185,6 +191,368 @@ static void analysis_push_location(lua_State* L, const Luau::Location& loc) {
     lua_setfield(L, -2, "end");
 }
 
+static Luau::ToStringOptions analysis_type_to_string_options() {
+    Luau::ToStringOptions o;
+    o.exhaustive = false;
+    o.useLineBreaks = false;
+    o.functionTypeArguments = true;
+    o.ignoreSyntheticName = true;
+    return o;
+}
+
+static bool analysis_set_fastflag_bool(const char* name, bool value) {
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next) {
+        if (flag->name && strcmp(flag->name, name) == 0) {
+            flag->value = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool analysis_set_fastint(const char* name, int value) {
+    for (Luau::FValue<int>* flag = Luau::FValue<int>::list; flag; flag = flag->next) {
+        if (flag->name && strcmp(flag->name, name) == 0) {
+            flag->value = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void analysis_apply_new_solver_flags() {
+    // Ensure explicit new-solver selection isn't overridden by defaults.
+    analysis_set_fastflag_bool("LuauSolverV2", true);
+    analysis_set_fastflag_bool("DebugLuauForceOldSolver", false);
+
+    // Type-function stability knobs used by upstream in new-solver scenarios.
+    analysis_set_fastflag_bool("LuauTypeFunctionsCaptureNestedInstances", true);
+    analysis_set_fastflag_bool("LuauBuiltinTypeFunctionsUseNewOverloadResolution", true);
+    analysis_set_fastflag_bool("LuauOverloadGetsInstantiated", true);
+    analysis_set_fastflag_bool("LuauReplacerRespectsReboundGenerics", true);
+    analysis_set_fastflag_bool("LuauUnifyWithSubtyping2", true);
+    analysis_set_fastflag_bool("LuauFollowGenericBeforeCheckingIfMapped", true);
+
+    // Guard against runaway recursive type traversals in cyclic setmetatable<> graphs.
+    analysis_set_fastint("LuauVisitRecursionLimit", 200);
+    analysis_set_fastint("LuauSolverRecursionLimit", 300);
+    analysis_set_fastint("LuauSubtypingRecursionLimit", 64);
+    analysis_set_fastint("LuauSubtypingIterationLimit", 1500);
+}
+
+static void analysis_push_internal_error(lua_State* L, const char* message) {
+    lua_createtable(L, 0, 3);
+    lua_pushstring(L, message);
+    lua_setfield(L, -2, "message");
+    lua_createtable(L, 0, 2);
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, 1);
+    lua_setfield(L, -2, "line");
+    lua_pushinteger(L, 1);
+    lua_setfield(L, -2, "column");
+    lua_setfield(L, -2, "start");
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, 1);
+    lua_setfield(L, -2, "line");
+    lua_pushinteger(L, 1);
+    lua_setfield(L, -2, "column");
+    lua_setfield(L, -2, "end");
+    lua_setfield(L, -2, "location");
+    lua_pushstring(L, "InternalError");
+    lua_setfield(L, -2, "category");
+}
+
+static bool analysis_safe_check(Luau::Frontend& frontend, const char* mainModule,
+                                Luau::CheckResult& out, std::string& crashMessage) {
+    try {
+        out = frontend.check(mainModule);
+        return true;
+    } catch (const std::exception& ex) {
+        crashMessage = ex.what();
+        return false;
+    } catch (...) {
+        crashMessage = "internal Luau checker fault";
+        return false;
+    }
+}
+
+static bool analysis_safe_check(Luau::Frontend& frontend, const char* mainModule,
+                                std::string& crashMessage) {
+    try {
+        frontend.check(mainModule);
+        return true;
+    } catch (const std::exception& ex) {
+        crashMessage = ex.what();
+        return false;
+    } catch (...) {
+        crashMessage = "internal Luau checker fault";
+        return false;
+    }
+}
+
+static bool analysis_safe_check(Luau::Frontend& frontend, const char* mainModule,
+                                const Luau::FrontendOptions& optionsOverride,
+                                std::string& crashMessage) {
+    try {
+        frontend.check(mainModule, optionsOverride);
+        return true;
+    } catch (const std::exception& ex) {
+        crashMessage = ex.what();
+        return false;
+    } catch (...) {
+        crashMessage = "internal Luau checker fault";
+        return false;
+    }
+}
+
+static const char* analysis_primitive_to_string(Luau::PrimitiveType::Type type) {
+    switch (type) {
+        case Luau::PrimitiveType::NilType:
+            return "nil";
+        case Luau::PrimitiveType::Boolean:
+            return "boolean";
+        case Luau::PrimitiveType::Number:
+            return "number";
+        case Luau::PrimitiveType::String:
+            return "string";
+        case Luau::PrimitiveType::Thread:
+            return "thread";
+        case Luau::PrimitiveType::Function:
+            return "function";
+        case Luau::PrimitiveType::Table:
+            return "table";
+        case Luau::PrimitiveType::Buffer:
+            return "buffer";
+        default:
+            return "unknown";
+    }
+}
+
+struct AnalysisTypeSerdeCtx {
+    std::unordered_set<Luau::TypeId> seenTypes;
+    std::unordered_set<Luau::TypePackId> seenPacks;
+    int maxDepth = 6;
+};
+
+static void analysis_push_typepack_id(lua_State* L, Luau::TypePackId tp, AnalysisTypeSerdeCtx& ctx,
+                                      int depth);
+
+static void analysis_push_type_id(lua_State* L, Luau::TypeId ty, AnalysisTypeSerdeCtx& ctx,
+                                  int depth) {
+    if (!ty) {
+        lua_pushnil(L);
+        return;
+    }
+
+    Luau::ToStringOptions o = analysis_type_to_string_options();
+
+    lua_createtable(L, 0, 6);
+    std::string display = Luau::toString(ty, o);
+    lua_pushlstring(L, display.data(), display.size());
+    lua_setfield(L, -2, "display");
+
+    if (depth > ctx.maxDepth || ctx.seenTypes.contains(ty)) {
+        lua_pushstring(L, "Truncated");
+        lua_setfield(L, -2, "kind");
+        return;
+    }
+
+    ctx.seenTypes.insert(ty);
+    Luau::TypeId tf = Luau::follow(ty);
+
+    if (const Luau::FreeType* t = Luau::get<Luau::FreeType>(tf)) {
+        lua_pushstring(L, "Free");
+        lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, t->index);
+        lua_setfield(L, -2, "index");
+    } else if (const Luau::GenericType* t = Luau::get<Luau::GenericType>(tf)) {
+        lua_pushstring(L, "Generic");
+        lua_setfield(L, -2, "kind");
+        lua_pushlstring(L, t->name.data(), t->name.size());
+        lua_setfield(L, -2, "name");
+        lua_pushinteger(L, t->index);
+        lua_setfield(L, -2, "index");
+    } else if (const Luau::PrimitiveType* t = Luau::get<Luau::PrimitiveType>(tf)) {
+        lua_pushstring(L, "Primitive");
+        lua_setfield(L, -2, "kind");
+        lua_pushstring(L, analysis_primitive_to_string(t->type));
+        lua_setfield(L, -2, "primitive");
+        if (t->metatable) {
+            analysis_push_type_id(L, *t->metatable, ctx, depth + 1);
+            lua_setfield(L, -2, "metatable");
+        }
+    } else if (const Luau::SingletonType* t = Luau::get<Luau::SingletonType>(tf)) {
+        lua_pushstring(L, "Singleton");
+        lua_setfield(L, -2, "kind");
+        if (const Luau::BooleanSingleton* b = Luau::get<Luau::BooleanSingleton>(t)) {
+            lua_pushstring(L, "boolean");
+            lua_setfield(L, -2, "singletonKind");
+            lua_pushboolean(L, b->value);
+            lua_setfield(L, -2, "value");
+        } else if (const Luau::StringSingleton* s = Luau::get<Luau::StringSingleton>(t)) {
+            lua_pushstring(L, "string");
+            lua_setfield(L, -2, "singletonKind");
+            lua_pushlstring(L, s->value.data(), s->value.size());
+            lua_setfield(L, -2, "value");
+        }
+    } else if (const Luau::FunctionType* t = Luau::get<Luau::FunctionType>(tf)) {
+        lua_pushstring(L, "Function");
+        lua_setfield(L, -2, "kind");
+        lua_pushboolean(L, t->hasSelf);
+        lua_setfield(L, -2, "hasSelf");
+        analysis_push_typepack_id(L, t->argTypes, ctx, depth + 1);
+        lua_setfield(L, -2, "args");
+        analysis_push_typepack_id(L, t->retTypes, ctx, depth + 1);
+        lua_setfield(L, -2, "returns");
+    } else if (const Luau::TableType* t = Luau::get<Luau::TableType>(tf)) {
+        lua_pushstring(L, "Table");
+        lua_setfield(L, -2, "kind");
+        lua_createtable(L, 0, (int)t->props.size());
+        for (const auto& [name, prop] : t->props) {
+            lua_createtable(L, 0, 3);
+            if (prop.readTy) {
+                analysis_push_type_id(L, *prop.readTy, ctx, depth + 1);
+                lua_setfield(L, -2, "read");
+            }
+            if (prop.writeTy) {
+                analysis_push_type_id(L, *prop.writeTy, ctx, depth + 1);
+                lua_setfield(L, -2, "write");
+            }
+            lua_pushboolean(L, prop.deprecated);
+            lua_setfield(L, -2, "deprecated");
+            lua_setfield(L, -2, name.c_str());
+        }
+        lua_setfield(L, -2, "props");
+        if (t->indexer) {
+            lua_createtable(L, 0, 2);
+            analysis_push_type_id(L, t->indexer->indexType, ctx, depth + 1);
+            lua_setfield(L, -2, "index");
+            analysis_push_type_id(L, t->indexer->indexResultType, ctx, depth + 1);
+            lua_setfield(L, -2, "result");
+            lua_setfield(L, -2, "indexer");
+        }
+    } else if (const Luau::MetatableType* t = Luau::get<Luau::MetatableType>(tf)) {
+        lua_pushstring(L, "Metatable");
+        lua_setfield(L, -2, "kind");
+        analysis_push_type_id(L, t->table, ctx, depth + 1);
+        lua_setfield(L, -2, "table");
+        analysis_push_type_id(L, t->metatable, ctx, depth + 1);
+        lua_setfield(L, -2, "metatable");
+    } else if (const Luau::ExternType* t = Luau::get<Luau::ExternType>(tf)) {
+        lua_pushstring(L, "Extern");
+        lua_setfield(L, -2, "kind");
+        lua_pushlstring(L, t->name.data(), t->name.size());
+        lua_setfield(L, -2, "name");
+    } else if (Luau::get<Luau::AnyType>(tf)) {
+        lua_pushstring(L, "Any");
+        lua_setfield(L, -2, "kind");
+    } else if (const Luau::UnionType* t = Luau::get<Luau::UnionType>(tf)) {
+        lua_pushstring(L, "Union");
+        lua_setfield(L, -2, "kind");
+        lua_createtable(L, (int)t->options.size(), 0);
+        for (size_t i = 0; i < t->options.size(); i++) {
+            analysis_push_type_id(L, t->options[i], ctx, depth + 1);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "parts");
+    } else if (const Luau::IntersectionType* t = Luau::get<Luau::IntersectionType>(tf)) {
+        lua_pushstring(L, "Intersection");
+        lua_setfield(L, -2, "kind");
+        lua_createtable(L, (int)t->parts.size(), 0);
+        for (size_t i = 0; i < t->parts.size(); i++) {
+            analysis_push_type_id(L, t->parts[i], ctx, depth + 1);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "parts");
+    } else if (Luau::get<Luau::UnknownType>(tf)) {
+        lua_pushstring(L, "Unknown");
+        lua_setfield(L, -2, "kind");
+    } else if (Luau::get<Luau::NeverType>(tf)) {
+        lua_pushstring(L, "Never");
+        lua_setfield(L, -2, "kind");
+    } else if (const Luau::NegationType* t = Luau::get<Luau::NegationType>(tf)) {
+        lua_pushstring(L, "Negation");
+        lua_setfield(L, -2, "kind");
+        analysis_push_type_id(L, t->ty, ctx, depth + 1);
+        lua_setfield(L, -2, "inner");
+    } else if (Luau::get<Luau::NoRefineType>(tf)) {
+        lua_pushstring(L, "NoRefine");
+        lua_setfield(L, -2, "kind");
+    } else if (const Luau::TypeFunctionInstanceType* t =
+                   Luau::get<Luau::TypeFunctionInstanceType>(tf)) {
+        lua_pushstring(L, "TypeFunctionInstance");
+        lua_setfield(L, -2, "kind");
+        lua_createtable(L, (int)t->typeArguments.size(), 0);
+        for (size_t i = 0; i < t->typeArguments.size(); i++) {
+            analysis_push_type_id(L, t->typeArguments[i], ctx, depth + 1);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "typeArguments");
+    } else {
+        lua_pushstring(L, "Other");
+        lua_setfield(L, -2, "kind");
+    }
+
+    ctx.seenTypes.erase(ty);
+}
+
+static void analysis_push_typepack_id(lua_State* L, Luau::TypePackId tp, AnalysisTypeSerdeCtx& ctx,
+                                      int depth) {
+    if (!tp) {
+        lua_pushnil(L);
+        return;
+    }
+
+    lua_createtable(L, 0, 4);
+
+    if (depth > ctx.maxDepth || ctx.seenPacks.contains(tp)) {
+        lua_pushstring(L, "Truncated");
+        lua_setfield(L, -2, "kind");
+        return;
+    }
+    ctx.seenPacks.insert(tp);
+
+    Luau::TypePackId tpf = Luau::follow(tp);
+    if (const Luau::TypePack* p = Luau::get<Luau::TypePack>(tpf)) {
+        lua_pushstring(L, "Pack");
+        lua_setfield(L, -2, "kind");
+        lua_createtable(L, (int)p->head.size(), 0);
+        for (size_t i = 0; i < p->head.size(); i++) {
+            analysis_push_type_id(L, p->head[i], ctx, depth + 1);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+        lua_setfield(L, -2, "head");
+        if (p->tail) {
+            analysis_push_typepack_id(L, *p->tail, ctx, depth + 1);
+            lua_setfield(L, -2, "tail");
+        }
+    } else if (const Luau::VariadicTypePack* p = Luau::get<Luau::VariadicTypePack>(tpf)) {
+        lua_pushstring(L, "Variadic");
+        lua_setfield(L, -2, "kind");
+        lua_pushboolean(L, p->hidden);
+        lua_setfield(L, -2, "hidden");
+        analysis_push_type_id(L, p->ty, ctx, depth + 1);
+        lua_setfield(L, -2, "type");
+    } else if (const Luau::GenericTypePack* p = Luau::get<Luau::GenericTypePack>(tpf)) {
+        lua_pushstring(L, "Generic");
+        lua_setfield(L, -2, "kind");
+        lua_pushlstring(L, p->name.data(), p->name.size());
+        lua_setfield(L, -2, "name");
+        lua_pushinteger(L, p->index);
+        lua_setfield(L, -2, "index");
+    } else if (const Luau::FreeTypePack* p = Luau::get<Luau::FreeTypePack>(tpf)) {
+        lua_pushstring(L, "Free");
+        lua_setfield(L, -2, "kind");
+        lua_pushinteger(L, p->index);
+        lua_setfield(L, -2, "index");
+    } else {
+        lua_pushstring(L, "Other");
+        lua_setfield(L, -2, "kind");
+    }
+
+    ctx.seenPacks.erase(tp);
+}
+
 namespace fs = std::filesystem;
 
 static int load_definition(Luau::Frontend& frontend, std::string_view source,
@@ -275,9 +643,30 @@ static void read_file_path_opt(lua_State* L, int optIdx, const char*& filePath,
 
 static void analysis_push_type_error(lua_State* L, const Luau::Frontend& fe,
                                      const Luau::TypeError& err) {
-    lua_createtable(L, 0, 3);
+    (void)fe;
+    lua_createtable(L, 0, 4);
 
-    std::string msg = Luau::toString(err, Luau::TypeErrorToStringOptions{ fe.fileResolver });
+    std::string msg;
+    if (const auto* syntax = Luau::get_if<Luau::SyntaxError>(&err.data))
+        msg = syntax->message;
+    else if (const auto* unknown = Luau::get_if<Luau::UnknownSymbol>(&err.data))
+        msg = std::string(unknown->context == Luau::UnknownSymbol::Type ? "Unknown type '"
+                                                                        : "Unknown global '") +
+              unknown->name + "'";
+    else if (const auto* generic = Luau::get_if<Luau::GenericError>(&err.data))
+        msg = generic->message;
+    else if (const auto* internal = Luau::get_if<Luau::InternalError>(&err.data))
+        msg = internal->message;
+    else if (const auto* illegalReq = Luau::get_if<Luau::IllegalRequire>(&err.data))
+        msg =
+            std::string("Illegal require '") + illegalReq->moduleName + "': " + illegalReq->reason;
+    else if (const auto* unknownReq = Luau::get_if<Luau::UnknownRequire>(&err.data))
+        msg = std::string("Unknown require: ") + unknownReq->modulePath;
+    else if (const auto* mismatch = Luau::get_if<Luau::TypeMismatch>(&err.data))
+        msg = mismatch->reason.empty() ? "Type mismatch" : mismatch->reason;
+    else
+        msg = "Type checking failed";
+
     lua_pushlstring(L, msg.data(), msg.size());
     lua_setfield(L, -2, "message");
 
@@ -288,6 +677,39 @@ static void analysis_push_type_error(lua_State* L, const Luau::Frontend& fe,
     if (Luau::get_if<Luau::SyntaxError>(&err.data)) category = "SyntaxError";
     lua_pushstring(L, category);
     lua_setfield(L, -2, "category");
+
+    lua_pushinteger(L, (lua_Integer)err.code());
+    lua_setfield(L, -2, "code");
+}
+
+static std::optional<Luau::SolverMode> parse_solver_opt(lua_State* L, int idx) {
+    if (!lua_istable(L, idx)) return std::nullopt;
+    lua_getfield(L, idx, "solver");
+    std::optional<Luau::SolverMode> out = std::nullopt;
+    if (lua_isstring(L, -1)) {
+        const char* s = lua_tostring(L, -1);
+        if (strcmp(s, "new") == 0)
+            out = Luau::SolverMode::New;
+        else if (strcmp(s, "old") == 0)
+            out = Luau::SolverMode::Old;
+    }
+    lua_pop(L, 1);
+    return out;
+}
+
+static void analysis_push_lint_warning(lua_State* L, const Luau::LintWarning& warning,
+                                       const char* severity) {
+    lua_createtable(L, 0, 5);
+    lua_pushstring(L, severity);
+    lua_setfield(L, -2, "severity");
+    lua_pushinteger(L, (lua_Integer)warning.code);
+    lua_setfield(L, -2, "code");
+    lua_pushstring(L, Luau::LintWarning::getName(warning.code));
+    lua_setfield(L, -2, "name");
+    lua_pushlstring(L, warning.text.data(), warning.text.size());
+    lua_setfield(L, -2, "message");
+    analysis_push_location(L, warning.location);
+    lua_setfield(L, -2, "location");
 }
 
 struct EryxFileResolver : Luau::FileResolver {
@@ -449,9 +871,11 @@ ERYX_API int eryx_luau_check(lua_State* L) {
 
     const char* filePath = nullptr;
     size_t filePathLen = 0;
+    std::optional<Luau::SolverMode> solverMode = std::nullopt;
 
     if (lua_istable(L, 2)) {
         mode = parse_mode_opt(L, 2, mode);
+        solverMode = parse_solver_opt(L, 2);
         lua_getfield(L, 2, "annotate");
         if (lua_isboolean(L, -1)) annotate = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
@@ -459,6 +883,8 @@ ERYX_API int eryx_luau_check(lua_State* L) {
     }
 
     const char* mainModule = filePath ? filePath : "=main";
+
+    if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -473,7 +899,14 @@ ERYX_API int eryx_luau_check(lua_State* L) {
     configResolver.defaultMode = mode;
 
     // TODO: Why do we need that cast?
-    Luau::Frontend frontend((Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    std::unique_ptr<Luau::Frontend> frontendPtr;
+    if (solverMode)
+        frontendPtr = std::make_unique<Luau::Frontend>(
+            *solverMode, (Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    else
+        frontendPtr = std::make_unique<Luau::Frontend>((Luau::FileResolver*)&fileResolver,
+                                                       &configResolver, frontendOptions);
+    Luau::Frontend& frontend = *frontendPtr;
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
@@ -482,17 +915,61 @@ ERYX_API int eryx_luau_check(lua_State* L) {
     load_definitions_opt(L, 2, frontend);
 
     // Run a type check
-    auto cr = frontend.check(mainModule);
+    Luau::CheckResult cr;
+    std::string crashMessage;
+    bool checkOk = analysis_safe_check(frontend, mainModule, cr, crashMessage);
 
     lua_createtable(L, 0, 3);
 
     // errors
-    lua_createtable(L, (int)cr.errors.size(), 0);
-    for (size_t i = 0; i < cr.errors.size(); i++) {
-        analysis_push_type_error(L, frontend, cr.errors[i]);
-        lua_rawseti(L, -2, (int)(i + 1));
+    lua_createtable(L, checkOk ? (int)cr.errors.size() : 1, 0);
+    if (!checkOk) {
+        std::string msg = "luau.check failed: " + crashMessage;
+        analysis_push_internal_error(L, msg.c_str());
+        lua_rawseti(L, -2, 1);
+    } else {
+        for (size_t i = 0; i < cr.errors.size(); i++) {
+            analysis_push_type_error(L, frontend, cr.errors[i]);
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
     }
     lua_setfield(L, -2, "errors");
+
+    // lints
+    lua_createtable(L, 0, 3);
+    lua_createtable(L, checkOk ? (int)cr.lintResult.errors.size() : 0, 0);
+    if (checkOk) {
+        for (size_t i = 0; i < cr.lintResult.errors.size(); i++) {
+            analysis_push_lint_warning(L, cr.lintResult.errors[i], "error");
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+    }
+    lua_setfield(L, -2, "errors");
+
+    lua_createtable(L, checkOk ? (int)cr.lintResult.warnings.size() : 0, 0);
+    if (checkOk) {
+        for (size_t i = 0; i < cr.lintResult.warnings.size(); i++) {
+            analysis_push_lint_warning(L, cr.lintResult.warnings[i], "warning");
+            lua_rawseti(L, -2, (int)(i + 1));
+        }
+    }
+    lua_setfield(L, -2, "warnings");
+
+    lua_createtable(
+        L, checkOk ? (int)(cr.lintResult.errors.size() + cr.lintResult.warnings.size()) : 0, 0);
+    int allIndex = 1;
+    if (checkOk) {
+        for (size_t i = 0; i < cr.lintResult.errors.size(); i++) {
+            analysis_push_lint_warning(L, cr.lintResult.errors[i], "error");
+            lua_rawseti(L, -2, allIndex++);
+        }
+        for (size_t i = 0; i < cr.lintResult.warnings.size(); i++) {
+            analysis_push_lint_warning(L, cr.lintResult.warnings[i], "warning");
+            lua_rawseti(L, -2, allIndex++);
+        }
+    }
+    lua_setfield(L, -2, "all");
+    lua_setfield(L, -2, "lints");
 
     // annotated source
     if (annotate) {
@@ -524,6 +1001,14 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
     int col = (int)luaL_checkinteger(L, 3);
 
     Luau::Mode mode = parse_mode_opt(L, 4, Luau::Mode::Strict);
+    bool detailed = false;
+    std::optional<Luau::SolverMode> solverMode = std::nullopt;
+    if (lua_istable(L, 4)) {
+        solverMode = parse_solver_opt(L, 4);
+        lua_getfield(L, 4, "detailed");
+        if (lua_isboolean(L, -1)) detailed = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
     const char* filePath = nullptr;
     size_t filePathLen = 0;
     read_file_path_opt(L, 4, filePath, filePathLen);
@@ -531,6 +1016,8 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
     Luau::Position pos{ (unsigned)(line - 1), (unsigned)(col - 1) };
 
     const char* mainModule = filePath ? filePath : "=main";
+
+    if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -544,13 +1031,24 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
     configResolver.defaultMode = mode;
 
     // TODO: Why do we need that cast?
-    Luau::Frontend frontend((Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    std::unique_ptr<Luau::Frontend> frontendPtr;
+    if (solverMode)
+        frontendPtr = std::make_unique<Luau::Frontend>(
+            *solverMode, (Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    else
+        frontendPtr = std::make_unique<Luau::Frontend>((Luau::FileResolver*)&fileResolver,
+                                                       &configResolver, frontendOptions);
+    Luau::Frontend& frontend = *frontendPtr;
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
 
     load_definitions_opt(L, 4, frontend);
-    frontend.check(mainModule);
+    std::string typeAtCrash;
+    if (!analysis_safe_check(frontend, mainModule, typeAtCrash)) {
+        lua_pushnil(L);
+        return 1;
+    }
 
     Luau::SourceModule* sm = frontend.getSourceModule(mainModule);
     Luau::ModulePtr m = frontend.moduleResolver.getModule(mainModule);
@@ -562,24 +1060,39 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
 
     // Try expression type
     if (auto ty = Luau::findTypeAtPosition(*m, *sm, pos)) {
-        Luau::ToStringOptions o;
-        o.exhaustive = false;
-        o.useLineBreaks = false;
-        o.functionTypeArguments = true;
-        o.ignoreSyntheticName = true;
+        Luau::ToStringOptions o = analysis_type_to_string_options();
         std::string s = Luau::toString(*ty, o);
-        lua_pushlstring(L, s.data(), s.size());
+        if (detailed) {
+            lua_createtable(L, 0, 3);
+            lua_pushlstring(L, s.data(), s.size());
+            lua_setfield(L, -2, "display");
+            lua_pushstring(L, "Expression");
+            lua_setfield(L, -2, "source");
+            AnalysisTypeSerdeCtx ctx;
+            analysis_push_type_id(L, *ty, ctx, 0);
+            lua_setfield(L, -2, "type");
+        } else {
+            lua_pushlstring(L, s.data(), s.size());
+        }
         return 1;
     }
 
     // Try binding type
     if (auto binding = Luau::findBindingAtPosition(*m, *sm, pos)) {
-        Luau::ToStringOptions o;
-        o.exhaustive = false;
-        o.functionTypeArguments = true;
-        o.ignoreSyntheticName = true;
+        Luau::ToStringOptions o = analysis_type_to_string_options();
         std::string s = Luau::toString(binding->typeId, o);
-        lua_pushlstring(L, s.data(), s.size());
+        if (detailed) {
+            lua_createtable(L, 0, 3);
+            lua_pushlstring(L, s.data(), s.size());
+            lua_setfield(L, -2, "display");
+            lua_pushstring(L, "Binding");
+            lua_setfield(L, -2, "source");
+            AnalysisTypeSerdeCtx ctx;
+            analysis_push_type_id(L, binding->typeId, ctx, 0);
+            lua_setfield(L, -2, "type");
+        } else {
+            lua_pushlstring(L, s.data(), s.size());
+        }
         return 1;
     }
 
@@ -591,11 +1104,20 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
         for (auto it = scope->bindings.begin(); it != scope->bindings.end(); ++it) {
             if (it->second.location.containsClosed(pos)) {
                 Luau::ToStringOptions o;
-                o.exhaustive = false;
-                o.functionTypeArguments = true;
-                o.ignoreSyntheticName = true;
+                o = analysis_type_to_string_options();
                 std::string s = Luau::toString(it->second.typeId, o);
-                lua_pushlstring(L, s.data(), s.size());
+                if (detailed) {
+                    lua_createtable(L, 0, 3);
+                    lua_pushlstring(L, s.data(), s.size());
+                    lua_setfield(L, -2, "display");
+                    lua_pushstring(L, "ScopeBinding");
+                    lua_setfield(L, -2, "source");
+                    AnalysisTypeSerdeCtx ctx;
+                    analysis_push_type_id(L, it->second.typeId, ctx, 0);
+                    lua_setfield(L, -2, "type");
+                } else {
+                    lua_pushlstring(L, s.data(), s.size());
+                }
                 return 1;
             }
         }
@@ -618,6 +1140,14 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     int col = (int)luaL_checkinteger(L, 3);
 
     Luau::Mode mode = parse_mode_opt(L, 4, Luau::Mode::Strict);
+    bool detailed = false;
+    std::optional<Luau::SolverMode> solverMode = std::nullopt;
+    if (lua_istable(L, 4)) {
+        solverMode = parse_solver_opt(L, 4);
+        lua_getfield(L, 4, "detailed");
+        if (lua_isboolean(L, -1)) detailed = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
     const char* filePath = nullptr;
     size_t filePathLen = 0;
     read_file_path_opt(L, 4, filePath, filePathLen);
@@ -625,6 +1155,8 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     Luau::Position pos{ (unsigned)(line - 1), (unsigned)(col - 1) };
 
     const char* mainModule = filePath ? filePath : "=main";
+
+    if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -639,7 +1171,14 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     configResolver.defaultMode = mode;
 
     // TODO: Why do we need that cast?
-    Luau::Frontend frontend((Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    std::unique_ptr<Luau::Frontend> frontendPtr;
+    if (solverMode)
+        frontendPtr = std::make_unique<Luau::Frontend>(
+            *solverMode, (Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    else
+        frontendPtr = std::make_unique<Luau::Frontend>((Luau::FileResolver*)&fileResolver,
+                                                       &configResolver, frontendOptions);
+    Luau::Frontend& frontend = *frontendPtr;
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
@@ -649,7 +1188,15 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     load_definitions_opt(L, 4, frontend);
     Luau::FrontendOptions acOpts = frontendOptions;
     acOpts.forAutocomplete = true;
-    frontend.check(mainModule, acOpts);
+    std::string acCrash;
+    if (!analysis_safe_check(frontend, mainModule, acOpts, acCrash)) {
+        lua_createtable(L, 0, 2);
+        lua_pushstring(L, "Unknown");
+        lua_setfield(L, -2, "context");
+        lua_createtable(L, 0, 0);
+        lua_setfield(L, -2, "entries");
+        return 1;
+    }
 
     Luau::AutocompleteResult acResult = Luau::autocomplete(frontend, mainModule, pos, nullptr);
 
@@ -720,12 +1267,15 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
         lua_setfield(L, -2, "kind");
 
         if (entry.type) {
-            Luau::ToStringOptions o;
-            o.exhaustive = false;
-            o.functionTypeArguments = true;
+            Luau::ToStringOptions o = analysis_type_to_string_options();
             std::string s = Luau::toString(*entry.type, o);
             lua_pushlstring(L, s.data(), s.size());
             lua_setfield(L, -2, "type");
+            if (detailed) {
+                AnalysisTypeSerdeCtx ctx;
+                analysis_push_type_id(L, *entry.type, ctx, 0);
+                lua_setfield(L, -2, "typeDetail");
+            }
         }
 
         if (entry.deprecated) {

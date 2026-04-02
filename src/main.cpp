@@ -1003,6 +1003,10 @@ int main_run(const char* filename) {
 }
 
 int main(int argc, const char* argv[]) {
+    // puts("Wait for debugger");
+    // while (!IsDebuggerPresent());
+    // puts("go");
+
     eryx_set_cliargs(argc, argv);
 #ifdef ERYX_EMBED
     eryx_register_embedded_modules(g_embedded_native_modules, g_embedded_script_modules);

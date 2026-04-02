@@ -30,8 +30,12 @@ local FootnoteInlineRule: types.InlineRule = {
 	end,
 	toHtml = function(node, rules, config): string
 		local label = (node :: any).label
+		local footnoteIndexByLabel = (config :: any)._footnoteIndexByLabel
+		local number = if footnoteIndexByLabel then footnoteIndexByLabel[label] else nil
+		local display = if number then `[{tostring(number)}]` else "[?]"
+
 		return `<sup class="footnote-ref" id="fnref:{html.renderLiteral(label)}"><a href="#fn:{html.renderLiteral(label)}">{html.renderLiteral(
-			label
+			display
 		)}</a></sup>`
 	end,
 }
