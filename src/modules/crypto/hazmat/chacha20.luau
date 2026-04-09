@@ -14,7 +14,7 @@
 	Key: **32 bytes**. Nonce: **12 bytes**. Counter starts at 0.
 
 	```luau
-	local chacha20 = require("@eryx/crypto/chacha20")
+	local chacha20 = require("@eryx/crypto/hazmat/chacha20")
 
 	local key   = buffer.create(32)  -- 32 zero bytes (use a real key!)
 	local nonce = buffer.create(12)  -- 12 zero bytes
@@ -25,7 +25,7 @@
 	```
 ]=]
 
-local _cc = require("@eryx/crypto/_crypto").chacha20
+local _cc = require("@eryx/crypto/hazmat/_crypto").chacha20
 
 local chacha20 = {}
 

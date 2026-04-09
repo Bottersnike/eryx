@@ -1,3 +1,13 @@
+--[=[
+	WebView2 window integration.
+
+	This module is a typed facade over an optional native backend. In
+	builds without WebView support, or on unsupported platforms,
+	`require("@eryx/webview")` fails immediately with a clear capability
+	error.
+]=]
+
+local capability = require("@eryx/capability")
 local webview = {}
 
 --- Options table for creating a new WebView window.
@@ -107,4 +117,10 @@ function webview.create(options: WebViewOptions?): WebViewHandle
 	return nil :: any
 end
 
-return table.freeze(webview)
+return table.freeze(
+	capability.require(
+		"@eryx/_native/webview",
+		"WebView window support",
+		"Use a Windows build with WebView support to require @eryx/webview."
+	)
+) :: typeof(webview)

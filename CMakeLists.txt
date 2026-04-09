@@ -157,13 +157,13 @@ if (ERYX_USE_ZLIB)
         set(_MZ_PLATFORM_LIBS "-framework CoreFoundation" "-framework Security")
     else()
         # Linux: use OpenSSL for AES encryption if available, otherwise omit WZAES
-        find_package(OpenSSL QUIET)
         set(_MZ_PLATFORM_SRCS
             "${MINIZIP_NG_DIR}/mz_os_posix.c"
             "${MINIZIP_NG_DIR}/mz_strm_os_posix.c"
         )
         set(_MZ_PLATFORM_DEFS "")
         set(_MZ_PLATFORM_LIBS "")
+        find_package(OpenSSL QUIET)
         if(OPENSSL_FOUND)
             list(APPEND _MZ_PLATFORM_SRCS
                 "${MINIZIP_NG_DIR}/mz_crypt_openssl.c"
@@ -204,6 +204,24 @@ include(vendor/dyncall.cmake)
 
 if(ERYX_USE_CRYPTOGRAPHY)
     include(vendor/mbedtls.cmake)
+
+    set(ARGON2_DIR "${VENDOR_DIR}/phc-winner-argon2")
+    add_library(phc_argon2 STATIC
+        "${ARGON2_DIR}/src/argon2.c"
+        "${ARGON2_DIR}/src/core.c"
+        "${ARGON2_DIR}/src/encoding.c"
+        "${ARGON2_DIR}/src/ref.c"
+        "${ARGON2_DIR}/src/blake2/blake2b.c"
+    )
+    set_target_properties(phc_argon2 PROPERTIES C_STANDARD 99)
+    target_include_directories(phc_argon2 PUBLIC
+        "${ARGON2_DIR}/include"
+        "${ARGON2_DIR}/src"
+    )
+    target_compile_definitions(phc_argon2 PRIVATE
+        ARGON2_NO_THREADS
+        _CRT_SECURE_NO_WARNINGS
+    )
 endif()
 
 # Accumulator lists used in embed mode.  add_luau_module / add_luau_script_module

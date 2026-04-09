@@ -1,6 +1,5 @@
 local ServerResponse = require("./ServerResponse")
 local _socket = require("@eryx/_socket")
-local _ssl = require("@eryx/_ssl")
 local exception = require("@eryx/exception")
 local json = require("@eryx/encoding/json")
 local task = require("@eryx/task")
@@ -9,6 +8,11 @@ local multipart = require("./multipart")
 
 type QueryTable = { [string]: string | { string } }
 type ParsedMultipartField = multipart.ParsedMultipartField
+type SslContext = {
+	wrapSocket: (self: SslContext, sock: _socket.Socket, serverHostname: string?) -> any,
+	loadVerifyLocations: (self: SslContext, cafile: string) -> (),
+	setVerify: (self: SslContext, mode: number) -> (),
+}
 local REQUEST_ERROR_PREFIX = "__http_request_error__:"
 local DEFAULT_MAX_HEADER_BYTES = 64 * 1024
 local DEFAULT_MAX_BODY_BYTES = 10 * 1024 * 1024
@@ -111,7 +115,7 @@ type HttpServerFields = {
 	_sock: _socket.Socket?,
 	_running: boolean,
 	-- TLS fields (nil for plain HTTP)
-	_sslCtx: any?,
+	_sslCtx: SslContext?,
 }
 
 export type HttpServer = typeof(setmetatable({} :: HttpServerFields, HttpServer))
@@ -131,7 +135,7 @@ export type HttpServerOptions = {
 	--- When true, request bodies are exposed through `req.bodyStream`
 	--- instead of being buffered eagerly.
 	streamRequestBodies: boolean?,
-	sslCtx: _ssl.SslContext?, -- Provide a server-mode SSLContext to enable HTTPS; omit for plain HTTP.
+	sslCtx: SslContext?, -- Provide a server-mode SSLContext to enable HTTPS; omit for plain HTTP.
 }
 
 --[=[

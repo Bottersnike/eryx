@@ -72,6 +72,14 @@ add_luau_script_module(signal src/modules/signal.luau)
 add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(test src/modules/test.luau)
+add_luau_script_module(capability src/modules/capability.luau)
+add_luau_script_module(_ffi src/modules/_ffi.luau)
+add_luau_script_module(_ssl src/modules/_ssl.luau)
+add_luau_script_module(sqlite3 src/modules/sqlite3.luau)
+add_luau_script_module(regex src/modules/regex.luau)
+add_luau_script_module(xml src/modules/encoding/xml.luau)
+add_luau_script_module(webview src/modules/webview.luau)
+add_luau_script_module(crypto/hazmat/_crypto src/modules/crypto/hazmat/_crypto.luau)
 add_luau_script_module(websocket src/modules/websocket.luau)
 
 if(WIN32)
@@ -121,3 +129,27 @@ add_luau_script_module(eryxdoc/
     src/modules/eryxdoc/init.luau
     src/modules/eryxdoc/warnings.luau
 )
+
+add_luau_script_module(logging/
+    src/modules/logging/init.luau
+    src/modules/logging/ConsoleHandler.luau
+    src/modules/logging/FileHandler.luau
+    src/modules/logging/JsonHandler.luau
+    src/modules/logging/types.luau
+)
+
+add_luau_script_module(schema/
+    src/modules/schema/init.luau
+    src/modules/schema/anyOf.luau
+    src/modules/schema/array.luau
+    src/modules/schema/boolean.luau
+    src/modules/schema/literal.luau
+    src/modules/schema/map.luau
+    src/modules/schema/number.luau
+    src/modules/schema/optional.luau
+    src/modules/schema/string.luau
+    src/modules/schema/struct.luau
+    src/modules/schema/types.luau
+)
+
+add_luau_script_module(tempfile src/modules/tempfile.luau)

@@ -55,33 +55,21 @@
 ]=]
 
 local _socket = require("@eryx/_socket")
-local _ssl = require("@eryx/_ssl")
-local hash = require("@eryx/crypto/hash")
-local random = require("@eryx/crypto/random")
+local capability = require("@eryx/capability")
 local base64 = require("@eryx/encoding/base64")
 -- local http = require("@eryx/http")
-local zlib = require("@eryx/compression/zlib")
 local task = require("@eryx/task")
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- Constants
 -- ───────────────────────────────────────────────────────────────────────────
 
---- @interface Opcode
---- WebSocket frame opcodes (RFC 6455 §5.2).
---- .CONTINUATION number -- 0x0 - Continuation frame
---- .TEXT          number -- 0x1 - UTF-8 text frame
---- .BINARY        number -- 0x2 - Binary frame
---- .CLOSE         number -- 0x8 - Connection close
---- .PING          number -- 0x9 - Ping
---- .PONG          number -- 0xA - Pong
-
-local CONTINUATION = 0x0
-local TEXT = 0x1
-local BINARY = 0x2
-local CLOSE = 0x8
-local PING = 0x9
-local PONG = 0xA
+local CONTINUATION = 0x0 --- Continuation frame
+local TEXT = 0x1 --- UTF-8 text frame
+local BINARY = 0x2 --- Binary frame
+local CLOSE = 0x8 --- Connection close
+local PING = 0x9 --- Ping
+local PONG = 0xA --- Pong
 
 local WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
@@ -99,6 +87,67 @@ end
 
 local function bufToStr(b: buffer): string
 	return buffer.tostring(b)
+end
+
+local function trim(value: string): string
+	return string.match(value, "^%s*(.-)%s*$") :: string
+end
+
+local function parseHeaderTokens(value: string?): { string }
+	local tokens = {}
+	if value == nil or value == "" then
+		return tokens
+	end
+
+	for item in string.gmatch(value, "([^,]+)") do
+		table.insert(tokens, string.lower(trim(item)))
+	end
+	return tokens
+end
+
+local function headerHasToken(value: string?, token: string): boolean
+	local lowered = string.lower(token)
+	for _, item in parseHeaderTokens(value) do
+		if item == lowered then
+			return true
+		end
+	end
+	return false
+end
+
+local function getHeaderValue(rawHeaders: string, name: string): string?
+	local target = string.lower(name)
+	for line in string.gmatch(rawHeaders, "([^\r\n]+)") do
+		local headerName, value = string.match(line, "^([^:]+):%s*(.*)$")
+		if headerName ~= nil and value ~= nil and string.lower(headerName) == target then
+			return trim(value)
+		end
+	end
+	return nil
+end
+
+local function parseOfferedSubprotocols(value: string?): { string }
+	local protocols = {}
+	if value == nil or value == "" then
+		return protocols
+	end
+
+	for item in string.gmatch(value, "([^,]+)") do
+		local protocol = trim(item)
+		if protocol ~= "" then
+			table.insert(protocols, protocol)
+		end
+	end
+	return protocols
+end
+
+local function listHasValue(values: { string }, target: string): boolean
+	for _, value in values do
+		if value == target then
+			return true
+		end
+	end
+	return false
 end
 
 --- Read exactly `n` bytes from a socket. Returns the concatenated string,
@@ -126,17 +175,49 @@ local function sendAll(sock: any, data: string)
 	sock:sendAll(strToBuf(data))
 end
 
+local function requireHash()
+	return capability.require(
+		"@eryx/crypto/hazmat/hash",
+		"WebSocket handshake validation",
+		"Enable cryptography support to use the websocket module."
+	)
+end
+
+local function requireRandom()
+	return capability.require(
+		"@eryx/crypto/hazmat/random",
+		"WebSocket client masking and key generation",
+		"Enable cryptography support to use the websocket module."
+	)
+end
+
+local function requireSsl()
+	return capability.require(
+		"@eryx/_ssl",
+		"Secure WebSocket connections (wss://)",
+		"Enable TLS/cryptography support or use ws:// instead."
+	)
+end
+
+local function requireZlib()
+	return capability.require(
+		"@eryx/compression/zlib",
+		"WebSocket permessage-deflate compression",
+		"Disable websocket compression or build with zlib support."
+	)
+end
+
 --- Generate a random 16-byte base64-encoded WebSocket key.
 local function generateKey(): string
-	return base64.encode(random.bytes(16))
+	return base64.encode(requireRandom().bytes(16))
 end
 
 --- Compute the `Sec-WebSocket-Accept` value for a given key.
 local function computeAccept(key: string): string
 	-- Trim any whitespace from the key (RFC 7230 OWS).
-	key = string.match(key, "^%s*(.-)%s*$") :: string
+	key = trim(key)
 	local input = key .. WS_GUID
-	local sha1 = hash.sha1(strToBuf(input))
+	local sha1 = requireHash().sha1(strToBuf(input))
 	local accept = base64.encode(sha1)
 	return accept
 end
@@ -208,7 +289,7 @@ local function encodeFrame(fin: boolean, opcode: number, payload: buffer, mask: 
 	-- Masking key (client frames only)
 	local maskKey: buffer?
 	if mask then
-		maskKey = random.bytes(4)
+		maskKey = requireRandom().bytes(4)
 		buffer.copy(header, off, maskKey :: buffer)
 		off += 4
 	end
@@ -224,7 +305,10 @@ end
 type Frame = {
 	fin: boolean,
 	rsv1: boolean,
+	rsv2: boolean,
+	rsv3: boolean,
 	opcode: number,
+	masked: boolean,
 	payload: buffer,
 }
 
@@ -241,6 +325,8 @@ local function readFrame(sock: any): Frame?
 
 	local fin = bit32.band(byte0, 0x80) ~= 0
 	local rsv1 = bit32.band(byte0, 0x40) ~= 0
+	local rsv2 = bit32.band(byte0, 0x20) ~= 0
+	local rsv3 = bit32.band(byte0, 0x10) ~= 0
 	local opcode = bit32.band(byte0, 0x0F)
 	local masked = bit32.band(byte1, 0x80) ~= 0
 	local payloadLen: number = bit32.band(byte1, 0x7F)
@@ -292,9 +378,88 @@ local function readFrame(sock: any): Frame?
 	return {
 		fin = fin,
 		rsv1 = rsv1,
+		rsv2 = rsv2,
+		rsv3 = rsv3,
 		opcode = opcode,
+		masked = masked,
 		payload = payload,
 	}
+end
+
+local function encodeClosePayload(code: number, reason: string?): buffer
+	local reasonBuf = if reason then strToBuf(reason) else buffer.create(0)
+	local payload = buffer.create(2 + buffer.len(reasonBuf))
+	buffer.writeu8(payload, 0, bit32.rshift(code, 8))
+	buffer.writeu8(payload, 1, bit32.band(code, 0xFF))
+	if buffer.len(reasonBuf) > 0 then
+		buffer.copy(payload, 2, reasonBuf)
+	end
+	return payload
+end
+
+local function isControlOpcode(opcode: number): boolean
+	return opcode >= 0x8
+end
+
+local function isDataOpcode(opcode: number): boolean
+	return opcode == CONTINUATION or opcode == TEXT or opcode == BINARY
+end
+
+local function validateFrame(
+	frame: Frame,
+	isClient: boolean,
+	deflateEnabled: boolean,
+	fragmentedMessage: boolean
+): string?
+	local peerMustMask = not isClient
+	if frame.masked ~= peerMustMask then
+		return if peerMustMask then "client data must be masked" else "server data must not be masked"
+	end
+
+	if frame.rsv2 or frame.rsv3 then
+		return "reserved bits set without negotiation"
+	end
+
+	if frame.rsv1 and not deflateEnabled then
+		return "compressed frame received without negotiated extension"
+	end
+
+	if not isDataOpcode(frame.opcode) and not isControlOpcode(frame.opcode) then
+		return "invalid opcode"
+	end
+
+	if isControlOpcode(frame.opcode) then
+		if not frame.fin then
+			return "control frames must not be fragmented"
+		end
+		if buffer.len(frame.payload) > 125 then
+			return "control frame payload too large"
+		end
+		if frame.rsv1 then
+			return "control frames must not set reserved bits"
+		end
+	elseif frame.opcode == CONTINUATION then
+		if frame.rsv1 then
+			return "continuation frames must not set reserved bits"
+		end
+		if not fragmentedMessage then
+			return "unexpected continuation frame"
+		end
+	elseif fragmentedMessage then
+		return "new data frame started before fragmented message completed"
+	end
+
+	return nil
+end
+
+local function failWebSocket(self: any, code: number, reason: string): nil
+	if not self._closeSent then
+		self._closeSent = true
+		pcall(sendAll, self._sock, encodeFrame(true, CLOSE, encodeClosePayload(code, reason), self._isClient))
+	end
+	self._closed = true
+	pcall(self._sock.close, self._sock)
+	return nil
 end
 
 -- ───────────────────────────────────────────────────────────────────────────
@@ -313,6 +478,7 @@ type DeflateState = {
 
 --- Create a new DeflateState after successful negotiation.
 local function createDeflateState(isClient: boolean, noClientTakeover: boolean, noServerTakeover: boolean): DeflateState
+	local zlib = requireZlib()
 	return {
 		deflater = zlib.createDeflate(zlib.DEFAULT_COMPRESSION, zlib.RAW_WBITS),
 		inflater = zlib.createInflate(zlib.RAW_WBITS),
@@ -325,6 +491,7 @@ end
 --- Compress a message payload using permessage-deflate.
 --- Returns the compressed payload (with trailing 0x00 0x00 0xff 0xff stripped).
 local function deflatePayload(state: DeflateState, payload: buffer): buffer
+	local zlib = requireZlib()
 	-- Compress with SYNC_FLUSH to get a complete deflate block.
 	local compressed = bufToStr(state.deflater:write(payload, zlib.FLUSH_SYNC))
 
@@ -346,6 +513,7 @@ end
 --- Decompress a message payload using permessage-deflate.
 --- Re-appends the trailing 0x00 0x00 0xff 0xff before inflating.
 local function inflatePayload(state: DeflateState, payload: buffer): buffer
+	local zlib = requireZlib()
 	-- Per RFC 7692 §7.2.2: re-append the stripped trailer.
 	local input = bufToStr(payload) .. DEFLATE_TAIL
 	local decompressed, _ = state.inflater:write(strToBuf(input))
@@ -444,13 +612,11 @@ end
 
 --[=[
 	A message returned by [[WebSocket.receive]].
-
-	@interface Message
-	.data string -- The payload. For text frames this is a UTF-8 string; for binary frames it contains raw bytes.
-	.binary boolean -- `true` when the message was sent as a binary frame.
 ]=]
 export type Message = {
+	--- The payload. For text frames this is a UTF-8 string; for binary frames it contains raw bytes.
 	data: string,
+	--- `true` when the message was sent as a binary frame.
 	binary: boolean,
 }
 
@@ -544,12 +710,18 @@ function WebSocket.receive(self: WebSocket): Message?
 	local fragments: { buffer } = {}
 	local messageOpcode: number? = nil
 	local messageCompressed = false
+	local fragmentedMessage = false
 
 	while true do
 		local frame = readFrame(self._sock)
 		if not frame then
 			self._closed = true
 			return nil
+		end
+
+		local frameError = validateFrame(frame, self._isClient, self._deflate ~= nil, fragmentedMessage)
+		if frameError ~= nil then
+			return failWebSocket(self, 1002, frameError)
 		end
 
 		-- Control frames (opcode ≥ 0x8) may arrive between data fragments.
@@ -578,14 +750,15 @@ function WebSocket.receive(self: WebSocket): Message?
 			messageOpcode = frame.opcode
 			messageCompressed = frame.rsv1
 			fragments = { frame.payload }
+			fragmentedMessage = not frame.fin
 		else
 			table.insert(fragments, frame.payload)
+			fragmentedMessage = not frame.fin
 		end
 
 		if frame.fin then
 			if messageOpcode == nil then
-				-- Orphan continuation with FIN - ignore.
-				continue
+				return failWebSocket(self, 1002, "unexpected continuation frame")
 			end
 
 			-- Reassemble fragments.
@@ -638,14 +811,7 @@ function WebSocket.close(self: WebSocket, code: number?, reason: string?)
 	-- Build the close frame payload.
 	local payload: buffer
 	if code then
-		local reasonBuf = if reason then strToBuf(reason) else buffer.create(0)
-		payload = buffer.create(2 + buffer.len(reasonBuf))
-		-- Status code is 16-bit big-endian.
-		buffer.writeu8(payload, 0, bit32.rshift(code, 8))
-		buffer.writeu8(payload, 1, bit32.band(code, 0xFF))
-		if buffer.len(reasonBuf) > 0 then
-			buffer.copy(payload, 2, reasonBuf)
-		end
+		payload = encodeClosePayload(code, reason)
 	else
 		payload = buffer.create(0)
 	end
@@ -737,19 +903,17 @@ end
 
 --[=[
 	Options for [[connect]].
-
-	@interface ConnectOptions
-	.headers { [string]: string }? -- Extra headers to include in the upgrade request.
-	.timeout number? -- Socket timeout in seconds.
-	.subprotocols { string }? -- Requested sub-protocols (`Sec-WebSocket-Protocol`).
-	.compress boolean? -- When `true`, negotiates `permessage-deflate` compression (RFC 7692).
-	.heartbeat number? -- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 ]=]
 export type ConnectOptions = {
+	--- Extra headers to include in the upgrade request.
 	headers: { [string]: string }?,
+	--- Socket timeout in seconds.
 	timeout: number?,
+	--- Requested sub-protocols (`Sec-WebSocket-Protocol`).
 	subprotocols: { string }?,
+	--- When `true`, negotiates `permessage-deflate` compression (RFC 7692).
 	compress: boolean?,
+	--- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 	heartbeat: number?,
 }
 
@@ -790,7 +954,7 @@ local function connect(url: string, options: ConnectOptions?): WebSocket
 	-- TLS for wss://
 	local connSock: any = sock
 	if parsed.scheme == "wss" then
-		local ctx = _ssl.createDefaultContext()
+		local ctx = requireSsl().createDefaultContext()
 		connSock = ctx:wrapSocket(sock, parsed.host)
 	end
 
@@ -858,24 +1022,44 @@ local function connect(url: string, options: ConnectOptions?): WebSocket
 		error("WebSocket handshake failed: expected status 101, got " .. tostring(statusCode))
 	end
 
+	local upgradeHeader = getHeaderValue(responseBuf, "Upgrade")
+	if not headerHasToken(upgradeHeader, "websocket") then
+		pcall(connSock.close, connSock)
+		error("WebSocket handshake failed: missing or invalid Upgrade header")
+	end
+
+	local connectionHeader = getHeaderValue(responseBuf, "Connection")
+	if not headerHasToken(connectionHeader, "Upgrade") then
+		pcall(connSock.close, connSock)
+		error("WebSocket handshake failed: missing or invalid Connection header")
+	end
+
 	-- Verify Sec-WebSocket-Accept
 	local expectedAccept = computeAccept(key)
-	local actualAccept = string.match(responseBuf, "[Ss]ec%-[Ww]eb[Ss]ocket%-[Aa]ccept:%s*([^\r\n]+)")
+	local actualAccept = getHeaderValue(responseBuf, "Sec-WebSocket-Accept")
 	if not actualAccept then
 		pcall(connSock.close, connSock)
 		error("WebSocket handshake failed: missing Sec-WebSocket-Accept header")
 	end
-	actualAccept = string.match(actualAccept :: string, "^%s*(.-)%s*$") -- trim
 
 	if actualAccept ~= expectedAccept then
 		pcall(connSock.close, connSock)
 		error("WebSocket handshake failed: Sec-WebSocket-Accept mismatch")
 	end
 
+	local selectedSubprotocol = getHeaderValue(responseBuf, "Sec-WebSocket-Protocol")
+	if selectedSubprotocol ~= nil then
+		local requested = opts.subprotocols or {}
+		if not listHasValue(requested, selectedSubprotocol) then
+			pcall(connSock.close, connSock)
+			error("WebSocket handshake failed: server selected an unsupported subprotocol")
+		end
+	end
+
 	-- Check if server accepted permessage-deflate.
 	local deflate: DeflateState? = nil
 	if opts.compress then
-		local extHeader = string.match(responseBuf, "[Ss]ec%-[Ww]eb[Ss]ocket%-[Ee]xtensions:%s*([^\r\n]+)")
+		local extHeader = getHeaderValue(responseBuf, "Sec-WebSocket-Extensions")
 		local params = parseDeflateParams(extHeader)
 		if params then
 			deflate = createDeflateState(true, params.noClientTakeover, params.noServerTakeover)
@@ -891,15 +1075,13 @@ end
 
 --[=[
 	Options for [[upgrade]].
-
-	@interface UpgradeOptions
-	.subprotocol string? -- The sub-protocol to select. Sent back in `Sec-WebSocket-Protocol`.
-	.compress boolean? -- When `true`, accepts `permessage-deflate` if the client offered it.
-	.heartbeat number? -- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 ]=]
 export type UpgradeOptions = {
+	--- The sub-protocol to select. Sent back in `Sec-WebSocket-Protocol`.
 	subprotocol: string?,
+	--- When `true`, accepts `permessage-deflate` if the client offered it.
 	compress: boolean?,
+	--- Interval in seconds between automatic ping frames. `nil` or `0` disables.
 	heartbeat: number?,
 }
 
@@ -940,14 +1122,18 @@ export type UpgradeOptions = {
 local function upgrade(request: http.ServerRequest, response: http.ServerResponse, options: UpgradeOptions?): WebSocket?
 	local opts = options or {} :: UpgradeOptions
 
+	if string.upper(request.method) ~= "GET" then
+		return nil
+	end
+
 	-- Validate required upgrade headers - return nil for non-upgrade requests.
 	local upgradeHeader = request.headers["upgrade"]
-	if not upgradeHeader or string.lower(upgradeHeader) ~= "websocket" then
+	if not headerHasToken(upgradeHeader, "websocket") then
 		return nil
 	end
 
 	local connection = request.headers["connection"]
-	if not connection or not string.find(string.lower(connection), "upgrade", 1, true) then
+	if not headerHasToken(connection, "upgrade") then
 		return nil
 	end
 
@@ -959,6 +1145,13 @@ local function upgrade(request: http.ServerRequest, response: http.ServerRespons
 	local version = request.headers["sec-websocket-version"]
 	if version ~= "13" then
 		return nil
+	end
+
+	if opts.subprotocol then
+		local offeredSubprotocols = parseOfferedSubprotocols(request.headers["sec-websocket-protocol"])
+		if not listHasValue(offeredSubprotocols, opts.subprotocol) then
+			return nil
+		end
 	end
 
 	-- Compute accept value and build the 101 response.

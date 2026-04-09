@@ -13,13 +13,27 @@ export type ResolvedWikiLink = {
 	ownerName: string?,
 }
 
+local function functionAnchor(owner: string?, isMethod: boolean, name: string): string
+	if owner and owner ~= "" then
+		local sep = if isMethod then ":" else "."
+		return "#fn-" .. owner .. sep .. name
+	end
+	return "#fn-" .. name
+end
+
+local function constantAnchor(owner: string?, name: string): string
+	if owner and owner ~= "" then
+		return "#const-" .. owner .. "." .. name
+	end
+	return "#const-" .. name
+end
+
 -- Resolves a bare name to an HTML anchor within a module.
 -- Returns the anchor string (with leading #), or nil if not found.
 local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
 	for _, f in mod.functions do
 		if f.name == name then
-			local sep = if f.isMethod then ":" else "."
-			return "#fn-" .. (f.owner or "") .. sep .. f.name
+			return functionAnchor(f.owner, f.isMethod, f.name)
 		end
 	end
 	if mod.primaryExport and mod.primaryExport.name == name then
@@ -37,7 +51,7 @@ local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
 	end
 	for _, c in mod.constants do
 		if c.name == name then
-			return "#const-" .. (c.owner or "") .. "." .. name
+			return constantAnchor(c.owner, name)
 		end
 	end
 	return nil
@@ -46,9 +60,8 @@ end
 local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): ResolvedWikiLink?
 	for _, f in mod.functions do
 		if f.name == name then
-			local sep = if f.isMethod then ":" else "."
 			return {
-				href = "#fn-" .. (f.owner or "") .. sep .. f.name,
+				href = functionAnchor(f.owner, f.isMethod, f.name),
 				kind = "function",
 				module = mod,
 				symbolName = f.name,
@@ -81,6 +94,17 @@ local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): Resol
 				kind = "type",
 				module = mod,
 				symbolName = name,
+			}
+		end
+	end
+	for _, c in mod.constants do
+		if c.name == name then
+			return {
+				href = constantAnchor(c.owner, c.name),
+				kind = "member",
+				module = mod,
+				symbolName = c.name,
+				ownerName = c.owner,
 			}
 		end
 	end

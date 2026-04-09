@@ -1,5 +1,7 @@
 children:
   - getting-started
   - writing-code
+  - ip
+  - libs
   - http
-  - markdown
+  - crypto

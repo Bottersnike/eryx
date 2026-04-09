@@ -3,11 +3,15 @@
 -- Simple build warnings collector.
 -- Modules call warn() during the build; main.luau calls summary() at the end.
 
+local logging = require("@eryx/logging")
+
+local log = logging.getLogger("eryxdoc.warnings")
+
 local warnings: { string } = {}
 
 local function warn(msg: string)
 	table.insert(warnings, msg)
-	print("Warning: " .. msg)
+	log:warning(msg)
 end
 
 local function summary(): { string }

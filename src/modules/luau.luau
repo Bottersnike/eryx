@@ -902,6 +902,38 @@ export type AutocompleteResult = {
 	entries: { [string]: AutocompleteEntry },
 }
 
+--- Alias metadata as resolved from config files.
+export type LuauConfigAlias = {
+	--- Absolute filesystem path resolved from the alias target.
+	qualified: string,
+	--- Directory containing the config file that defined this alias.
+	configPath: string,
+	--- Raw alias target string from the config file.
+	path: string,
+}
+
+--- The currently active Luau config used for require/resolve behavior.
+export type LuauConfig = {
+	--- Whether any config file was discovered during lookup.
+	found: boolean,
+	--- Directory of the innermost config that applies to the current caller.
+	configDir: string,
+	--- Active language mode from merged configs.
+	languageMode: "strict" | "nonstrict" | "nocheck",
+	--- Bitmask of enabled lint rules.
+	enabledLints: number,
+	--- Bitmask of fatal lint rules.
+	fatalLints: number,
+	--- Whether lint diagnostics are treated as errors.
+	lintErrors: boolean,
+	--- Whether type diagnostics are treated as errors.
+	typeErrors: boolean,
+	--- Additional globals configured via config.
+	globals: { string },
+	--- Alias map from alias key to alias metadata.
+	aliases: { [string]: LuauConfigAlias },
+}
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Module
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -1090,6 +1122,36 @@ function luau.autocomplete(
 	column: number,
 	options: AutocompleteOptions?
 ): AutocompleteResult
+	return nil :: any
+end
+
+--[=[
+	Returns the active merged Luau config for the current require context.
+
+	Lookup follows the same caller-sensitive rules used by `require`,
+	`luau.resolve`, and type-checker file resolution, including VFS/module
+	context handling and parent-directory config merging.
+
+	When `folderPath` is provided, lookup starts from that folder path
+	instead of the current caller context.
+
+	The returned table includes language mode, lint/type flags, globals,
+	and resolved alias metadata.
+
+	```luau
+	local cfg = luau.getconfig()
+	if cfg.found then
+		print(cfg.languageMode, cfg.configDir)
+	end
+	for alias, info in cfg.aliases do
+		print(alias, info.qualified)
+	end
+	```
+
+	@param folderPath Optional folder path to start config discovery from.
+	@return LuauConfig -- Current merged config state.
+]=]
+function luau.getconfig(folderPath: string?): LuauConfig
 	return nil :: any
 end
 

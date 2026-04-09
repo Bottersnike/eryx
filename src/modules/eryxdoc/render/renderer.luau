@@ -30,6 +30,36 @@ local function htmlEscapeFilter(s: string): string
 	return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end
 
+local function functionAnchor(owner: string?, isMethod: boolean, name: string): string
+	if owner and owner ~= "" then
+		local sep = if isMethod then ":" else "."
+		return "#fn-" .. owner .. sep .. name
+	end
+	return "#fn-" .. name
+end
+
+local function functionDisplayName(owner: string?, isMethod: boolean, name: string): string
+	if owner and owner ~= "" then
+		local sep = if isMethod then ":" else "."
+		return owner .. sep .. name
+	end
+	return name
+end
+
+local function constantAnchor(owner: string?, name: string): string
+	if owner and owner ~= "" then
+		return "#const-" .. owner .. "." .. name
+	end
+	return "#const-" .. name
+end
+
+local function constantDisplayName(owner: string?, name: string): string
+	if owner and owner ~= "" then
+		return owner .. "." .. name
+	end
+	return name
+end
+
 local Renderer = {}
 Renderer.__index = Renderer
 type PageMeta = {
@@ -661,25 +691,7 @@ function Renderer.renderPage(
 			local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
 			self.currentMod = currentMod
 
-			-- local function wikilinkResolver(link: string): string
-			-- 	return self:_resolveWikiLink(link, currentMod)
-			-- end
-
-			-- local mdConfig: markdown.MarkdownConfig = {
-			-- 	extraInlineExtensions = {
-			-- 		wikilinkRuleBuilder(wikilinkResolver),
-			-- 	},
-			-- 	codeLanguages = {
-			-- 		["luau"] = highlight.highlightLuau,
-			-- 		["sh"] = highlight.highlightShell,
-			-- 	},
-			-- 	useCrlf = false,
-			-- 	annotateHtml = true,
-			-- }
-			-- local start = os.clock()
-			-- local html_ = markdown.renderHtml(markdown.parse(text, mdConfig), mdConfig)
 			local html_ = self.markdown:renderHtml(self.markdown:parse(text))
-			-- print(`Markdown took {os.clock() - start}s`)
 
 			return html_
 		end,
@@ -712,6 +724,41 @@ function Renderer.renderModule(self: Renderer, name: string): string
 	end
 
 	local toc: { TOCGroup } = {}
+	local function appendClassMemberToc(children: { TOCItem }, className: string, members: { any }?): ()
+		if not members then
+			return
+		end
+
+		local fields: { any } = {}
+		local callables: { any } = {}
+		for _, m in members do
+			if m.isMethod or m.params then
+				table.insert(callables, m)
+			else
+				table.insert(fields, m)
+			end
+		end
+
+		local function pushMember(member: any)
+			local sep = if member.isMethod then ":" else "."
+			local suffix = if member.params then "()" else ""
+			table.insert(
+				children,
+				{
+					label = `{sep}{member.name}{suffix}`,
+					link = `#method-{className}:{member.name}`,
+					indent = true,
+				} :: TOCItem
+			)
+		end
+
+		for _, member in fields do
+			pushMember(member)
+		end
+		for _, member in callables do
+			pushMember(member)
+		end
+	end
 
 	if module.primaryExport then
 		local group: TOCGroup = {
@@ -723,20 +770,7 @@ function Renderer.renderModule(self: Renderer, name: string): string
 				} :: TOCItem,
 			},
 		}
-		if module.primaryExport.members then
-			for _, m in module.primaryExport.members do
-				local sep = if m.isMethod then ":" else "."
-				local suffix = if m.params then "()" else ""
-				table.insert(
-					group.children,
-					{
-						label = `{sep}{m.name}{suffix}`,
-						link = `#method-{module.primaryExport.name}:{m.name}`,
-						indent = true,
-					} :: TOCItem
-				)
-			end
-		end
+		appendClassMemberToc(group.children, module.primaryExport.name, module.primaryExport.members)
 		table.insert(toc, group)
 	end
 	if #module.classes > 0 then
@@ -749,20 +783,7 @@ function Renderer.renderModule(self: Renderer, name: string): string
 					link = `#class-{i.name}`,
 				} :: TOCItem
 			)
-			if i.members then
-				for _, m in i.members do
-					local sep = if m.isMethod then ":" else "."
-					local suffix = if m.params then "()" else ""
-					table.insert(
-						classes.children,
-						{
-							label = `{sep}{m.name}{suffix}`,
-							link = `#method-{i.name}:{m.name}`,
-							indent = true,
-						} :: TOCItem
-					)
-				end
-			end
+			appendClassMemberToc(classes.children, i.name, i.members)
 		end
 		table.insert(toc, classes)
 	end
@@ -778,7 +799,7 @@ function Renderer.renderModule(self: Renderer, name: string): string
 				subNs = string.sub(i.owner, #root + 2)
 			end
 
-			local link = `#fn-{i.owner or ""}{if i.isMethod then ":" else "."}{i.name}`
+			local link = functionAnchor(i.owner, i.isMethod, i.name)
 			if subNs then
 				local group = subGroupMap[subNs]
 				if not group then
@@ -845,7 +866,7 @@ function Renderer.renderModule(self: Renderer, name: string): string
 				constants.children,
 				{
 					label = i.name,
-					link = `#const-{i.owner}.{i.name}`,
+					link = constantAnchor(i.owner, i.name),
 				} :: TOCItem
 			)
 		end
@@ -1213,14 +1234,20 @@ function Renderer.generateSearchIndex(self: Renderer): string
 
 		-- Functions
 		for _, fn in mod.functions do
-			local owner = fn.owner or ""
-			local sep = if fn.isMethod then ":" else "."
-			local anchor = "#fn-" .. owner .. sep .. fn.name
 			table.insert(entries, {
-				t = (if owner ~= "" then owner .. sep else "") .. fn.name,
-				p = modLink .. anchor,
+				t = functionDisplayName(fn.owner, fn.isMethod, fn.name),
+				p = modLink .. functionAnchor(fn.owner, fn.isMethod, fn.name),
 				k = "function",
 				s = truncate(stripMarkdown(fn.doc or ""), 200),
+			})
+		end
+
+		for _, c in mod.constants do
+			table.insert(entries, {
+				t = constantDisplayName(c.owner, c.name),
+				p = modLink .. constantAnchor(c.owner, c.name),
+				k = "member",
+				s = truncate(stripMarkdown(c.doc or ""), 200),
 			})
 		end
 

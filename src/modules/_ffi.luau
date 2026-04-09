@@ -5,6 +5,12 @@
 	exported C functions directly from Luau.  Values are marshalled through
 	typed [[ForeignValue]] wrappers to ensure correct ABI alignment.
 
+	:::note Optional capability
+	This module is a typed facade over a platform-specific native backend.
+	On unsupported platforms, `require("@eryx/_ffi")` fails immediately
+	with a clear capability error.
+	:::
+
 	:::caution
 	This is a **low-level** API.  Incorrect type declarations or pointer
 	arithmetic will crash the process - there are no safety nets once you
@@ -149,6 +155,7 @@ export type ForeignValue = {
 	pointer: (self: ForeignValue) -> ForeignValue,
 }
 
+local capability = require("@eryx/capability")
 local _ffi = {}
 
 --[=[
@@ -193,4 +200,10 @@ _ffi.i32 = nil :: ForeignType
 --- Signed 64-bit integer.
 _ffi.i64 = nil :: ForeignType
 
-return table.freeze(_ffi)
+return table.freeze(
+	capability.require(
+		"@eryx/_native/_ffi",
+		"Foreign function interface support",
+		"Use a build with FFI support on a supported platform to require @eryx/_ffi."
+	)
+) :: typeof(_ffi)

@@ -18,11 +18,14 @@
 ]]
 
 local fs = require("@eryx/fs")
+local logging = require("@eryx/logging")
 local yaml = require("@eryx/encoding/yaml")
 local modulesApi = require("@self/content/modules")
 local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")
 local buildWarnings = require("@self/warnings")
+
+local log = logging.getLogger("eryxdoc.build")
 
 -- ── Types ─────────────────────────────────────────────────────────────────
 
@@ -285,7 +288,7 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 		else
 			name = if prefix then prefix .. "/" .. stem else stem
 		end
-		print(string.format("  article: %s", name))
+		log:info(string.format("  article: %s", name))
 		local article = Article.fromFile(fullPath)
 		table.insert(articles, { name = name, article = article })
 		if stem == "index" then
@@ -300,7 +303,7 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 
 	if not hasIndexArticle and #generatedSectionPages > 0 then
 		local name = prefix or "index"
-		print(string.format("  article: %s (generated)", name))
+		log:info(string.format("  article: %s (generated)", name))
 		table.insert(articles, 1, {
 			name = name,
 			article = Article.generated(
@@ -358,7 +361,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local THEME_DIR = cfg.theme or (fs.path.join(__DIR__, "/theme"))
+	local THEME_DIR = cfg.theme or (fs.path.join(_DIR, "/theme"))
 	local STATIC_DIR = cfg.static
 	local NO_MODULES = cfg.noModules or false
 
@@ -384,7 +387,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 
 	local hooks = cfg.hooks
 
-	print("\n=== Full build ===")
+	log:info("\n=== Full build ===")
 
 	if hooks and hooks.onBuildStart then
 		hooks.onBuildStart(cfg)
@@ -408,7 +411,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 
 	-- Copy static assets
 	if STATIC_DIR and fs.isDirectory(STATIC_DIR) then
-		print(string.format("  Copying static assets from %s", STATIC_DIR))
+		log:info(string.format("  Copying static assets from %s", STATIC_DIR))
 		copyDirRecursive(STATIC_DIR, OUTPUT_DIR .. "/static")
 	end
 
@@ -604,16 +607,16 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	-- Collect warnings
 	local warns = buildWarnings.summary()
 	if #warns > 0 then
-		print(string.format("\n=== Build warnings (%d) ===", #warns))
+		log:warning(string.format("\n=== Build warnings (%d) ===", #warns))
 		for _, w in warns do
-			print("  " .. w)
+			log:warning("  " .. w)
 		end
-		print("")
+		log:warning("")
 	end
 	local result = { warnings = warns, moduleCount = #allModules, articleCount = #allArticles }
 	buildWarnings.clear()
 
-	print(string.format("=== Built %d modules, %d articles ===\n", #allModules, #allArticles))
+	log:info(string.format("=== Built %d modules, %d articles ===\n", #allModules, #allArticles))
 
 	if hooks and hooks.onBuildComplete then
 		hooks.onBuildComplete({ moduleCount = #allModules, articleCount = #allArticles, outputDir = OUTPUT_DIR })

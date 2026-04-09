@@ -11,6 +11,7 @@
 
 local fs = require("@eryx/fs")
 local http = require("@eryx/http")
+local logging = require("@eryx/logging")
 local fsWatch = require("@eryx/fs_watch")
 local task = require("@eryx/task")
 local websocket = require("@eryx/websocket")
@@ -23,6 +24,8 @@ local buildWarnings = require("./warnings")
 local eryxdoc = require("@eryx/eryxdoc")
 local exception = require("@eryx/exception")
 type Config = eryxdoc.Config
+
+local log = logging.getLogger("eryxdoc.dev")
 
 -- ── MIME map (for static assets) ─────────────────────────────────────────
 
@@ -257,7 +260,7 @@ local function buildState(cfg: Config): DevState
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local THEME_DIR = cfg.theme or (fs.path.join(__DIR__, "/theme"))
+	local THEME_DIR = cfg.theme or (fs.path.join(_DIR, "/theme"))
 	local STATIC_DIR = cfg.static
 	local NO_MODULES = cfg.noModules or false
 
@@ -346,14 +349,14 @@ local function buildState(cfg: Config): DevState
 
 	local warns = buildWarnings.summary()
 	if #warns > 0 then
-		print(string.format("  [dev] %d warning(s) during content collection", #warns))
+		log:warning(string.format("%d warning(s) during content collection", #warns))
 		for _, w in warns do
-			print("    " .. w)
+			log:warning("    " .. w)
 		end
 	end
 	buildWarnings.clear()
 
-	print(string.format("  [dev] Loaded %d modules, %d articles", #allModules, #allArticles))
+	log:info(string.format("Loaded %d modules, %d articles", #allModules, #allArticles))
 
 	return {
 		renderer = renderer,
@@ -466,7 +469,7 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 		if ok then
 			return 200, content, "text/html; charset=utf-8"
 		end
-		print(string.format("  [dev] Error rendering index: %s", tostring(content)))
+		log:error(string.format("Error rendering index: %s", tostring(content)))
 		return 500, `<h1>500 — Render Error</h1><pre>{content}</pre>`, "text/html; charset=utf-8"
 	end
 
@@ -508,7 +511,7 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 					if ok then
 						return 200, content, "text/html; charset=utf-8"
 					end
-					print(string.format("  [dev] Error rendering module %s: %s", mod.qualifiedName, tostring(content)))
+					log:error(string.format("Error rendering module %s: %s", mod.qualifiedName, tostring(content)))
 					return 500, `<h1>500 — Render Error</h1><pre>{content}</pre>`, "text/html; charset=utf-8"
 				end
 			end
@@ -535,7 +538,7 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 				if ok then
 					return 200, content, "text/html; charset=utf-8"
 				end
-				print(string.format("  [dev] Error rendering article %s: %s", article.name, exception.format(content)))
+				log:error(string.format("Error rendering article %s: %s", article.name, exception.format(content)))
 				return 500,
 					`<h1>500 — Render Error</h1><pre>{exception.format(content)}</pre>`,
 					"text/html; charset=utf-8"
@@ -558,7 +561,7 @@ export type DevHandle = {
 }
 
 local function start(cfg: Config, host: string, port: number): DevHandle
-	print("\n=== Dev server (in-memory) ===")
+	log:info("=== Dev server (in-memory) ===")
 	local state = buildState(cfg)
 
 	local watchers: { any } = {}
@@ -568,7 +571,7 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 
 	local handle: DevHandle = {
 		refresh = function()
-			print("\n  [dev] Refreshing content...")
+			log:info("Refreshing content...")
 			state = buildState(cfg)
 			-- Notify WebSocket clients to reload
 			for i = #wsClients, 1, -1 do
@@ -596,10 +599,10 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 			end
 			local now = os.clock()
 			if now - lastRefreshTime < debounceSec then
-				print(string.format("  [dev] Skipping rapid watcher event (%s): %s", desc, filename))
+				log:debug(string.format("Skipping rapid watcher event (%s): %s", desc, filename))
 				return
 			end
-			print(string.format("  [dev] Watcher (%s) changed: %s (%s)", desc, filename, eventType))
+			log:info(string.format("Watcher (%s) changed: %s (%s)", desc, filename, eventType))
 			handle.refresh()
 			lastRefreshTime = os.clock()
 		end)
@@ -661,13 +664,13 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		local status, body, contentType = handleRequest(state, req.path)
 		local elapsed = math.floor((os.clock() - startTime) * 1000)
 
-		print(string.format("  %d %s (%dms)", status, req.path, elapsed))
+		log:info(string.format("  %d %s (%dms)", status, req.path, elapsed))
 
 		res:status(status):header("content-type", contentType):header("cache-control", "no-cache"):finish(body)
 	end, { port = port, host = host })
 
 	server:listen(function(host_, port_)
-		print(string.format("  Serving docs at http://%s:%d/", host_, port_))
+		log:info(string.format("  Serving docs at http://%s:%d/", host_, port_))
 	end)
 
 	-- Stop method to cleanup watchers and close server

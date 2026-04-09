@@ -153,17 +153,23 @@
         <div class="summary-class-name"><a href="#class-{{module.primaryExport.name | escape }}">{{primaryExport}}</a></div>
         {% for _, m in module.primaryExport.members do %}
         {% if not m.isMethod and not m.params then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% for _, m in module.primaryExport.members do %}
         {% if not m.isMethod and m.params then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% for _, m in module.primaryExport.members do %}
         {% if m.isMethod then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% end %}
@@ -174,17 +180,23 @@
         <div class="summary-class-name"><a href="#class-{{c.name | escape }}">{{c.name}}</a></div>
         {% for _, m in c.members do %}
         {% if not m.isMethod and not m.params then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% for _, m in c.members do %}
         {% if not m.isMethod and m.params then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% for _, m in c.members do %}
         {% if m.isMethod then %}
+        <div class="param-entry">
         <div class="signature signature-small">{{ m.signatureParts | signatureHtmlLinks }}</div>
+        </div>
         {% end %}
         {% end %}
         {% end %}
@@ -193,11 +205,13 @@
         {% if module.functions | length > 0 then %}
         <h3 class="api-category">Functions</h3>
         {% for _, f in module.functions do %}
+        <div class="param-entry">
         {% if f.signatureParts then %}
         <div class="signature signature-small">{{ f.signatureParts | signatureHtmlLinks }}</div>
         {% else %}
         <div class="signature signature-small">{{f.signature}}</div>
         {% end %}
+        </div>
         {% end %}
         {% end %}
 
@@ -226,9 +240,9 @@
         <h3 class="api-category">Functions</h3>
         {% end %}
         {% for _, f in group.functions do %}
-        <details class="doc-entry" id="fn-{{f.owner | escape}}{% if f.isMethod then %}:{% else %}.{% end %}{{ f.name | escape }}" open>
+        <details class="doc-entry" id="{% if f.owner then %}fn-{{f.owner | escape}}{% if f.isMethod then %}:{% else %}.{% end %}{{ f.name | escape }}{% else %}fn-{{ f.name | escape }}{% end %}" open>
             <summary class="entry-header">
-                <h3>{{f.owner | escape}}{% if f.isMethod then %}:{% else %}.{% end %}{{ f.name | escape }}</h3>
+                <h3>{% if f.owner then %}{{f.owner | escape}}{% if f.isMethod then %}:{% else %}.{% end %}{% end %}{{ f.name | escape }}</h3>
                 {% if f.parsedDoc and f.parsedDoc.yields then %}
                 <span class="badge badge-yields">&#9888; Yields</span>
                 {% end %}
@@ -261,21 +275,25 @@
             {# Members for non-class/table types (show member docs similar to classes) #}
             {% if t.members and t.members | length > 0 then %}
                 {% for _, m in t.members do %}
+                <div class="param-entry">
                 {% if m.signatureParts then %}
                 <div class="signature signature-small signature-linked">{{ m.signatureParts | signatureHtml }}</div>
                 {% elseif m.signatureFull then %}
                 <div class="signature signature-small">{{ m.signatureFull | highlightSig }}</div>
                 {% end %}
                 {% if m.doc then %}
-                <div class="entry-content">{{ m.doc | markdown }}</div>
+                {{ m.doc | markdown }}
                 {% end %}
+                </div>
                 {% end %}
             {% else %}
+            <div class="param-entry">
                 {% if t.signatureParts then %}
                 <div class="signature signature-linked">{{ t.signatureParts | signatureHtml }}</div>
                 {% elseif t.signatureFull then %}
                 <div class="signature">{{ t.signatureFull | highlightSig }}</div>
                 {% end %}
+            </div>
             {% end %}
         </details>
         {% end %}
@@ -288,7 +306,7 @@
             {% if c.groupTitle then %}
             <li><div class="const-group-title">{{c.groupTitle}}</div></li>
             {% end %}
-            <li id="const-{{c.owner|escape}}.{{c.name|escape}}"><code>{{ c.owner | escape }}.{{ c.name | escape }}</code> = <code>{{ c.value | highlight }}</code>{% if c.doc then %}<span class="const-desc"> - {{c.doc}}</span>{% end %}</li>
+            <li id="{% if c.owner then %}const-{{c.owner|escape}}.{{c.name|escape}}{% else %}const-{{c.name|escape}}{% end %}"><code>{% if c.owner then %}{{ c.owner | escape }}.{% end %}{{ c.name | escape }}</code> = <code>{{ c.value | highlight }}</code>{% if c.doc then %}<span class="const-desc"> - {{c.doc}}</span>{% end %}</li>
             {% end %}
         </ul>
         {% end %}

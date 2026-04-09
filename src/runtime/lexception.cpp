@@ -381,19 +381,23 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
     int remainingSkip = exception->pendingTracebackSkip;
     exception->pendingTracebackSkip = 0;
 
-    for (int level = initialLevel; lua_getinfo(L, level, "sln", &ar); level++) {
+    for (int level = initialLevel; unsigned(level) < unsigned(L->ci - L->base_ci); level++) {
+        CallInfo* ci = L->ci - level;
+        if (!ttisfunction(ci->func)) continue;
+        if (!lua_getinfo(L, level, "sln", &ar)) continue;
+
         // An =[C] at top level suggests we might have a unique type of error
         if (strcmp(ar.source, "=[C]") == 0) {
             if (level == initialLevel) {
-                if (strcmp(ar.name, "error") == 0) {
+                if (ar.name && strcmp(ar.name, "error") == 0) {
                     exception->type = ETYPE_THROWN;
                     continue;
                 }
-                if (strcmp(ar.name, "assert") == 0) {
+                if (ar.name && strcmp(ar.name, "assert") == 0) {
                     exception->type = ETYPE_ASSERT;
                     continue;
                 }
-                if (strcmp(ar.name, "require") == 0) {
+                if (ar.name && strcmp(ar.name, "require") == 0) {
                     exception->type = ETYPE_REQUIRE;
                     continue;
                 }
@@ -594,10 +598,6 @@ static int eryx_pcall_cont(lua_State* L, int status) {
         lua_insert(L, 1);
         return lua_gettop(L);
     }
-
-    // Yielded pcall resumes with the error object in the first result slot.
-    // Normalize the frame so later code can safely treat it as the top value.
-    lua_settop(L, 1);
 
     if (is_uncatchable_exception(L, -1)) {
         lua_error(L);  // rethrow past this pcall

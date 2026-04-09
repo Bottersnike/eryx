@@ -10,7 +10,7 @@
 	`@eryx/crypto/pem` to wrap/unwrap arbitrary DER blobs.
 
 	```luau
-	local rsa = require("@eryx/crypto/rsa")
+	local rsa = require("@eryx/crypto/hazmat/rsa")
 
 	-- Generate a 2048-bit key pair
 	local priv = rsa.generateKey(2048)
@@ -27,7 +27,7 @@
 	```
 ]=]
 
-local _rsa = require("@eryx/crypto/_crypto").rsa
+local _rsa = require("@eryx/crypto/hazmat/_crypto").rsa
 
 local rsa = {}
 

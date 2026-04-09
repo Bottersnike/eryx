@@ -1,4 +1,4 @@
-local _random = require("@eryx/crypto/_crypto").random
+local _random = require("@eryx/crypto/hazmat/_crypto").random
 
 local random = {}
 

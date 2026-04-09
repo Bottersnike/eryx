@@ -186,12 +186,6 @@ function html.renderInline(
 	return table.concat(chunks)
 end
 
--- TODO: Convert these into BlockRule<>s
-
--- function html.renderFootnoteSection(doc: types.DocumentBlockNode): string?
-
--- end
-
 function html.renderBlock(
 	block: types.AnyBlockNode,
 	rules: { types.BlockRule<string, any> },
@@ -199,7 +193,6 @@ function html.renderBlock(
 ): string
 	for _, rule in rules do
 		if block.type == rule.name then
-			-- print(block, rules)
 			return rule.toHtml(block, rules, config)
 		end
 	end

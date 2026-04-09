@@ -5,6 +5,11 @@ Backed by pugixml. Provides two core types:
 - [[XmlDocument]]: An XML document that owns the DOM tree.
 - [[XmlNode]]: A lightweight handle to a single element within a document.
 
+## Availability
+This module is a typed facade over an optional pugixml backend. In
+builds without XML support, `require("@eryx/xml")` fails immediately
+with a clear capability error.
+
 ## Quick start
 ```luau
 local xml = require("xml")
@@ -21,6 +26,7 @@ end
 ```
 ]=]
 
+local capability = require("@eryx/capability")
 local xml = {}
 
 --- Node type string
@@ -171,4 +177,6 @@ function xml.document(): XmlDocument
 	return nil :: any
 end
 
-return xml
+return table.freeze(
+	capability.require("@eryx/_native/xml", "XML parsing support", "Enable XML support to use @eryx/xml.")
+) :: typeof(xml)

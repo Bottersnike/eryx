@@ -216,29 +216,6 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		return primary or secondary
 	end
 
-	-- ── Collect returned names for export detection ──────────────────────
-	local returnedRoots: { [string]: boolean } = {}
-	for _, stat in result.root.body do
-		if stat.type == "StatReturn" then
-			local retStat = stat :: luau.StatReturn
-			local list = retStat.list
-			if list then
-				for _, expr in list do
-					if expr.type == "ExprGlobal" then
-						returnedRoots[(expr :: luau.ExprGlobal).name] = true
-					elseif expr.type == "ExprLocal" then
-						local loc = expr :: luau.ExprLocal
-						local name = loc["local"] and loc["local"].name
-						if name then
-							returnedRoots[name] = true
-						end
-					end
-				end
-			end
-		end
-	end
-
-	-- ── AST helpers ─────────────────────────────────────────────────────
 	local function exprToPath(expr: luau.AstExpr): string?
 		if expr.type == "ExprGlobal" then
 			return (expr :: luau.ExprGlobal).name
@@ -255,6 +232,68 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		return nil
 	end
 
+	local function typeRootName(annotation: luau.AstType?): string?
+		if not annotation then
+			return nil
+		end
+		if annotation.type == "TypeTypeof" then
+			return exprToPath((annotation :: luau.TypeTypeof).expr)
+		end
+		return nil
+	end
+
+	local function returnedRootName(expr: luau.AstExpr): string?
+		if expr.type == "ExprGlobal" then
+			return (expr :: luau.ExprGlobal).name
+		elseif expr.type == "ExprLocal" then
+			local loc = expr :: luau.ExprLocal
+			return loc["local"] and loc["local"].name
+		elseif expr.type == "ExprTypeAssertion" then
+			local assertion = expr :: luau.ExprTypeAssertion
+			local annotatedRoot = typeRootName(assertion.annotation)
+			if annotatedRoot then
+				return annotatedRoot
+			end
+			local inner = assertion.expr
+			if inner then
+				return returnedRootName(inner)
+			end
+		elseif expr.type == "ExprCall" then
+			local call = expr :: luau.ExprCall
+			if call.func and call.func.type == "ExprIndexName" then
+				local idx = call.func :: luau.ExprIndexName
+				if
+					idx.index == "freeze"
+					and idx.expr.type == "ExprGlobal"
+					and (idx.expr :: luau.ExprGlobal).name == "table"
+					and call.args
+					and #call.args >= 1
+				then
+					return returnedRootName(call.args[1])
+				end
+			end
+		end
+		return nil
+	end
+
+	-- ── Collect returned names for export detection ──────────────────────
+	local returnedRoots: { [string]: boolean } = {}
+	for _, stat in result.root.body do
+		if stat.type == "StatReturn" then
+			local retStat = stat :: luau.StatReturn
+			local list = retStat.list
+			if list then
+				for _, expr in list do
+					local name = returnedRootName(expr)
+					if name then
+						returnedRoots[name] = true
+					end
+				end
+			end
+		end
+	end
+
+	-- ── AST helpers ─────────────────────────────────────────────────────
 	local function exprRootIsExported(expr: luau.AstExpr): boolean
 		if expr.type == "ExprGlobal" then
 			return true
@@ -398,7 +437,10 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		local typeMembers: { FuncDoc } = {}
 		for _, prop in tbl.props do
-			table.insert(typeMembers, members.buildMember(prop, findMemberDoc, ownerName))
+			local member = members.buildMember(prop, findMemberDoc, ownerName)
+			if member then
+				table.insert(typeMembers, member)
+			end
 		end
 		return typeMembers
 	end
@@ -674,10 +716,10 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 					if tbl.props then
 						typeMembers = {}
 						for _, prop in tbl.props do
-							table.insert(
-								typeMembers :: { FuncDoc },
-								members.buildMember(prop, findMemberDoc, stat.name)
-							)
+							local member = members.buildMember(prop, findMemberDoc, stat.name)
+							if member then
+								table.insert(typeMembers :: { FuncDoc }, member)
+							end
 						end
 					end
 				end
@@ -689,10 +731,10 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 					if tbl.props then
 						metamethods = {}
 						for _, prop in tbl.props do
-							table.insert(
-								metamethods :: { FuncDoc },
-								members.buildMember(prop, findMemberDoc, stat.name)
-							)
+							local member = members.buildMember(prop, findMemberDoc, stat.name)
+							if member then
+								table.insert(metamethods :: { FuncDoc }, member)
+							end
 						end
 					end
 				end

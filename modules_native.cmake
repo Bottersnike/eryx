@@ -14,14 +14,14 @@ add_luau_module(_socket src/modules/_socket.cpp src/modules/_socket.luau
 
 if(WIN32)
 # TODO: Implement FFI on platforms other than Windows
-add_luau_module(_ffi src/modules/_ffi.cpp src/modules/_ffi.luau
+add_luau_module(_native/_ffi src/modules/_ffi.cpp src/modules/_native/stub.luau
     EXTRA_LIBS dyncall
     EXTRA_INCLUDES "${dyncall_SOURCE_DIR}/dyncall"
 )
 endif()
 
 if(ERYX_USE_CRYPTOGRAPHY)
-    add_luau_module(_ssl src/modules/_ssl.cpp src/modules/_ssl.luau
+    add_luau_module(_native/_ssl src/modules/_ssl.cpp src/modules/_native/stub.luau
         EXTRA_LIBS mbedtls mbedx509 tfpsacrypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
                    "$<$<BOOL:${APPLE}>:-framework Security>"
                    "$<$<BOOL:${APPLE}>:-framework CoreFoundation>"
@@ -30,25 +30,39 @@ if(ERYX_USE_CRYPTOGRAPHY)
                     "${mbedtls_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include"
     )
 
-    add_luau_module(crypto/_crypto src/modules/crypto/_crypto.cpp src/modules/crypto/_crypto.luau
+    add_luau_module(crypto/hazmat/_native src/modules/crypto/hazmat/_crypto.cpp src/modules/_native/stub.luau
         EXTRA_LIBS mbedtls mbedx509 tfpsacrypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
         EXTRA_INCLUDES "${mbedtls_SOURCE_DIR}/include"
                     "${mbedtls_SOURCE_DIR}/tf-psa-crypto/include"
                     "${mbedtls_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include"
     )
 
+    add_luau_module(crypto/hazmat/argon2 src/modules/crypto/hazmat/argon2.cpp src/modules/crypto/hazmat/argon2.luau
+        EXTRA_LIBS phc_argon2
+        EXTRA_INCLUDES "${ARGON2_DIR}/include"
+                       "${ARGON2_DIR}/src"
+    )
+
+    add_luau_script_module(crypto/hazmat/
+        src/modules/crypto/hazmat/hash.luau
+        src/modules/crypto/hazmat/hmac.luau
+        src/modules/crypto/hazmat/aes.luau
+        src/modules/crypto/hazmat/camellia.luau
+        src/modules/crypto/hazmat/des.luau
+        src/modules/crypto/hazmat/chacha20.luau
+        src/modules/crypto/hazmat/kdf.luau
+        src/modules/crypto/hazmat/rsa.luau
+        src/modules/crypto/hazmat/ecc.luau
+        src/modules/crypto/hazmat/pem.luau
+        src/modules/crypto/hazmat/asn1.luau
+        src/modules/crypto/hazmat/random.luau
+    )
+
     add_luau_script_module(crypto/
         src/modules/crypto/hash.luau
         src/modules/crypto/hmac.luau
-        src/modules/crypto/aes.luau
-        src/modules/crypto/camellia.luau
-        src/modules/crypto/des.luau
-        src/modules/crypto/chacha20.luau
-        src/modules/crypto/kdf.luau
-        src/modules/crypto/rsa.luau
-        src/modules/crypto/pem.luau
-        src/modules/crypto/asn1.luau
-        src/modules/crypto/random.luau
+        src/modules/crypto/password.luau
+        src/modules/crypto/secretbox.luau
     )
 endif()
 
@@ -114,7 +128,7 @@ add_luau_module(luau src/modules/luau.cpp src/modules/luau.luau
 add_luau_module(date src/modules/date.cpp src/modules/date.luau)
 
 if(ERYX_USE_XML)
-    add_luau_module(xml src/modules/encoding/xml.cpp src/modules/encoding/xml.luau
+    add_luau_module(_native/xml src/modules/encoding/xml.cpp src/modules/_native/stub.luau
         EXTRA_LIBS pugixml
         EXTRA_INCLUDES "${VENDOR_DIR}"
     )
@@ -130,7 +144,7 @@ if(ERYX_USE_SQLITE3)
     )
     FetchContent_MakeAvailable(sqlite3)
     set(SQLITE3_DIR "${sqlite3_SOURCE_DIR}")
-    add_luau_module(sqlite3 src/modules/sqlite3.cpp src/modules/sqlite3.luau
+    add_luau_module(_native/sqlite3 src/modules/sqlite3.cpp src/modules/_native/stub.luau
         EXTRA_SOURCES "${SQLITE3_DIR}/sqlite3.c"
         EXTRA_INCLUDES "${SQLITE3_DIR}"
     )
@@ -150,7 +164,7 @@ add_luau_module(image src/modules/image.cpp src/modules/image.luau
 )
 
 if(ERYX_USE_PCRE2)
-    add_luau_module(regex src/modules/regex.cpp src/modules/regex.luau
+    add_luau_module(_native/regex src/modules/regex.cpp src/modules/_native/stub.luau
         EXTRA_LIBS pcre2-8-static
         EXTRA_INCLUDES "${PCRE2_DIR}/src" "${CMAKE_BINARY_DIR}/vendor/pcre2"
     )
@@ -159,7 +173,7 @@ endif()
 # -- WebView module
 # On windows, we're going to need to pull WebView2 down with nuget
 if(WIN32)
-add_luau_module(webview src/modules/webview.cpp src/modules/webview.luau)
+add_luau_module(_native/webview src/modules/webview.cpp src/modules/_native/stub.luau)
 
 set(NUGET_EXE ${CMAKE_BINARY_DIR}/nuget.exe)
 if(NOT EXISTS ${NUGET_EXE})
@@ -180,9 +194,9 @@ target_include_directories(eryx PUBLIC ${WEBVIEW2_DIR}/build/native/include)
 target_include_directories(eryx PUBLIC ${WIL_DIR}/include)
 target_link_libraries(eryx PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
 else()
-target_include_directories(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/include)
-target_include_directories(mod_webview PUBLIC ${WIL_DIR}/include)
-target_link_libraries(mod_webview PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
+target_include_directories(mod__native_webview PUBLIC ${WEBVIEW2_DIR}/build/native/include)
+target_include_directories(mod__native_webview PUBLIC ${WIL_DIR}/include)
+target_link_libraries(mod__native_webview PUBLIC ${WEBVIEW2_DIR}/build/native/x64/WebView2LoaderStatic.lib)
 endif()
 endif()
 

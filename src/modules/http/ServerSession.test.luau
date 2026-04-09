@@ -114,6 +114,43 @@ suite:test("filesystem-backed stores round-trip session records", function()
 	store:delete("abc")
 end)
 
+suite:test("filesystem-backed stores reject invalid session ids", function()
+	local dir = ".cache/http-session-file-store"
+	local store = ServerSession.fileStore(dir)
+
+	test.expect(function()
+		store:set("../escape", { user = "mallory" }, 4102444800)
+	end):toError("invalid session id")
+
+	test.expect(function()
+		store:get("nested/path")
+	end):toError("invalid session id")
+end)
+
+suite:test("middleware clears invalid incoming session cookies", function()
+	local app = App.new()
+	app:useSessions({
+		store = ServerSession.fileStore(".cache/http-session-invalid-cookie"),
+		cookieName = "sid",
+	})
+	app:get("/me", function(ctx)
+		return {
+			user = ctx.session:get("user"),
+		}
+	end)
+
+	withApp(app, function(url)
+		local response = request.get(url .. "/me", {
+			headers = {
+				Cookie = "sid=../../escape",
+			},
+		})
+		test.expect(response.status):toBe(200)
+		test.expect(response.headers["set-cookie"]):toContain("sid=")
+		test.expect(response.headers["set-cookie"]):toContain("Max-Age=0")
+	end)
+end)
+
 suite:test("sqlite-backed stores round-trip session records", function()
 	local db = sqlite3.open(":memory:")
 	local store = ServerSession.sqliteStore(db)

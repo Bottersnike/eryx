@@ -21,7 +21,36 @@ local function stripLeadingWhitespace(s: string): string
 	return s:sub(pStart)
 end
 
--- ======================== Block Rules ========================
+local function extractRefsFromTree(node: any, linkRefs: { [string]: { destination: string, title: string? } })
+	local children = node.children
+	if not children then
+		return
+	end
+	local i = 1
+	while i <= #children do
+		local child = children[i]
+		if child.type == "paragraph" then
+			local remaining = util.extractLinkRefs(child.raw, linkRefs)
+			local hasContent = false
+			local remRaw = table.concat(remaining, "\n")
+			for ci = 1, #remRaw do
+				local rb = string.byte(remRaw, ci)
+				if rb ~= 32 and rb ~= 9 and rb ~= 10 and rb ~= 13 then
+					hasContent = true
+					break
+				end
+			end
+			if not hasContent then
+				table.remove(children, i)
+				continue
+			else
+				child.raw = remaining
+			end
+		end
+		extractRefsFromTree(child, linkRefs)
+		i += 1
+	end
+end
 
 -- ======================== Main Parse Loop ========================
 
@@ -212,122 +241,122 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 			while not doneOpening do
 				local opened = false
 				for _, rule in rules do
-					if rule.tryStart then
-						local result = rule.tryStart(line, cursor, open[#open], open)
-						if result then
-							-- First match: close unmatched blocks NOW
-							if not openedNewBlock then
-								while #open > matchedCount do
-									local closing = table.remove(open, #open) :: types.AnyBlockNode
-									local closingRule = rulesByType[closing.type]
-									if closingRule and closingRule.onClose then
-										closingRule.onClose(closing :: any)
-									end
-								end
-								-- Also close interruptible blocks at matchedCount (tables)
-								if #open > 0 and open[#open].type == "table" then
-									local closing = table.remove(open, #open) :: types.AnyBlockNode
-									local closingRule = rulesByType[closing.type]
-									if closingRule and closingRule.onClose then
-										closingRule.onClose(closing :: any)
-									end
-									matchedCount = #open
-								end
-							end
-							openedNewBlock = true
+					if not rule.tryStart then
+						continue
+					end
 
-							local firstBlock = result.blocks[1]
+					local result = rule.tryStart(line, cursor, open[#open], open)
+					if not result then
+						continue
+					end
 
-							-- Pre-wrapper: notify item-level containers (e.g. list_item) so they
-							-- can propagate looseness to their parent list before any wrapper is created.
-							local mountTarget = open[#open]
-							local mountTargetRule = rulesByType[mountTarget.type]
-							if
-								mountTargetRule
-								and mountTargetRule.setsBlankFlag
-								and mountTargetRule.onBeforeChildMount
-							then
-								mountTargetRule.onBeforeChildMount(mountTarget :: any, firstBlock, blankSinceLast, open)
+					-- First match: close unmatched blocks NOW
+					if not openedNewBlock then
+						while #open > matchedCount do
+							local closing = table.remove(open, #open) :: types.AnyBlockNode
+							local closingRule = rulesByType[closing.type]
+							if closingRule and closingRule.onClose then
+								closingRule.onClose(closing :: any)
 							end
-
-							-- Close incompatible wrapper containers
-							while true do
-								local top = open[#open]
-								local topRule = rulesByType[top.type]
-								if
-									topRule
-									and topRule.acceptsNewChild
-									and not topRule.acceptsNewChild(top :: any, firstBlock)
-								then
-									closeTop()
-								else
-									break
-								end
+						end
+						-- Also close interruptible blocks at matchedCount (tables)
+						if #open > 0 and open[#open].type == "table" then
+							local closing = table.remove(open, #open) :: types.AnyBlockNode
+							local closingRule = rulesByType[closing.type]
+							if closingRule and closingRule.onClose then
+								closingRule.onClose(closing :: any)
 							end
-							-- If we're at a bare list wrapper and this is not a list item,
-							-- the list must end before mounting the new block.
-							while #open > 0 do
-								local top = open[#open]
-								local isListWrapper = top.type == "list" or top.type == "ordered_list"
-								local isListItem = firstBlock.type == "list_item"
-									or firstBlock.type == "ordered_list_item"
-								if isListWrapper and not isListItem then
-									closeTop()
-								else
-									break
-								end
-							end
-
-							-- Create wrapper container if needed
-							local firstBlockRule = rulesByType[firstBlock.type]
-							if
-								firstBlockRule
-								and firstBlockRule.wrapperType
-								and open[#open].type ~= firstBlockRule.wrapperType
-							then
-								if firstBlockRule.createWrapper then
-									local wrapper = firstBlockRule.createWrapper(firstBlock)
-									assert((open[#open] :: any).children ~= nil)
-									table.insert((open[#open] :: any).children, wrapper)
-									table.insert(open, wrapper)
-								end
-							end
-
-							-- Mount each block, notifying the container before each insertion
-							for _, newBlock in result.blocks do
-								local mountInto = open[#open]
-								local mountIntoRule = rulesByType[mountInto.type]
-								if mountIntoRule and mountIntoRule.onBeforeChildMount then
-									mountIntoRule.onBeforeChildMount(mountInto :: any, newBlock, blankSinceLast, open)
-								end
-								assert((open[#open] :: any).children ~= nil)
-								table.insert((open[#open] :: any).children, newBlock)
-								table.insert(open, newBlock)
-							end
-
-							cursor = result.cursor
 							matchedCount = #open
-							opened = true
-
-							if result.breakAfterOpen then
-								local lastBlock = result.blocks[#result.blocks]
-								local lastRule = rulesByType[lastBlock.type]
-								-- Leaf blocks (no incorporateLine) are always closed immediately.
-								-- Multi-line blocks stay open unless shouldCloseAfterOpen says otherwise.
-								local isLeaf = lastRule == nil or lastRule.incorporateLine == nil
-								local close = isLeaf
-									or (
-										lastRule.shouldCloseAfterOpen ~= nil
-										and lastRule.shouldCloseAfterOpen(lastBlock :: any)
-									)
-								if close then
-									closeTop()
-								end
-								doneOpening = true
-							end
-							break -- restart rule scan
 						end
 					end
+					openedNewBlock = true
+
+					local firstBlock = result.blocks[1]
+
+					-- Pre-wrapper: notify item-level containers (e.g. list_item) so they
+					-- can propagate looseness to their parent list before any wrapper is created.
+					local mountTarget = open[#open]
+					local mountTargetRule = rulesByType[mountTarget.type]
+					if mountTargetRule and mountTargetRule.setsBlankFlag and mountTargetRule.onBeforeChildMount then
+						mountTargetRule.onBeforeChildMount(mountTarget :: any, firstBlock, blankSinceLast, open)
+					end
+
+					-- Close incompatible wrapper containers
+					while true do
+						local top = open[#open]
+						local topRule = rulesByType[top.type]
+						if
+							topRule
+							and topRule.acceptsNewChild
+							and not topRule.acceptsNewChild(top :: any, firstBlock)
+						then
+							closeTop()
+						else
+							break
+						end
+					end
+					-- If we're at a bare list wrapper and this is not a list item,
+					-- the list must end before mounting the new block.
+					while #open > 0 do
+						local top = open[#open]
+						local isListWrapper = top.type == "list" or top.type == "ordered_list"
+						local isListItem = firstBlock.type == "list_item" or firstBlock.type == "ordered_list_item"
+						if isListWrapper and not isListItem then
+							closeTop()
+						else
+							break
+						end
+					end
+
+					-- Create wrapper container if needed
+					local firstBlockRule = rulesByType[firstBlock.type]
+					if
+						firstBlockRule
+						and firstBlockRule.wrapperType
+						and open[#open].type ~= firstBlockRule.wrapperType
+					then
+						if firstBlockRule.createWrapper then
+							local wrapper = firstBlockRule.createWrapper(firstBlock)
+							assert((open[#open] :: any).children ~= nil)
+							table.insert((open[#open] :: any).children, wrapper)
+							table.insert(open, wrapper)
+						end
+					end
+
+					-- Mount each block, notifying the container before each insertion
+					for _, newBlock in result.blocks do
+						local mountInto = open[#open]
+						local mountIntoRule = rulesByType[mountInto.type]
+						if mountIntoRule and mountIntoRule.onBeforeChildMount then
+							mountIntoRule.onBeforeChildMount(mountInto :: any, newBlock, blankSinceLast, open)
+						end
+						assert((open[#open] :: any).children ~= nil)
+						table.insert((open[#open] :: any).children, newBlock)
+						table.insert(open, newBlock)
+					end
+
+					cursor = result.cursor
+					matchedCount = #open
+					opened = true
+
+					if result.breakAfterOpen then
+						local lastBlock = result.blocks[#result.blocks]
+						local lastRule = rulesByType[lastBlock.type]
+						-- Leaf blocks (no incorporateLine) are always closed immediately.
+						-- Multi-line blocks stay open unless shouldCloseAfterOpen says otherwise.
+						local isLeaf = lastRule == nil or lastRule.incorporateLine == nil
+						local close = isLeaf
+							or (
+								lastRule.shouldCloseAfterOpen ~= nil
+								and lastRule.shouldCloseAfterOpen(lastBlock :: any)
+							)
+						if close then
+							closeTop()
+						end
+						doneOpening = true
+					end
+
+					break -- restart rule scan
 				end
 				if not opened then
 					break
@@ -442,37 +471,8 @@ function parse.parse(source: string, rules: { types.AnyBlockRule }): (types.Docu
 
 	-- Post-processing: Extract link reference definitions from paragraphs
 	local linkRefs: { [string]: { destination: string, title: string? } } = {}
-	local function extractRefsFromTree(node: any)
-		local children = node.children
-		if not children then
-			return
-		end
-		local i = 1
-		while i <= #children do
-			local child = children[i]
-			if child.type == "paragraph" then
-				local remaining = util.extractLinkRefs(child.raw, linkRefs)
-				local hasContent = false
-				local remRaw = table.concat(remaining, "\n")
-				for ci = 1, #remRaw do
-					local rb = string.byte(remRaw, ci)
-					if rb ~= 32 and rb ~= 9 and rb ~= 10 and rb ~= 13 then
-						hasContent = true
-						break
-					end
-				end
-				if not hasContent then
-					table.remove(children, i)
-					continue
-				else
-					child.raw = remaining
-				end
-			end
-			extractRefsFromTree(child)
-			i += 1
-		end
-	end
-	extractRefsFromTree(document)
+
+	extractRefsFromTree(document, linkRefs)
 	-- Merge in any link refs extracted early (during setext heading conversion)
 	local function mergeEarlyRefs(node: any)
 		if node._earlyLinkRefs then

@@ -1,5 +1,5 @@
 local _socket = require("@eryx/_socket")
-local _ssl = require("@eryx/_ssl")
+local capability = require("@eryx/capability")
 local util = require("./util")
 
 --[=[
@@ -203,6 +203,11 @@ function HttpConnection.connect(self: HttpConnection)
 	sock:connect(self.host, self.port)
 
 	if self._scheme == "https" then
+		local _ssl = capability.require(
+			"@eryx/_ssl",
+			"HTTPS client connections",
+			"Enable TLS/cryptography support or use an http:// URL instead."
+		)
 		-- Wrap the raw TCP socket with TLS
 		local ctx = _ssl.createDefaultContext()
 		if not self._verifySsl then

@@ -3,6 +3,11 @@ SQLite3 module – embedded relational database.
 
 Wraps the SQLite3 C library to provide full SQL database access from Luau.
 
+## Availability
+This module is a typed facade over an optional native backend. In builds
+without SQLite support, `require("@eryx/sqlite3")` fails immediately
+with a clear capability error.
+
 ## Quick start
 ```luau
 local sqlite3 = require("@eryx/sqlite3")
@@ -30,6 +35,7 @@ db:close()
 ```
 ]=]
 
+local capability = require("@eryx/capability")
 local sqlite3 = {}
 
 --- A row returned from a query. Keys are column names, values are the
@@ -144,4 +150,10 @@ function sqlite3.version(): string
 	return nil :: any
 end
 
-return table.freeze(sqlite3)
+return table.freeze(
+	capability.require(
+		"@eryx/_native/sqlite3",
+		"SQLite database support",
+		"Enable sqlite support to use @eryx/sqlite3."
+	)
+) :: typeof(sqlite3)

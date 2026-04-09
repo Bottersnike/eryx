@@ -90,7 +90,6 @@ local function prepareConfig(config: MarkdownConfig): MarkdownConfig
 	table.insert(realConfig.inlineExtensions, AutolinkRule)
 	table.insert(realConfig.inlineExtensions, InlineHtmlRule)
 
-	-- print("Config took", os.clock() - start)
 	return realConfig
 end
 

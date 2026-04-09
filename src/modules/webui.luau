@@ -18,7 +18,7 @@ end)
 ```
 ]=]
 
-local Signal = require("@eryx/Signal")
+local Signal = require("@eryx/signal")
 local json = require("@eryx/encoding/json")
 local wv = require("@eryx/webview")
 

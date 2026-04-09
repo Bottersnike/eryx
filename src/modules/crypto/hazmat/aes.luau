@@ -14,7 +14,7 @@
 	  7–13 bytes.
 
 	```luau
-	local aes = require("@eryx/crypto/aes")
+	local aes = require("@eryx/crypto/hazmat/aes")
 
 	local key   = buffer.fromstring("0123456789abcdef")  -- 16-byte AES-128
 	local iv    = buffer.fromstring("0000000000000000")
@@ -26,7 +26,7 @@
 	```
 ]=]
 
-local _aes = require("@eryx/crypto/_crypto").aes
+local _aes = require("@eryx/crypto/hazmat/_crypto").aes
 
 local aes = {}
 

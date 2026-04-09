@@ -1,4 +1,4 @@
-# Intro to Markdown
+# Markdown
 
 Eryx provides a markdown parser and HTML renderer in [[@eryx/markdown]].
 

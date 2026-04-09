@@ -1,5 +1,11 @@
--- Type stub for the _crypto native DLL.
--- The DLL takes precedence at runtime; this file exists for IDE type support.
+--[=[
+	Type facade for the optional native crypto backend.
+
+	This module keeps the typed hazmat crypto surface available to Luau
+	callers. In builds without cryptography support,
+	`require("@eryx/crypto/hazmat/_crypto")` fails immediately with a
+	clear capability error.
+]=]
 
 export type HashLib = {
 	md5: (data: buffer) -> buffer,
@@ -88,6 +94,20 @@ export type RsaLib = {
 	get_key_bits: (pem: string) -> number,
 }
 
+export type EccLib = {
+	generate_key: (curve: string?) -> string,
+	get_public_pem: (private_pem: string) -> string,
+	sign: (private_pem: string, data: buffer, hash: string?) -> buffer,
+	verify: (public_pem: string, data: buffer, signature: buffer, hash: string?) -> boolean,
+	derive: (private_pem: string, peer_public_pem: string) -> buffer,
+	private_to_der: (private_pem: string) -> buffer,
+	public_to_der: (public_pem: string) -> buffer,
+	private_from_der: (der: buffer) -> string,
+	public_from_der: (der: buffer) -> string,
+	get_key_bits: (pem: string) -> number,
+	get_curve: (pem: string) -> string,
+}
+
 export type RandomLib = {
 	randint: (n: number) -> number,
 	choice: (tbl: { any }) -> any,
@@ -96,6 +116,7 @@ export type RandomLib = {
 	hex: (n: number) -> string,
 }
 
+local capability = require("@eryx/capability")
 local _crypto = {}
 _crypto.hash = {} :: HashLib
 _crypto.hmac = {} :: HmacLib
@@ -104,7 +125,14 @@ _crypto.camellia = {} :: CamelliaLib
 _crypto.des = {} :: DesLib
 _crypto.chacha20 = {} :: ChaCha20Lib
 _crypto.kdf = {} :: KdfLib
+_crypto.ecc = {} :: EccLib
 _crypto.rsa = {} :: RsaLib
 _crypto.random = {} :: RandomLib
 
-return _crypto
+return table.freeze(
+	capability.require(
+		"@eryx/crypto/hazmat/_native",
+		"Native cryptography support",
+		"Enable cryptography support to use @eryx/crypto/hazmat/_crypto."
+	)
+) :: typeof(_crypto)

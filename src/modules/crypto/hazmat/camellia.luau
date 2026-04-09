@@ -9,7 +9,7 @@
 	mode descriptions. CCM is not defined for Camellia in PSA Crypto.
 
 	```luau
-	local camellia = require("@eryx/crypto/camellia")
+	local camellia = require("@eryx/crypto/hazmat/camellia")
 
 	local key   = buffer.fromstring("0123456789abcdef")  -- 16-byte / 128-bit
 	local iv    = buffer.fromstring("0000000000000000")
@@ -20,7 +20,7 @@
 	```
 ]=]
 
-local _cam = require("@eryx/crypto/_crypto").camellia
+local _cam = require("@eryx/crypto/hazmat/_crypto").camellia
 
 local camellia = {}
 

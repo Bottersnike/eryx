@@ -379,4 +379,51 @@ suite:test("autocomplete: detailed type payload", function()
 	test.expect(out.entries.foo.typeDetail.kind):toBeType("string")
 end)
 
+suite:test("getconfig: exposes current config shape", function()
+	local cfg = luau.getconfig()
+	test.expect(type(cfg)):toBe("table")
+	test.expect(type(cfg.found)):toBe("boolean")
+	test.expect(type(cfg.configDir)):toBe("string")
+	test.expect(type(cfg.languageMode)):toBe("string")
+	test.expect(type(cfg.enabledLints)):toBe("number")
+	test.expect(type(cfg.fatalLints)):toBe("number")
+	test.expect(type(cfg.lintErrors)):toBe("boolean")
+	test.expect(type(cfg.typeErrors)):toBe("boolean")
+	test.expect(type(cfg.globals)):toBe("table")
+	test.expect(type(cfg.aliases)):toBe("table")
+
+	local isValidMode = cfg.languageMode == "strict" or cfg.languageMode == "nonstrict" or cfg.languageMode == "nocheck"
+	test.expect(isValidMode):toBeTrue()
+
+	if cfg.found then
+		test.expect(#cfg.configDir):toBeGreaterThan(0)
+	end
+end)
+
+suite:test("getconfig: alias metadata shape", function()
+	local cfg = luau.getconfig()
+	for aliasName, aliasInfo in cfg.aliases do
+		test.expect(type(aliasName)):toBe("string")
+		test.expect(type(aliasInfo.qualified)):toBe("string")
+		test.expect(type(aliasInfo.configPath)):toBe("string")
+		test.expect(type(aliasInfo.path)):toBe("string")
+		break
+	end
+
+	local eryxAlias = cfg.aliases.eryx
+	test.skipIf(eryxAlias == nil, "eryx alias not configured in this environment")
+	assert(eryxAlias)
+	test.expect(type(eryxAlias.qualified)):toBe("string")
+	test.expect(type(eryxAlias.configPath)):toBe("string")
+	test.expect(type(eryxAlias.path)):toBe("string")
+end)
+
+suite:test("getconfig: accepts folder path override", function()
+	local cfg = luau.getconfig(".")
+	test.expect(type(cfg)):toBe("table")
+	test.expect(type(cfg.found)):toBe("boolean")
+	test.expect(type(cfg.configDir)):toBe("string")
+	test.expect(type(cfg.aliases)):toBe("table")
+end)
+
 return suite

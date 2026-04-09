@@ -5,6 +5,12 @@
 	both client and server context creation, certificate generation, and
 	certificate parsing utilities.
 
+	:::note Optional capability
+	This module is a typed facade over an optional native backend. In
+	builds without TLS/cryptography support, `require("@eryx/_ssl")`
+	fails immediately with a clear capability error.
+	:::
+
 	:::tip
 	For most use cases, prefer `@eryx/http` which handles TLS automatically.
 	Use `_ssl` directly when you need fine-grained control over TLS
@@ -149,6 +155,7 @@ export type CertificateInfo = {
 	info: string,
 }
 
+local capability = require("@eryx/capability")
 local _ssl = {}
 
 --[=[
@@ -277,4 +284,6 @@ _ssl.VERIFY_REQUIRED = 2 :: number
 
 _ssl.SslContext = {} :: SslContext
 
-return table.freeze(_ssl)
+return table.freeze(
+	capability.require("@eryx/_native/_ssl", "TLS/SSL support", "Enable cryptography support to use @eryx/_ssl.")
+) :: typeof(_ssl)

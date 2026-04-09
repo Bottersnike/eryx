@@ -11,8 +11,8 @@
 	`@eryx/crypto/rsa` which provides [[rsa.private_to_der]], etc.
 
 	```luau
-	local pem = require("@eryx/crypto/pem")
-	local rsa = require("@eryx/crypto/rsa")
+	local pem = require("@eryx/crypto/hazmat/pem")
+	local rsa = require("@eryx/crypto/hazmat/rsa")
 
 	local priv = rsa.generate_key()
 

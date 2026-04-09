@@ -12,7 +12,7 @@
 	  600,000 iterations (NIST 2023 guidance).
 
 	```luau
-	local kdf = require("@eryx/crypto/kdf")
+	local kdf = require("@eryx/crypto/hazmat/kdf")
 	local hex = require("@eryx/encoding/hex")
 
 	-- Derive a 32-byte AES key from a shared secret
@@ -30,7 +30,7 @@
 	```
 ]=]
 
-local _kdf = require("@eryx/crypto/_crypto").kdf
+local _kdf = require("@eryx/crypto/hazmat/_crypto").kdf
 
 local kdf = {}
 

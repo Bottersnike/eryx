@@ -3,6 +3,12 @@
 	Supports Perl-compatible regex with compilation, matching, searching,
 	replacement, and splitting.
 
+	:::note Optional capability
+	This module is a typed facade over an optional PCRE2 backend. In
+	builds without PCRE2 support, `require("@eryx/regex")` fails
+	immediately with a clear capability error.
+	:::
+
 	Flags string characters:
 	- `i` = case-insensitive
 	- `m` = multiline (^ and $ match line boundaries)
@@ -13,6 +19,7 @@
 	- `n` = no auto capture (plain parentheses don't capture)
 ]=]
 
+local capability = require("@eryx/capability")
 local regex = {}
 
 --[=[
@@ -181,4 +188,6 @@ regex.ENDANCHORED = 0 :: number
 regex.UCP = 0 :: number
 regex.DUPNAMES = 0 :: number
 
-return table.freeze(regex)
+return table.freeze(
+	capability.require("@eryx/_native/regex", "Regular expression support", "Enable PCRE2 support to use @eryx/regex.")
+) :: typeof(regex)

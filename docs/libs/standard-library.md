@@ -1,6 +1,8 @@
 # The Standard Library
 
-The standard library is the core selling point for Eryx. Each available library is categorised into one of the following statuses:
+The standard library is the core selling point for Eryx. This section of the documentation contains pages discussing many of the built in libraries. Some libraries, or groups of libraries, are too complex to be aptly described in a single page, and instead have their own sections.
+
+The remainder of this page lists out every available library. Each available library is categorised into one of the following statuses:
 
 | Status          | Meaning                                                                               |
 | --------------- | ------------------------------------------------------------------------------------- |
@@ -14,28 +16,27 @@ The standard library is the core selling point for Eryx. Each available library 
 
 | Library             | Status                | Description                                            |
 | ------------------- | --------------------- | ------------------------------------------------------ |
-| [[@eryx/luau]]      | Partial[^luau]        | Access to luau language features (analysis, compiling) |
+| [[@eryx/luau]]      | Complete              | Access to luau language features (analysis, compiling) |
 | [[@eryx/task]]      | Complete              | Concurrency helpers                                    |
 | [[@eryx/exception]] | Complete              | Exception formatting and helpers                       |
 | [[@eryx/_ffi]]      | Win32, Partial[^_ffi] | Low-level foreign function interfaces                  |
 | Marshall            | Planned               | Binary-encoded format of Luau objects                  |
 
-[^luau]: Not all AST nodes are fully exposed properly. Some bindings missing
-
 [^_ffi]: Currently only supports Windows, and likely has GC-related problems
 
 ## Development utilities
 
-| Library           | Status   | Description                                |
-| ----------------- | -------- | ------------------------------------------ |
-| [[@eryx/pprint]]  | Complete | Data pretty-printer                        |
-| [[@eryx/test]]    | Complete | Unit testing framework                     |
-| [[@eryx/eryxdoc]] | Complete | Documentation generation engine            |
-| [[@eryx/signal]]  | Complete | Provides signals that can be subscribed to |
-| [[@eryx/date]]    | Complete | Dates and times with timezone support      |
-| Logging           | Planned  | Structured logging utilities               |
-| Retry helpers     | Planned  | Helpers for retrying failed actions        |
-| Caching (LRU)?    | Planned  | Function result caching                    |
+| Library           | Status   | Description                                             |
+| ----------------- | -------- | ------------------------------------------------------- |
+| [[@eryx/pprint]]  | Complete | Data pretty-printer                                     |
+| [[@eryx/schema]]  | Complete | Runtime type checking, and some more complex checks too |
+| [[@eryx/test]]    | Complete | Unit testing framework                                  |
+| [[@eryx/eryxdoc]] | Complete | Documentation generation engine                         |
+| [[@eryx/signal]]  | Complete | Provides signals that can be subscribed to              |
+| [[@eryx/date]]    | Complete | Dates and times with timezone support                   |
+| [[@eryx/logging]] | Complete | Structured logging utilities                            |
+| Retry helpers     | Planned  | Helpers for retrying failed actions                     |
+| Caching (LRU)?    | Planned  | Function result caching                                 |
 
 ## Text processing
 
@@ -77,21 +78,22 @@ The standard library is the core selling point for Eryx. Each available library 
 
 ## Networking
 
-| Library             | Status                 | Description                                       |
-| ------------------- | ---------------------- | ------------------------------------------------- |
-| [[@eryx/http]]      | Mostly complete[^http] | HTTP client and server                            |
-| [[@eryx/net]]       | Complete               | Basic TCP client and server                       |
-| [[@eryx/websocket]] | Partial[^websocket]    | Websocket client and server                       |
-| [[@eryx/mime]]      | Unusable[^mime]        | MIME format detection                             |
-| [[@eryx/_socket]]   | Complete               | Low level BSD-style socket interface              |
-| [[@eryx/_ssl]]      | Mostly Complete[^_ssl] | Low level SSL interface to be used with `_socket` |
-| UUID                | Planned                | Creation and manipulation of UUIDs                |
-| RPC                 | Planned                | RCON, JSON-RPC, XML-RPC                           |
-| Email               | Planned                |                                                   |
-| FTP                 | Planned                | Support for the FTP protocol                      |
-| IMAP                | Planned                | Support for the IMAP protocol                     |
-| SMTP                | Planned                | Support for the SMTP protocol                     |
-| JWT                 | Planned                | Creation and manipulation of JWTs                 |
+| Library             | Status                 | Description                                                 |
+| ------------------- | ---------------------- | ----------------------------------------------------------- |
+| [[@eryx/http]]      | Mostly complete[^http] | HTTP client and server                                      |
+| [[@eryx/net]]       | Complete               | Basic TCP client and server                                 |
+| [[@eryx/websocket]] | Partial[^websocket]    | Websocket client and server                                 |
+| [[@eryx/mime]]      | Unusable[^mime]        | MIME format detection                                       |
+| [[@eryx/_socket]]   | Complete               | Low level BSD-style socket interface                        |
+| [[@eryx/ip]]        | Complete               | Parsing and manipulation of IP addresses and network ranges |
+| [[@eryx/_ssl]]      | Mostly Complete[^_ssl] | Low level SSL interface to be used with `_socket`           |
+| UUID                | Planned                | Creation and manipulation of UUIDs                          |
+| RPC                 | Planned                | RCON, JSON-RPC, XML-RPC                                     |
+| Email               | Planned                |                                                             |
+| FTP                 | Planned                | Support for the FTP protocol                                |
+| IMAP                | Planned                | Support for the IMAP protocol                               |
+| SMTP                | Planned                | Support for the SMTP protocol                               |
+| JWT                 | Planned                | Creation and manipulation of JWTs                           |
 
 [^http]: Lacks proxy support
 
@@ -139,21 +141,25 @@ The standard library is the core selling point for Eryx. Each available library 
 
 ## Cryptography
 
-| Library                   | Status          | Description                             |
-| ------------------------- | --------------- | --------------------------------------- |
-| [[@eryx/crypto/aes]]      | Complete        | AES ciphers                             |
-| [[@eryx/crypto/camellia]] | Complete        | Camellia ciphers                        |
-| [[@eryx/crypto/chacha20]] | Complete        | ChaCha20 ciphers                        |
-| [[@eryx/crypto/des]]      | Complete        | 3DES ciphers                            |
-| [[@eryx/crypto/rsa]]      | Complete        | RSA ciphers                             |
-| [[@eryx/crypto/hash]]     | Complete        | Various hashing functions               |
-| [[@eryx/crypto/hmac]]     | Complete        | HMAC generation                         |
-| [[@eryx/crypto/kdf]]      | Complete        | Key derivation functions                |
-| [[@eryx/crypto/pem]]      | Complete        | PEM/DER format support                  |
-| [[@eryx/crypto/random]]   | Complete        | Secure random number and data generator |
-| [[@eryx/crypto/asn1]]     | Unusable[^asn1] | ASN1 format support                     |
-| ECC                       | Planned         | ECC ciphers (ECDSA/ECDH/EdDSA)          |
-| Argon2                    | Planned         |                                         |
+| Library                          | Status          | Description                              |
+| -------------------------------- | --------------- | ---------------------------------------- |
+| [[@eryx/crypto/password]]        | Complete        | High level password hashing              |
+| [[@eryx/crypto/secretbox]]       | Complete        | High level authenticated encryption      |
+| [[@eryx/crypto/hmac]]            | Complete        | High level HMACs                         |
+| [[@eryx/crypto/hash]]            | Complete        | High level message digests               |
+| [[@eryx/crypto/hazmat/aes]]      | Complete        | AES ciphers                              |
+| [[@eryx/crypto/hazmat/camellia]] | Complete        | Camellia ciphers                         |
+| [[@eryx/crypto/hazmat/chacha20]] | Complete        | ChaCha20 ciphers                         |
+| [[@eryx/crypto/hazmat/des]]      | Complete        | 3DES ciphers                             |
+| [[@eryx/crypto/hazmat/rsa]]      | Complete        | RSA ciphers                              |
+| [[@eryx/crypto/hazmat/hash]]     | Complete        | Various hashing functions                |
+| [[@eryx/crypto/hazmat/hmac]]     | Complete        | HMAC generation                          |
+| [[@eryx/crypto/hazmat/kdf]]      | Complete        | Key derivation functions                 |
+| [[@eryx/crypto/hazmat/pem]]      | Complete        | PEM/DER format support                   |
+| [[@eryx/crypto/hazmat/random]]   | Complete        | Secure random number and data generator  |
+| [[@eryx/crypto/hazmat/ecc]]      | Partial         | ECC keys, ECDSA signing, ECDH derivation |
+| [[@eryx/crypto/hazmat/argon2]]   | Partial         | Argon2d, Argon2i, and Argon2id hashing   |
+| [[@eryx/crypto/hazmat/asn1]]     | Unusable[^asn1] | ASN1 format support                      |
 
 [^asn1]: Very patchy hand-written code, lacking almost all important ASN1 features
 
@@ -170,9 +176,9 @@ The standard library is the core selling point for Eryx. Each available library 
 
 | Library           | Status                    | Description                                                      |
 | ----------------- | ------------------------- | ---------------------------------------------------------------- |
+| [[@eryx/image]]   | Partial[^image]           | Support for various image formats                                |
 | [[@eryx/webview]] | Win32, Unusable[^webview] | Create and manipulate native WebView browsers                    |
 | [[@eryx/webui]]   | Unusable[^webui]          | Wrapper for `webview` proving convenient JS<->Eryx communication |
-| [[@eryx/image]]   | Partial[^image]           | Support for various image formats                                |
 | Audio             | Planned                   | Support for various audio formats                                |
 
 [^webview]: Bare-bones wrapper for WebView2 on windows, but no support for other platforms

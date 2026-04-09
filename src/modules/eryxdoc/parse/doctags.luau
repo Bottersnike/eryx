@@ -14,6 +14,7 @@
 --   @deprecated <version> -- [desc] Deprecated at version with reason
 --   @private                        Marks as private (excluded from public docs)
 --   @ignore                         Totally excluded from generated documentation
+--   @reexportonly                   Hide on source module; show when re-exported
 --   @tag <name>                     Adds a custom tag
 
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -52,6 +53,7 @@ export type ParsedDoc = {
 	deprecated: DeprecatedInfo?,
 	private: boolean,
 	ignore: boolean,
+	reexportOnly: boolean,
 	tags: { string },
 }
 
@@ -95,6 +97,7 @@ local function parseDocTags(raw: string, knownParamNames: { [string]: boolean }?
 	local deprecated: DeprecatedInfo? = nil
 	local private = false
 	local ignore = false
+	local reexportOnly = false
 	local tags: { string } = {}
 
 	-- Tracks what the current continuation target is.
@@ -257,6 +260,13 @@ local function parseDocTags(raw: string, knownParamNames: { [string]: boolean }?
 			continue
 		end
 
+		-- ── @reexportonly ──────────────────────────---------------------
+		if t:match("^@reexportonly") then
+			reexportOnly = true
+			currentTag, curIdx = nil, nil
+			continue
+		end
+
 		-- ── @tag ────────────────────────────────────────────────────────
 		local tagName = t:match("^@tag%s+(.+)$")
 		if tagName then
@@ -298,6 +308,7 @@ local function parseDocTags(raw: string, knownParamNames: { [string]: boolean }?
 		deprecated = deprecated,
 		private = private,
 		ignore = ignore,
+		reexportOnly = reexportOnly,
 		tags = tags,
 	}
 end

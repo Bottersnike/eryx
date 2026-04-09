@@ -1,8 +1,7 @@
 local fs = require("@eryx/fs")
+local capability = require("@eryx/capability")
 local hex = require("@eryx/encoding/hex")
 local json = require("@eryx/encoding/json")
-local random = require("@eryx/crypto/random")
-local sqlite3 = require("@eryx/sqlite3")
 
 --[=[
 	Server-side session helpers for [[http.App]].
@@ -71,8 +70,18 @@ type FileStore = SessionStore & {
 	_dir: string,
 }
 
+type SqliteRow = {
+	payload: string,
+	expires_at: number?,
+}
+
+type SqliteDatabase = {
+	exec: (self: SqliteDatabase, sql: string, ...any) -> (),
+	query: (self: SqliteDatabase, sql: string, ...any) -> { SqliteRow },
+}
+
 type SqliteStore = SessionStore & {
-	_db: sqlite3.Database,
+	_db: SqliteDatabase,
 	_table: string,
 }
 
@@ -96,8 +105,34 @@ local SqliteStoreMetatable = {
 	__index = SqliteStoreMethods,
 }
 
+local function requireRandom()
+	return capability.require(
+		"@eryx/crypto/hazmat/random",
+		"HTTP server session id generation",
+		"Enable cryptography support to create or regenerate sessions."
+	)
+end
+
+local function requireSqlite3()
+	return capability.require(
+		"@eryx/sqlite3",
+		"SQLite-backed HTTP sessions",
+		"Enable sqlite support or use memoryStore()/fileStore() instead."
+	)
+end
+
 local function generateSessionId(): string
-	return hex.encode(random.bytes(24))
+	return hex.encode(requireRandom().bytes(24))
+end
+
+local function isValidSessionId(id: string): boolean
+	return string.match(id, "^[A-Za-z0-9_-]+$") ~= nil and #id <= 128
+end
+
+local function assertValidSessionId(id: string)
+	if not isValidSessionId(id) then
+		error("invalid session id", 2)
+	end
 end
 
 function SessionMethods.get(self: Session, key: string): any
@@ -197,6 +232,7 @@ function MemoryStoreMethods.touch(self: MemoryStore, id: string, expiresAt: numb
 end
 
 function FileStoreMethods._pathFor(self: FileStore, id: string): string
+	assertValidSessionId(id)
 	return fs.path.join(self._dir, id .. ".json")
 end
 
@@ -245,7 +281,7 @@ function FileStoreMethods.touch(self: FileStore, id: string, expiresAt: number?)
 	end
 end
 
-local function ensureSqliteSchema(db: sqlite3.Database, tableName: string)
+local function ensureSqliteSchema(db: SqliteDatabase, tableName: string)
 	db:exec(
 		"CREATE TABLE IF NOT EXISTS "
 			.. tableName
@@ -321,7 +357,8 @@ end
 	@param tableName Optional table name. Defaults to `"http_sessions"`.
 	@return SessionStore
 ]=]
-function ServerSession.sqliteStore(database: string | sqlite3.Database, tableName: string?): SessionStore
+function ServerSession.sqliteStore(database: string | SqliteDatabase, tableName: string?): SessionStore
+	local sqlite3 = requireSqlite3()
 	local db = if type(database) == "string" then sqlite3.open(database) else database
 	local name = tableName or "http_sessions"
 	ensureSqliteSchema(db, name)
@@ -367,12 +404,22 @@ function ServerSession.middleware(options: SessionOptions?): (ctx: any, next: ()
 
 	return function(ctx, next)
 		local sessionId = ctx:cookie(cookieName)
+		local invalidSessionId = false
+		if sessionId ~= nil and not isValidSessionId(sessionId) then
+			sessionId = nil
+			invalidSessionId = true
+		end
+
 		local record = if sessionId ~= nil then store:get(sessionId) else nil
 		local session = newSession(record, if record ~= nil then sessionId else nil)
 		ctx.session = session
 
 		local result = table.pack(next())
 		local now = os.time()
+
+		if invalidSessionId and session.id == nil then
+			ctx:clearCookie(cookieName, mergedCookieOptions(opts, 0))
+		end
 
 		if session.destroyed then
 			local doomedId = (session :: any)._destroyedId

@@ -1499,33 +1499,97 @@ static int l_resolve(lua_State* L) {
     return 2;
 }
 static int l_config(lua_State* L) {
-    auto ctx = eryx_get_require_context(L);
+    auto mode_to_string = [](Luau::Mode mode) -> const char* {
+        switch (mode) {
+            case Luau::Mode::Strict:
+                return "strict";
+            case Luau::Mode::Nonstrict:
+                return "nonstrict";
+            case Luau::Mode::NoCheck:
+                return "nocheck";
+            default:
+                return "nonstrict";
+        }
+    };
+
     std::filesystem::path configSearchStart;
     std::string vfsConfigDir;
-    if (!ctx.callerDir.empty()) {
-        configSearchStart = ctx.callerDir;
-    } else if (ctx.isVFS) {
-        vfsConfigDir = ctx.vfsCallerDir;
+
+    if (!lua_isnoneornil(L, 1)) {
+        const char* folderPath = luaL_checkstring(L, 1);
+        std::error_code ec;
+        std::filesystem::path inputPath(folderPath);
+        std::filesystem::path resolvedPath = std::filesystem::weakly_canonical(inputPath, ec);
+        if (ec) {
+            ec.clear();
+            resolvedPath = std::filesystem::absolute(inputPath, ec);
+            if (ec) resolvedPath = inputPath;
+        }
+
+        ec.clear();
+        if (std::filesystem::is_regular_file(resolvedPath, ec)) {
+            configSearchStart = resolvedPath.parent_path();
+        } else {
+            configSearchStart = resolvedPath;
+        }
     } else {
-        configSearchStart = ctx.root;
+        auto ctx = eryx_get_require_context(L);
+        if (!ctx.callerDir.empty()) {
+            configSearchStart = ctx.callerDir;
+        } else if (ctx.isVFS) {
+            vfsConfigDir = ctx.vfsCallerDir;
+        } else {
+            configSearchStart = ctx.root;
+        }
     }
     auto config = eryx_locate_config(L, configSearchStart, std::nullopt, vfsConfigDir);
 
-    // TODO: THIS!
+    lua_createtable(L, 0, 8);
 
-    luaL_error(L, "Oops I forgot to finish implementing this!");
+    lua_pushboolean(L, config->found);
+    lua_setfield(L, -2, "found");
 
-    // const char* path = luaL_checkstring(L, 1);
-    // auto resolved = resolve_module(L, path);
+    lua_pushstring(L, config->configDir.string().c_str());
+    lua_setfield(L, -2, "configDir");
 
-    // if (resolved) {
-    //     lua_pushnumber(L, resolved->type);
-    //     lua_pushstring(L, resolved->path.c_str());
-    // } else {
-    //     lua_pushnil(L);
-    //     lua_pushnil(L);
-    // }
-    return 0;
+    lua_pushstring(L, mode_to_string(config->languageMode));
+    lua_setfield(L, -2, "languageMode");
+
+    lua_pushnumber(L, static_cast<lua_Number>(config->enabledLints));
+    lua_setfield(L, -2, "enabledLints");
+    lua_pushnumber(L, static_cast<lua_Number>(config->fatalLints));
+    lua_setfield(L, -2, "fatalLints");
+
+    lua_pushboolean(L, config->lintErrors);
+    lua_setfield(L, -2, "lintErrors");
+    lua_pushboolean(L, config->typeErrors);
+    lua_setfield(L, -2, "typeErrors");
+
+    lua_createtable(L, (int)config->globals.size(), 0);
+    for (size_t i = 0; i < config->globals.size(); ++i) {
+        lua_pushstring(L, config->globals[i].c_str());
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+    lua_setfield(L, -2, "globals");
+
+    lua_createtable(L, 0, (int)config->aliases.size());
+    for (const auto& [key, alias] : config->aliases) {
+        lua_createtable(L, 0, 3);
+
+        lua_pushstring(L, alias.qualified.c_str());
+        lua_setfield(L, -2, "qualified");
+
+        lua_pushstring(L, alias.configPath.c_str());
+        lua_setfield(L, -2, "configPath");
+
+        lua_pushstring(L, alias.path.c_str());
+        lua_setfield(L, -2, "path");
+
+        lua_setfield(L, -2, key.c_str());
+    }
+    lua_setfield(L, -2, "aliases");
+
+    return 1;
 }
 
 // ---------------------------------------------------------------------------

@@ -685,7 +685,7 @@ static int kdf_pbkdf2_sha256(lua_State* L) { return kdf_pbkdf2(L, PSA_ALG_SHA_25
 static int kdf_pbkdf2_sha512(lua_State* L) { return kdf_pbkdf2(L, PSA_ALG_SHA_512); }
 
 // ---------------------------------------------------------------------------
-// RSA
+// Asymmetric helpers
 // ---------------------------------------------------------------------------
 
 static void
@@ -699,6 +699,441 @@ static void
     mbedtls_strerror(ret, buf, sizeof(buf));
     luaL_error(L, "%s: %s", op, buf);
 }
+
+static psa_status_t pk_pem_to_psa(const char* pem, bool is_private, psa_key_usage_t usage,
+                                  psa_algorithm_t alg, mbedtls_svc_key_id_t* out_key);
+
+static mbedtls_md_type_t hash_name_to_md_type(lua_State* L, const char* hash_name) {
+    if (strcmp(hash_name, "sha1") == 0) return MBEDTLS_MD_SHA1;
+    if (strcmp(hash_name, "sha256") == 0) return MBEDTLS_MD_SHA256;
+    if (strcmp(hash_name, "sha384") == 0) return MBEDTLS_MD_SHA384;
+    if (strcmp(hash_name, "sha512") == 0) return MBEDTLS_MD_SHA512;
+
+    luaL_error(L, "unsupported hash '%s'", hash_name);
+    return MBEDTLS_MD_NONE;
+}
+
+static void parse_pk_psa_attributes(lua_State* L, const char* op, mbedtls_pk_context* pk,
+                                    const char* pem_or_der, size_t len, bool is_private,
+                                    psa_key_usage_t usage, psa_key_attributes_t* attrs) {
+    mbedtls_pk_init(pk);
+
+    int ret;
+    if (is_private)
+        ret = mbedtls_pk_parse_key(pk, (const unsigned char*)pem_or_der, len, nullptr, 0);
+    else
+        ret = mbedtls_pk_parse_public_key(pk, (const unsigned char*)pem_or_der, len);
+    if (ret != 0) {
+        mbedtls_pk_free(pk);
+        mbedtls_lua_error(L, op, ret);
+    }
+
+    *attrs = PSA_KEY_ATTRIBUTES_INIT;
+    ret = mbedtls_pk_get_psa_attributes(pk, usage, attrs);
+    if (ret != 0) {
+        mbedtls_pk_free(pk);
+        mbedtls_lua_error(L, op, ret);
+    }
+}
+
+static psa_ecc_family_t ecc_family_from_name(lua_State* L, const char* curve, size_t* bits_out) {
+    if (strcmp(curve, "secp224r1") == 0 || strcmp(curve, "p224") == 0 ||
+        strcmp(curve, "p-224") == 0) {
+        *bits_out = 224;
+        return PSA_ECC_FAMILY_SECP_R1;
+    }
+    if (strcmp(curve, "secp256r1") == 0 || strcmp(curve, "prime256v1") == 0 ||
+        strcmp(curve, "p256") == 0 || strcmp(curve, "p-256") == 0) {
+        *bits_out = 256;
+        return PSA_ECC_FAMILY_SECP_R1;
+    }
+    if (strcmp(curve, "secp384r1") == 0 || strcmp(curve, "p384") == 0 ||
+        strcmp(curve, "p-384") == 0) {
+        *bits_out = 384;
+        return PSA_ECC_FAMILY_SECP_R1;
+    }
+    if (strcmp(curve, "secp521r1") == 0 || strcmp(curve, "p521") == 0 ||
+        strcmp(curve, "p-521") == 0) {
+        *bits_out = 521;
+        return PSA_ECC_FAMILY_SECP_R1;
+    }
+    if (strcmp(curve, "secp256k1") == 0) {
+        *bits_out = 256;
+        return PSA_ECC_FAMILY_SECP_K1;
+    }
+
+    luaL_error(L, "unsupported curve '%s'", curve);
+    return 0;
+}
+
+static const char* ecc_curve_name_from_attrs(const psa_key_attributes_t* attrs) {
+    psa_key_type_t type = psa_get_key_type(attrs);
+    if (!PSA_KEY_TYPE_IS_ECC(type)) return "unknown";
+
+    psa_ecc_family_t family = PSA_KEY_TYPE_ECC_GET_FAMILY(type);
+    size_t bits = psa_get_key_bits(attrs);
+
+    if (family == PSA_ECC_FAMILY_SECP_R1) {
+        if (bits == 224) return "secp224r1";
+        if (bits == 256) return "secp256r1";
+        if (bits == 384) return "secp384r1";
+        if (bits == 521) return "secp521r1";
+    } else if (family == PSA_ECC_FAMILY_SECP_K1) {
+        if (bits == 256) return "secp256k1";
+    }
+
+    return "unknown";
+}
+
+static const char* ecc_curve_name_from_der(const unsigned char* der, size_t der_len) {
+    static const struct {
+        const char* name;
+        const unsigned char oid[10];
+        size_t oid_len;
+    } curves[] = {
+        { "secp224r1", { 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x21 }, 7 },
+        { "secp256r1", { 0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07 }, 10 },
+        { "secp384r1", { 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x22 }, 7 },
+        { "secp521r1", { 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x23 }, 7 },
+        { "secp256k1", { 0x06, 0x05, 0x2B, 0x81, 0x04, 0x00, 0x0A }, 7 },
+    };
+
+    for (const auto& curve : curves) {
+        for (size_t i = 0; i + curve.oid_len <= der_len; ++i) {
+            if (memcmp(der + i, curve.oid, curve.oid_len) == 0) return curve.name;
+        }
+    }
+
+    return "unknown";
+}
+
+// ---------------------------------------------------------------------------
+// ECC
+// ---------------------------------------------------------------------------
+
+// generate_key(curve?) -> private_pem: string
+static int ecc_generate_key(lua_State* L) {
+    const char* curve = luaL_optstring(L, 1, "secp256r1");
+    size_t bits = 0;
+    psa_ecc_family_t family = ecc_family_from_name(L, curve, &bits);
+
+    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+    psa_set_key_type(&attrs, PSA_KEY_TYPE_ECC_KEY_PAIR(family));
+    psa_set_key_bits(&attrs, bits);
+    psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_VERIFY_HASH |
+                                        PSA_KEY_USAGE_DERIVE | PSA_KEY_USAGE_EXPORT);
+    psa_set_key_algorithm(&attrs, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+    psa_set_key_lifetime(&attrs, PSA_KEY_LIFETIME_VOLATILE);
+
+    mbedtls_svc_key_id_t kid;
+    psa_status_t st = psa_generate_key(&attrs, &kid);
+    psa_reset_key_attributes(&attrs);
+    if (st != PSA_SUCCESS) push_psa_error(L, "ecc_generate_key", st);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_copy_from_psa(kid, &pk);
+    psa_destroy_key(kid);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_generate_key", ret);
+    }
+
+    unsigned char buf[16384];
+    ret = mbedtls_pk_write_key_pem(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_generate_key", ret);
+
+    lua_pushstring(L, (const char*)buf);
+    return 1;
+}
+
+// get_public_pem(private_pem: string) -> public_pem: string
+static int ecc_get_public_pem(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)pem, strlen(pem) + 1, nullptr, 0);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_get_public_pem", ret);
+    }
+
+    unsigned char buf[8192];
+    ret = mbedtls_pk_write_pubkey_pem(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_get_public_pem", ret);
+
+    lua_pushstring(L, (const char*)buf);
+    return 1;
+}
+
+// sign(private_pem, data, hash?) -> signature
+static int ecc_sign(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+    size_t dataLen = 0;
+    const void* data = luaL_checkbuffer(L, 2, &dataLen);
+    const char* hash_name = luaL_optstring(L, 3, "sha256");
+    mbedtls_md_type_t md_type = hash_name_to_md_type(L, hash_name);
+
+    const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(md_type);
+    unsigned char hash[64];
+    int ret = mbedtls_md(md_info, (const unsigned char*)data, dataLen, hash);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_sign: hash", ret);
+
+    mbedtls_pk_context pk;
+    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+    parse_pk_psa_attributes(L, "ecc_sign", &pk, pem, strlen(pem) + 1, true, PSA_KEY_USAGE_SIGN_HASH,
+                            &attrs);
+    psa_reset_key_attributes(&attrs);
+
+    void* sig = lua_newbuffer(L, MBEDTLS_PK_SIGNATURE_MAX_SIZE);
+    size_t sig_len = 0;
+    ret = mbedtls_pk_sign(&pk, md_type, hash, mbedtls_md_get_size(md_info), (unsigned char*)sig,
+                          MBEDTLS_PK_SIGNATURE_MAX_SIZE, &sig_len);
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_sign", ret);
+
+    void* sig2 = lua_newbuffer(L, sig_len);
+    memcpy(sig2, sig, sig_len);
+    lua_remove(L, -2);
+    return 1;
+}
+
+// verify(public_pem, data, signature, hash?) -> boolean
+static int ecc_verify(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+    size_t dataLen = 0;
+    const void* data = luaL_checkbuffer(L, 2, &dataLen);
+    size_t sigLen = 0;
+    const void* sig = luaL_checkbuffer(L, 3, &sigLen);
+    const char* hash_name = luaL_optstring(L, 4, "sha256");
+    mbedtls_md_type_t md_type = hash_name_to_md_type(L, hash_name);
+
+    const mbedtls_md_info_t* md_info = mbedtls_md_info_from_type(md_type);
+    unsigned char hash[64];
+    int ret = mbedtls_md(md_info, (const unsigned char*)data, dataLen, hash);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_verify: hash", ret);
+
+    mbedtls_pk_context pk;
+    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
+    parse_pk_psa_attributes(L, "ecc_verify", &pk, pem, strlen(pem) + 1, false,
+                            PSA_KEY_USAGE_VERIFY_HASH, &attrs);
+    psa_reset_key_attributes(&attrs);
+
+    ret = mbedtls_pk_verify(&pk, md_type, hash, mbedtls_md_get_size(md_info),
+                            (const unsigned char*)sig, sigLen);
+    mbedtls_pk_free(&pk);
+    lua_pushboolean(L, ret == 0);
+    return 1;
+}
+
+// derive(private_pem, peer_public_pem) -> shared_secret
+static int ecc_derive(lua_State* L) {
+    const char* private_pem = luaL_checkstring(L, 1);
+    const char* peer_public_pem = luaL_checkstring(L, 2);
+
+    mbedtls_svc_key_id_t private_kid;
+    psa_status_t st =
+        pk_pem_to_psa(private_pem, true, PSA_KEY_USAGE_DERIVE, PSA_ALG_ECDH, &private_kid);
+    if (st != PSA_SUCCESS) push_psa_error(L, "ecc_derive: private key", st);
+
+    mbedtls_svc_key_id_t peer_kid;
+    st = pk_pem_to_psa(peer_public_pem, false, PSA_KEY_USAGE_VERIFY_HASH,
+                       PSA_ALG_ECDSA(PSA_ALG_SHA_256), &peer_kid);
+    if (st != PSA_SUCCESS) {
+        psa_destroy_key(private_kid);
+        push_psa_error(L, "ecc_derive: peer key", st);
+    }
+
+    std::vector<uint8_t> peer_raw(200);
+    size_t peer_raw_len = 0;
+    st = psa_export_public_key(peer_kid, peer_raw.data(), peer_raw.size(), &peer_raw_len);
+    psa_destroy_key(peer_kid);
+    if (st != PSA_SUCCESS) {
+        psa_destroy_key(private_kid);
+        push_psa_error(L, "ecc_derive: export peer key", st);
+    }
+
+    size_t secret_max = 200;
+    void* secret = lua_newbuffer(L, secret_max);
+    size_t secret_len = 0;
+    st = psa_raw_key_agreement(PSA_ALG_ECDH, private_kid, peer_raw.data(), peer_raw_len,
+                               (uint8_t*)secret, secret_max, &secret_len);
+    psa_destroy_key(private_kid);
+    if (st != PSA_SUCCESS) push_psa_error(L, "ecc_derive", st);
+
+    void* secret2 = lua_newbuffer(L, secret_len);
+    memcpy(secret2, secret, secret_len);
+    lua_remove(L, -2);
+    return 1;
+}
+
+// private_to_der(private_pem: string) -> buffer
+static int ecc_private_to_der(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)pem, strlen(pem) + 1, nullptr, 0);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_private_to_der", ret);
+    }
+
+    unsigned char buf[16384];
+    ret = mbedtls_pk_write_key_der(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret < 0) mbedtls_lua_error(L, "ecc_private_to_der", ret);
+
+    void* out = lua_newbuffer(L, (size_t)ret);
+    memcpy(out, buf + sizeof(buf) - (size_t)ret, (size_t)ret);
+    return 1;
+}
+
+// public_to_der(public_pem: string) -> buffer
+static int ecc_public_to_der(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)pem, strlen(pem) + 1);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_public_to_der", ret);
+    }
+
+    unsigned char buf[8192];
+    ret = mbedtls_pk_write_pubkey_der(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret < 0) mbedtls_lua_error(L, "ecc_public_to_der", ret);
+
+    void* out = lua_newbuffer(L, (size_t)ret);
+    memcpy(out, buf + sizeof(buf) - (size_t)ret, (size_t)ret);
+    return 1;
+}
+
+// private_from_der(der: buffer) -> private_pem: string
+static int ecc_private_from_der(lua_State* L) {
+    size_t derLen = 0;
+    const void* der = luaL_checkbuffer(L, 1, &derLen);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)der, derLen, nullptr, 0);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_private_from_der", ret);
+    }
+
+    unsigned char buf[16384];
+    ret = mbedtls_pk_write_key_pem(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_private_from_der", ret);
+
+    lua_pushstring(L, (const char*)buf);
+    return 1;
+}
+
+// public_from_der(der: buffer) -> public_pem: string
+static int ecc_public_from_der(lua_State* L) {
+    size_t derLen = 0;
+    const void* der = luaL_checkbuffer(L, 1, &derLen);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)der, derLen);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_public_from_der", ret);
+    }
+
+    unsigned char buf[8192];
+    ret = mbedtls_pk_write_pubkey_pem(&pk, buf, sizeof(buf));
+    mbedtls_pk_free(&pk);
+    if (ret != 0) mbedtls_lua_error(L, "ecc_public_from_der", ret);
+
+    lua_pushstring(L, (const char*)buf);
+    return 1;
+}
+
+// get_key_bits(pem: string) -> number
+static int ecc_get_key_bits(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)pem, strlen(pem) + 1, nullptr, 0);
+    if (ret != 0)
+        ret = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)pem, strlen(pem) + 1);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_get_key_bits", ret);
+    }
+
+    size_t bits = mbedtls_pk_get_bitlen(&pk);
+    mbedtls_pk_free(&pk);
+    lua_pushnumber(L, (lua_Number)bits);
+    return 1;
+}
+
+// get_curve(pem: string) -> string
+static int ecc_get_curve(lua_State* L) {
+    const char* pem = luaL_checkstring(L, 1);
+
+    mbedtls_pk_context pk;
+    mbedtls_pk_init(&pk);
+    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)pem, strlen(pem) + 1, nullptr, 0);
+    if (ret != 0)
+        ret = mbedtls_pk_parse_public_key(&pk, (const unsigned char*)pem, strlen(pem) + 1);
+    if (ret != 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_get_curve", ret);
+    }
+
+    unsigned char buf[8192];
+    ret = mbedtls_pk_write_pubkey_der(&pk, buf, sizeof(buf));
+    if (ret < 0) {
+        mbedtls_pk_free(&pk);
+        mbedtls_lua_error(L, "ecc_get_curve", ret);
+    }
+
+    const char* curve = ecc_curve_name_from_der(buf + sizeof(buf) - (size_t)ret, (size_t)ret);
+    mbedtls_pk_free(&pk);
+    lua_pushstring(L, curve);
+    return 1;
+}
+
+static void push_ecc_table(lua_State* L) {
+    lua_newtable(L);
+    lua_pushcfunction(L, ecc_generate_key, "generate_key");
+    lua_setfield(L, -2, "generate_key");
+    lua_pushcfunction(L, ecc_get_public_pem, "get_public_pem");
+    lua_setfield(L, -2, "get_public_pem");
+    lua_pushcfunction(L, ecc_sign, "sign");
+    lua_setfield(L, -2, "sign");
+    lua_pushcfunction(L, ecc_verify, "verify");
+    lua_setfield(L, -2, "verify");
+    lua_pushcfunction(L, ecc_derive, "derive");
+    lua_setfield(L, -2, "derive");
+    lua_pushcfunction(L, ecc_private_to_der, "private_to_der");
+    lua_setfield(L, -2, "private_to_der");
+    lua_pushcfunction(L, ecc_public_to_der, "public_to_der");
+    lua_setfield(L, -2, "public_to_der");
+    lua_pushcfunction(L, ecc_private_from_der, "private_from_der");
+    lua_setfield(L, -2, "private_from_der");
+    lua_pushcfunction(L, ecc_public_from_der, "public_from_der");
+    lua_setfield(L, -2, "public_from_der");
+    lua_pushcfunction(L, ecc_get_key_bits, "get_key_bits");
+    lua_setfield(L, -2, "get_key_bits");
+    lua_pushcfunction(L, ecc_get_curve, "get_curve");
+    lua_setfield(L, -2, "get_curve");
+}
+
+// ---------------------------------------------------------------------------
+// RSA
+// ---------------------------------------------------------------------------
 
 // generate_key(bits?) -> private_pem: string
 static int rsa_generate_key(lua_State* L) {
@@ -1357,6 +1792,9 @@ LUAU_MODULE_EXPORT int luauopen__crypto(lua_State* L) {
 
     push_kdf_table(L);
     lua_setfield(L, -2, "kdf");
+
+    push_ecc_table(L);
+    lua_setfield(L, -2, "ecc");
 
     push_rsa_table(L);
     lua_setfield(L, -2, "rsa");

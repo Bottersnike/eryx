@@ -122,21 +122,28 @@
                     const rect = target.getBoundingClientRect();
                     const margin = 12;
                     const viewportHeight = window.innerHeight;
+                    const viewportWidth = window.innerWidth;
+                    const availableBelow = viewportHeight - rect.bottom - margin;
+                    const availableAbove = rect.top - margin;
+
                     card.style.width = "auto";
                     card.style.maxWidth = "";
+                    card.style.maxHeight = Math.max(180, viewportHeight - margin * 2) + "px";
 
                     const cardRect = card.getBoundingClientRect();
                     let left = rect.left;
+                    const canFitBelow = cardRect.height <= availableBelow;
+                    const canFitAbove = cardRect.height <= availableAbove;
                     let top = rect.bottom + margin;
 
-                    if (left + cardRect.width > window.innerWidth - margin) {
-                        left = window.innerWidth - cardRect.width - margin;
+                    if (left + cardRect.width > viewportWidth - margin) {
+                        left = viewportWidth - cardRect.width - margin;
                     }
                     if (left < margin) {
                         left = margin;
                     }
 
-                    if (top + cardRect.height > viewportHeight - margin) {
+                    if (!canFitBelow && (canFitAbove || availableAbove > availableBelow)) {
                         top = rect.top - cardRect.height - margin;
                     }
                     if (top < margin) {
@@ -160,23 +167,50 @@
                     positionCard(target);
                 }
 
-                document.addEventListener("pointerenter", function (event) {
-                    const target = event.target.closest("[data-hover-html]");
-                    if (!target) return;
+                function scheduleShow(target, delay) {
+                    clearHideTimer();
                     clearShowTimer();
                     showTimer = setTimeout(function () {
                         showCard(target);
-                    }, 100);
-                }, true);
+                    }, delay);
+                }
 
-                document.addEventListener("pointerleave", function (event) {
+                document.addEventListener("pointerover", function (event) {
                     const target = event.target.closest("[data-hover-html]");
-                    if (target && target === activeTarget) {
+                    if (!target) return;
+                    if (target === activeTarget) {
+                        clearHideTimer();
+                        return;
+                    }
+
+                    scheduleShow(target, activeTarget ? 0 : 100);
+                });
+
+                document.addEventListener("pointerout", function (event) {
+                    const target = event.target.closest("[data-hover-html]");
+                    if (!target) return;
+
+                    const related = event.relatedTarget;
+                    if (related && target.contains(related)) return;
+
+                    const nextTarget = related && related.closest ? related.closest("[data-hover-html]") : null;
+                    if (nextTarget && nextTarget !== target) {
+                        clearShowTimer();
+                        showCard(nextTarget);
+                        return;
+                    }
+
+                    if (related && card.contains(related)) {
+                        clearHideTimer();
+                        return;
+                    }
+
+                    if (target === activeTarget) {
                         scheduleHide();
-                    } else if (target) {
+                    } else {
                         clearShowTimer();
                     }
-                }, true);
+                });
 
                 document.addEventListener("focusin", function (event) {
                     const target = event.target.closest("[data-hover-html]");

@@ -42,7 +42,7 @@ end
 -- Build a FuncDoc from a type table property.
 -- For function-typed props, builds full signature data.
 -- For non-function props, builds a property record (params=nil).
-local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) -> string?, ownerName: string?): FuncDoc
+local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) -> string?, ownerName: string?): FuncDoc?
 	local rawDoc: string? = if prop.location then findDocComment(prop.location.start.line) else nil
 	local parsed: ParsedDoc? = nil
 	local memberDoc: string? = rawDoc
@@ -65,6 +65,9 @@ local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) ->
 		knownParams["..."] = true -- variadic is always valid
 
 		parsed = if rawDoc then parseDocTags(rawDoc, knownParams) else nil
+		if parsed and parsed.ignore then
+			return nil
+		end
 		memberDoc = if parsed then parsed.body else rawDoc
 		if #argNames > 0 and argNameValue(argNames[1]) == "self" then
 			isMethod = true
@@ -116,6 +119,9 @@ local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) ->
 		}
 	else
 		parsed = if rawDoc then parseDocTags(rawDoc) else nil
+		if parsed and parsed.ignore then
+			return nil
+		end
 		memberDoc = if parsed then parsed.body else rawDoc
 
 		local typeParts = if ty then td.describeTypeParts(ty) else nil

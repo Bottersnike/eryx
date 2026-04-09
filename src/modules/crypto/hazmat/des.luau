@@ -14,7 +14,7 @@
 	Only CBC mode is defined for DES in PSA Crypto.
 
 	```luau
-	local des = require("@eryx/crypto/des")
+	local des = require("@eryx/crypto/hazmat/des")
 
 	-- Key MUST be exactly 24 bytes.
 	local key = buffer.fromstring("123456789012345678901234")
@@ -24,7 +24,7 @@
 	```
 ]=]
 
-local _des = require("@eryx/crypto/_crypto").des
+local _des = require("@eryx/crypto/hazmat/_crypto").des
 
 local des = {}
 

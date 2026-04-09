@@ -11,16 +11,13 @@
 	-- Prompt the user
 	stdio.write("Enter your name: ")
 	stdio.flush()
-	local name = stdio.readln()
+	local name = stdio.readline()
 	stdio.write("Hello, " .. (name or "stranger") .. "!\n")
-
-	-- Write to stderr
-	stdio.writeerr("warning: something happened\n")
 
 	-- Check if running in a terminal
 	local tty = stdio.isatty()
 	if tty.stdin then
-	    print("stdin is a terminal")
+		print("stdin is a terminal")
 	end
 	```
 ]=]
@@ -34,13 +31,30 @@ export type TtyInfo = {
 	stderr: boolean,
 }
 
--- Synchronous I/O
+-- Reading
+
+--[=[
+	Yields the current coroutine until data is available on stdin,
+	then returns up to `bytes` bytes (default 4096).
+	Returns `nil` on EOF. Passing `0` returns `""`.
+	Only one `read` may be pending at a time.
+]=]
+function stdio.read(bytes: number?): string?
+	return nil :: any
+end
 
 --[=[
 	Reads up to `bytes` bytes from stdin (default 4096).
-	Returns `nil` on EOF.
+	Returns `nil` on EOF. Passing `0` returns `""`.
 ]=]
-function stdio.read(bytes: number?): string?
+function stdio.readSync(bytes: number?): string?
+	return nil :: any
+end
+
+--[=[
+	Reads stdin in chunks until EOF and returns all data as one string.
+]=]
+function stdio.readall(chunkSize: number?): string
 	return nil :: any
 end
 
@@ -52,28 +66,39 @@ function stdio.readline(): string?
 	return nil :: any
 end
 
---- Writes a string to stdout.
-function stdio.write(data: string) end
+--- Yields, writes a string to stdout, and returns bytes written.
+function stdio.write(data: string): number
+	return 0 :: any
+end
 
---- Writes a string to stderr.
-function stdio.writeerr(data: string) end
+--- Yields, writes a string to stderr, and returns bytes written.
+function stdio.writeerr(data: string): number
+	return 0 :: any
+end
 
---- Flushes the stdout buffer.
+--- Yields and flushes the stdout buffer.
 function stdio.flush() end
 
---- Flushes the stderr buffer.
+--- Yields and flushes the stderr buffer.
 function stdio.flusherr() end
 
--- Asynchronous I/O
-
---[=[
-	Yields the current coroutine until data is available on stdin,
-	then returns up to `bytes` bytes (default 4096).
-	Returns `nil` on EOF.  Only one `readasync` may be pending at a time.
-]=]
-function stdio.readasync(bytes: number?): string?
-	return nil :: any
+--- Writes a string to stdout synchronously.
+--- Returns the number of bytes written.
+function stdio.writeSync(data: string): number
+	return 0 :: any
 end
+
+--- Writes a string to stderr synchronously.
+--- Returns the number of bytes written.
+function stdio.writeerrSync(data: string): number
+	return 0 :: any
+end
+
+--- Flushes the stdout buffer synchronously.
+function stdio.flushSync() end
+
+--- Flushes the stderr buffer synchronously.
+function stdio.flusherrSync() end
 
 -- Utilities
 

@@ -1,135 +1,89 @@
 --[=[
-	Cryptographic hash functions.
+	High-level message digests.
 
-	All functions take a `buffer` and return the raw digest as a `buffer`.
-	For hex output, pipe through `@eryx/encoding/hex`.
+	This module provides a single digest API for application code that
+	does not want to care which hash function is currently preferred.
+
+	The returned digest is a tagged `buffer`, allowing the underlying
+	algorithm to change in the future without making stored digests
+	ambiguous.
+
+	The current format is:
+
+	- `"$h$" || raw_digest`
 
 	```luau
 	local hash = require("@eryx/crypto/hash")
-	local hex  = require("@eryx/encoding/hex")
 
-	print(hex.encode(hash.sha256(buffer.fromstring("hello"))))
-	-- "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+	local digest = hash.digest(buffer.fromstring("hello"))
+	assert(hash.verify(buffer.fromstring("hello"), digest))
 	```
 ]=]
 
-local _h = require("@eryx/crypto/_crypto").hash
+local hazmatHash = require("@eryx/crypto/hazmat/hash")
 
 local hash = {}
 
---[=[
-	Computes the MD5 digest of `data`.
+local DIGEST_TAG = "$h$"
 
-	MD5 is considered cryptographically broken. Use it only for
-	non-security purposes such as checksums or legacy compatibility.
+local function taggedDigest(data: buffer): buffer
+	return buffer.fromstring(DIGEST_TAG .. buffer.tostring(hazmatHash.sha256(data)))
+end
 
-	@param data Input data.
-	@return buffer -- 16-byte (128-bit) digest.
-]=]
-function hash.md5(data: buffer): buffer
-	return _h.md5(data)
+local function constantTimeEqual(left: buffer, right: buffer): boolean
+	local leftLen = buffer.len(left)
+	local rightLen = buffer.len(right)
+
+	if leftLen ~= rightLen then
+		return false
+	end
+
+	local diff = 0
+
+	for i = 0, leftLen - 1 do
+		diff = bit32.bor(diff, bit32.bxor(buffer.readu8(left, i), buffer.readu8(right, i)))
+	end
+
+	return diff == 0
 end
 
 --[=[
-	Computes the SHA-1 digest of `data`.
+	Computes a tagged digest of `data`.
 
-	SHA-1 is deprecated for security-critical uses. Prefer SHA-256 or
-	SHA-3 for new designs.
+	The current implementation uses a fixed hash choice internally and
+	returns a self-describing tagged `buffer` rather than exposing the
+	algorithm at the call site.
 
 	@param data Input data.
-	@return buffer -- 20-byte (160-bit) digest.
+	@return buffer -- Tagged digest.
 ]=]
-function hash.sha1(data: buffer): buffer
-	return _h.sha1(data)
+function hash.digest(data: buffer): buffer
+	return taggedDigest(data)
 end
 
 --[=[
-	Computes the SHA-224 digest of `data`.
+	Verifies that `digest` matches `data`.
 
-	@param data Input data.
-	@return buffer -- 28-byte (224-bit) digest.
+	Returns `true` if the digest is well-formed, uses a supported tag, and
+	matches the supplied data. Returns `false` for malformed or mismatched
+	values.
+
+	@param data   Input data to check.
+	@param digest Tagged digest previously returned by [[digest]].
+	@return boolean -- `true` if the digest matches.
 ]=]
-function hash.sha224(data: buffer): buffer
-	return _h.sha224(data)
+function hash.verify(data: buffer, digest: buffer): boolean
+	local digestLen = buffer.len(digest)
+
+	if digestLen < #DIGEST_TAG then
+		return false
+	end
+
+	if buffer.readstring(digest, 0, #DIGEST_TAG) ~= DIGEST_TAG then
+		return false
+	end
+
+	return constantTimeEqual(taggedDigest(data), digest)
 end
 
---[=[
-	Computes the SHA-256 digest of `data`.
-
-	The most widely deployed secure hash. Suitable for signatures,
-	HMACs, key derivation, and general-purpose integrity checking.
-
-	@param data Input data.
-	@return buffer -- 32-byte (256-bit) digest.
-]=]
-function hash.sha256(data: buffer): buffer
-	return _h.sha256(data)
-end
-
---[=[
-	Computes the SHA-384 digest of `data`.
-
-	@param data Input data.
-	@return buffer -- 48-byte (384-bit) digest.
-]=]
-function hash.sha384(data: buffer): buffer
-	return _h.sha384(data)
-end
-
---[=[
-	Computes the SHA-512 digest of `data`.
-
-	Provides 512-bit security strength. Preferred over SHA-256 when
-	output size matters less than collision resistance.
-
-	@param data Input data.
-	@return buffer -- 64-byte (512-bit) digest.
-]=]
-function hash.sha512(data: buffer): buffer
-	return _h.sha512(data)
-end
-
---[=[
-	Computes the SHA3-224 digest of `data`.
-
-	SHA-3 is based on the Keccak sponge construction, an entirely
-	different design from SHA-2. Resistant to length-extension attacks.
-
-	@param data Input data.
-	@return buffer -- 28-byte (224-bit) digest.
-]=]
-function hash.sha3_224(data: buffer): buffer
-	return _h.sha3_224(data)
-end
-
---[=[
-	Computes the SHA3-256 digest of `data`.
-
-	@param data Input data.
-	@return buffer -- 32-byte (256-bit) digest.
-]=]
-function hash.sha3_256(data: buffer): buffer
-	return _h.sha3_256(data)
-end
-
---[=[
-	Computes the SHA3-384 digest of `data`.
-
-	@param data Input data.
-	@return buffer -- 48-byte (384-bit) digest.
-]=]
-function hash.sha3_384(data: buffer): buffer
-	return _h.sha3_384(data)
-end
-
---[=[
-	Computes the SHA3-512 digest of `data`.
-
-	@param data Input data.
-	@return buffer -- 64-byte (512-bit) digest.
-]=]
-function hash.sha3_512(data: buffer): buffer
-	return _h.sha3_512(data)
-end
-
-return hash
+return table.freeze(hash)

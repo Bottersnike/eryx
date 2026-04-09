@@ -13,5 +13,6 @@
         "vendor/**": true,
         "build*/**": true,
         ".cache/**": true,
-    }
+    },
+    "luau-lsp.inlayHints.typeHintMaxLength": 500,
 }
