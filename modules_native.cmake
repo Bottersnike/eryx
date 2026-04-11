@@ -31,6 +31,7 @@ if(ERYX_USE_CRYPTOGRAPHY)
     )
 
     add_luau_module(crypto/hazmat/_native src/modules/crypto/hazmat/_crypto.cpp src/modules/_native/stub.luau
+        ENTRYPOINT luauopen__crypto
         EXTRA_LIBS mbedtls mbedx509 tfpsacrypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
         EXTRA_INCLUDES "${mbedtls_SOURCE_DIR}/include"
                     "${mbedtls_SOURCE_DIR}/tf-psa-crypto/include"
