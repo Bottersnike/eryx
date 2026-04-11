@@ -82,6 +82,13 @@ export type SslContext = {
 	but all data is transparently encrypted and decrypted via TLS.
 ]=]
 export type SslSocket = {
+	--- Stream capability tag.
+	read readable: true,
+	--- Stream capability tag.
+	read writable: true,
+	--- `true` if the socket has been closed.
+	read closed: boolean?,
+
 	--[=[
 		Sends data over the encrypted connection. Returns the number of
 		bytes actually written, which may be less than the full buffer.
@@ -89,7 +96,7 @@ export type SslSocket = {
 		@param data The data to send.
 		@return number -- Number of bytes sent.
 	]=]
-	send: (self: SslSocket, data: buffer) -> number,
+	send: (self: SslSocket, data: string | buffer) -> number,
 
 	--[=[
 		Sends all data in the buffer, retrying internally until every byte
@@ -97,7 +104,7 @@ export type SslSocket = {
 
 		@param data The data to send.
 	]=]
-	sendAll: (self: SslSocket, data: buffer) -> (),
+	sendAll: (self: SslSocket, data: string | buffer) -> (),
 
 	--[=[
 		Receives up to `bufsize` bytes from the encrypted connection.
@@ -139,6 +146,15 @@ export type SslSocket = {
 		@return number -- The file descriptor.
 	]=]
 	fileNo: (self: SslSocket) -> number,
+
+	-- Stream-compatible aliases
+	read: (self: SslSocket, size: number) -> buffer,
+	readSync: (self: SslSocket, size: number) -> buffer,
+	readBuffer: (self: SslSocket, size: number) -> buffer,
+	readBufferSync: (self: SslSocket, size: number) -> buffer,
+	write: (self: SslSocket, data: string | buffer) -> number,
+	writeSync: (self: SslSocket, data: string | buffer) -> number,
+	closeSync: (self: SslSocket) -> (),
 }
 
 --[=[

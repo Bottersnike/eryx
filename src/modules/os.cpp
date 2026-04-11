@@ -395,6 +395,8 @@ struct ProcessData {
     std::deque<std::string> stderrChunks;
     int stdoutReaderRef;  // coroutine waiting for stdout data
     int stderrReaderRef;  // coroutine waiting for stderr data
+    bool stdoutReaderWantsBuffer;
+    bool stderrReaderWantsBuffer;
 
     int threadRef;   // ref to the waiting coroutine (for exec/wait)
     int processRef;  // self-ref to prevent GC (for spawn)
@@ -405,6 +407,7 @@ struct ProcessData {
     bool stderrClosed;
     bool isExec;   // true for os.exec (auto-collect output), false for os.spawn
     bool isShell;  // true for os.shell (inherit stdio, return code only)
+    bool ownerAlive;
 };
 
 static void alloc_cb(uv_handle_t*, size_t suggested, uv_buf_t* buf) {
@@ -455,8 +458,22 @@ static void resume_reader(ProcessData* pd, int& readerRef, const char* data, siz
     lua_State* TL = lua_tothread(GL, -1);
     lua_pop(GL, 1);
 
+    bool wantsBuffer = false;
+    if (&readerRef == &pd->stdoutReaderRef) {
+        wantsBuffer = pd->stdoutReaderWantsBuffer;
+        pd->stdoutReaderWantsBuffer = false;
+    } else if (&readerRef == &pd->stderrReaderRef) {
+        wantsBuffer = pd->stderrReaderWantsBuffer;
+        pd->stderrReaderWantsBuffer = false;
+    }
+
     if (data) {
-        lua_pushlstring(TL, data, len);
+        if (wantsBuffer) {
+            void* out = lua_newbuffer(TL, len);
+            if (len > 0) memcpy(out, data, len);
+        } else {
+            lua_pushlstring(TL, data, len);
+        }
     } else {
         lua_pushnil(TL);
     }
@@ -469,13 +486,12 @@ static void resume_reader(ProcessData* pd, int& readerRef, const char* data, siz
 static void stdout_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     auto* pd = (ProcessData*)stream->data;
     if (nread > 0) {
-        if (pd->isExec) {
-            pd->stdoutBuf.append(buf->base, nread);
-        } else if (pd->stdoutReaderRef != LUA_NOREF) {
+        pd->stdoutBuf.append(buf->base, nread);
+        if (!pd->isExec && pd->stdoutReaderRef != LUA_NOREF) {
             // A coroutine is waiting - resume it directly with this chunk
             resume_reader(pd, pd->stdoutReaderRef, buf->base, nread);
-        } else {
-            // Queue the chunk for later readStdout() calls
+        } else if (!pd->isExec) {
+            // Queue the chunk for later stdout:read() calls
             pd->stdoutChunks.emplace_back(buf->base, nread);
         }
     }
@@ -493,11 +509,10 @@ static void stdout_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 static void stderr_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     auto* pd = (ProcessData*)stream->data;
     if (nread > 0) {
-        if (pd->isExec) {
-            pd->stderrBuf.append(buf->base, nread);
-        } else if (pd->stderrReaderRef != LUA_NOREF) {
+        pd->stderrBuf.append(buf->base, nread);
+        if (!pd->isExec && pd->stderrReaderRef != LUA_NOREF) {
             resume_reader(pd, pd->stderrReaderRef, buf->base, nread);
-        } else {
+        } else if (!pd->isExec) {
             pd->stderrChunks.emplace_back(buf->base, nread);
         }
     }
@@ -625,8 +640,11 @@ static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts
     pd->processRef = LUA_NOREF;
     pd->stdoutReaderRef = LUA_NOREF;
     pd->stderrReaderRef = LUA_NOREF;
+    pd->stdoutReaderWantsBuffer = false;
+    pd->stderrReaderWantsBuffer = false;
     pd->isExec = isExec;
     pd->isShell = false;
+    pd->ownerAlive = true;
 
     // Init pipes
     uv_pipe_init(rt->loop, &pd->stdinPipe, 0);
@@ -774,8 +792,11 @@ static int os_shell(lua_State* L) {
     pd->processRef = LUA_NOREF;
     pd->stdoutReaderRef = LUA_NOREF;
     pd->stderrReaderRef = LUA_NOREF;
+    pd->stdoutReaderWantsBuffer = false;
+    pd->stderrReaderWantsBuffer = false;
     pd->isExec = false;
     pd->isShell = true;
+    pd->ownerAlive = true;
 
     // We don't need pipes - inherit parent stdio
     uv_stdio_container_t stdio[3];
@@ -838,14 +859,53 @@ static int os_shell(lua_State* L) {
 // ---------------------------------------------------------------------------
 
 static const char* PROCESS_HANDLE_MT = "ProcessHandle";
+static const char* PROCESS_STDIN_STREAM_MT = "ProcessStdinStream";
+static const char* PROCESS_STDOUT_STREAM_MT = "ProcessStdoutStream";
+static const char* PROCESS_STDERR_STREAM_MT = "ProcessStderrStream";
 
 struct ProcessHandle {
     ProcessData* pd;
 };
 
+struct ProcessStdinStreamHandle {
+    ProcessData* pd;
+};
+
+struct ProcessStdoutStreamHandle {
+    ProcessData* pd;
+};
+
+struct ProcessStderrStreamHandle {
+    ProcessData* pd;
+};
+
+static const char* check_bytes_arg(lua_State* L, int idx, size_t* len) {
+    const void* bufData = lua_tobuffer(L, idx, len);
+    if (bufData) return (const char*)bufData;
+    return luaL_checklstring(L, idx, len);
+}
+
 static ProcessData* check_process(lua_State* L, int idx) {
     auto* h = (ProcessHandle*)luaL_checkudata(L, idx, PROCESS_HANDLE_MT);
     if (!h->pd) luaL_error(L, "process handle is invalid");
+    return h->pd;
+}
+
+static ProcessData* check_stdin_stream(lua_State* L, int idx) {
+    auto* h = (ProcessStdinStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDIN_STREAM_MT);
+    if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
+    return h->pd;
+}
+
+static ProcessData* check_stdout_stream(lua_State* L, int idx) {
+    auto* h = (ProcessStdoutStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDOUT_STREAM_MT);
+    if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
+    return h->pd;
+}
+
+static ProcessData* check_stderr_stream(lua_State* L, int idx) {
+    auto* h = (ProcessStderrStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDERR_STREAM_MT);
+    if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
     return h->pd;
 }
 
@@ -884,7 +944,7 @@ static int process_kill(lua_State* L) {
     return 0;
 }
 
-// ProcessHandle:write(data) - write to stdin
+// stdin:write(data)
 static void write_cb(uv_write_t* req, int) {
     auto* buf = (uv_buf_t*)req->data;
     delete[] buf->base;
@@ -892,10 +952,10 @@ static void write_cb(uv_write_t* req, int) {
     delete req;
 }
 
-static int process_write(lua_State* L) {
-    auto* pd = check_process(L, 1);
+static int process_stdin_write(lua_State* L) {
+    auto* pd = check_stdin_stream(L, 1);
     size_t len;
-    const char* data = luaL_checklstring(L, 2, &len);
+    const char* data = check_bytes_arg(L, 2, &len);
 
     auto* req = new uv_write_t;
     auto* buf = new uv_buf_t;
@@ -912,63 +972,230 @@ static int process_write(lua_State* L) {
         delete req;
         luaL_error(L, "failed to write to process stdin: %s", uv_strerror(r));
     }
-    return 0;
+    lua_pushinteger(L, (int)len);
+    return 1;
 }
 
-// ProcessHandle:closeStdin()
-static int process_close_stdin(lua_State* L) {
-    auto* pd = check_process(L, 1);
+static int process_stdin_write_sync(lua_State* L) { return process_stdin_write(L); }
+
+// stdin:close()
+static int process_stdin_close(lua_State* L) {
+    auto* pd = check_stdin_stream(L, 1);
     if (!uv_is_closing((uv_handle_t*)&pd->stdinPipe)) {
         uv_close((uv_handle_t*)&pd->stdinPipe, nullptr);
     }
     return 0;
 }
 
-// ProcessHandle:readStdout() -> yields -> string? (nil on EOF)
-static int process_read_stdout(lua_State* L) {
-    auto* pd = check_process(L, 1);
+static int process_stdin_close_sync(lua_State* L) { return process_stdin_close(L); }
 
-    // If there are queued chunks, return the first one immediately
-    if (!pd->stdoutChunks.empty()) {
-        auto& chunk = pd->stdoutChunks.front();
-        lua_pushlstring(L, chunk.data(), chunk.size());
-        pd->stdoutChunks.pop_front();
+static int process_stream_read_impl(lua_State* L, std::deque<std::string>& chunks, bool& isClosed,
+                                    int& readerRef, bool& readerWantsBuffer, bool canYield,
+                                    bool returnBuffer) {
+    if (!chunks.empty()) {
+        auto& chunk = chunks.front();
+        if (returnBuffer) {
+            void* out = lua_newbuffer(L, chunk.size());
+            if (chunk.size() > 0) memcpy(out, chunk.data(), chunk.size());
+        } else {
+            lua_pushlstring(L, chunk.data(), chunk.size());
+        }
+        chunks.pop_front();
         return 1;
     }
 
-    // If pipe is closed, return nil (EOF)
-    if (pd->stdoutClosed) {
+    if (isClosed) {
         lua_pushnil(L);
         return 1;
     }
 
-    // Yield until data arrives
+    if (!canYield) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    if (readerRef != LUA_NOREF) {
+        luaL_error(L, "a read is already pending on this process stream");
+    }
+
     lua_pushthread(L);
-    pd->stdoutReaderRef = lua_ref(L, -1);
+    readerRef = lua_ref(L, -1);
+    readerWantsBuffer = returnBuffer;
     lua_pop(L, 1);
     return lua_yield(L, 0);
 }
 
-// ProcessHandle:readStderr() -> yields -> string? (nil on EOF)
-static int process_read_stderr(lua_State* L) {
-    auto* pd = check_process(L, 1);
+// stdout:read(size?) -> yields -> string?
+static int process_stdout_read(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    return process_stream_read_impl(L, pd->stdoutChunks, pd->stdoutClosed, pd->stdoutReaderRef,
+                                    pd->stdoutReaderWantsBuffer, true, false);
+}
 
-    if (!pd->stderrChunks.empty()) {
-        auto& chunk = pd->stderrChunks.front();
-        lua_pushlstring(L, chunk.data(), chunk.size());
-        pd->stderrChunks.pop_front();
+// stdout:readSync(size?) -> string?
+static int process_stdout_read_sync(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    return process_stream_read_impl(L, pd->stdoutChunks, pd->stdoutClosed, pd->stdoutReaderRef,
+                                    pd->stdoutReaderWantsBuffer, false, false);
+}
+
+// stdout:readBuffer(size?) -> yields -> buffer?
+static int process_stdout_read_buffer(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    return process_stream_read_impl(L, pd->stdoutChunks, pd->stdoutClosed, pd->stdoutReaderRef,
+                                    pd->stdoutReaderWantsBuffer, true, true);
+}
+
+// stdout:readBufferSync(size?) -> buffer?
+static int process_stdout_read_buffer_sync(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    return process_stream_read_impl(L, pd->stdoutChunks, pd->stdoutClosed, pd->stdoutReaderRef,
+                                    pd->stdoutReaderWantsBuffer, false, true);
+}
+
+static int process_stdout_close(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    if (!pd->stdoutClosed) {
+        pd->stdoutClosed = true;
+        if (!uv_is_closing((uv_handle_t*)&pd->stdoutPipe)) {
+            uv_read_stop((uv_stream_t*)&pd->stdoutPipe);
+            uv_close((uv_handle_t*)&pd->stdoutPipe, nullptr);
+        }
+    }
+    resume_reader(pd, pd->stdoutReaderRef, nullptr, 0);
+    return 0;
+}
+
+static int process_stdout_close_sync(lua_State* L) { return process_stdout_close(L); }
+
+// stderr:read(size?) -> yields -> string?
+static int process_stderr_read(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    return process_stream_read_impl(L, pd->stderrChunks, pd->stderrClosed, pd->stderrReaderRef,
+                                    pd->stderrReaderWantsBuffer, true, false);
+}
+
+// stderr:readSync(size?) -> string?
+static int process_stderr_read_sync(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    return process_stream_read_impl(L, pd->stderrChunks, pd->stderrClosed, pd->stderrReaderRef,
+                                    pd->stderrReaderWantsBuffer, false, false);
+}
+
+// stderr:readBuffer(size?) -> yields -> buffer?
+static int process_stderr_read_buffer(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    return process_stream_read_impl(L, pd->stderrChunks, pd->stderrClosed, pd->stderrReaderRef,
+                                    pd->stderrReaderWantsBuffer, true, true);
+}
+
+// stderr:readBufferSync(size?) -> buffer?
+static int process_stderr_read_buffer_sync(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    return process_stream_read_impl(L, pd->stderrChunks, pd->stderrClosed, pd->stderrReaderRef,
+                                    pd->stderrReaderWantsBuffer, false, true);
+}
+
+static int process_stderr_close(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    if (!pd->stderrClosed) {
+        pd->stderrClosed = true;
+        if (!uv_is_closing((uv_handle_t*)&pd->stderrPipe)) {
+            uv_read_stop((uv_stream_t*)&pd->stderrPipe);
+            uv_close((uv_handle_t*)&pd->stderrPipe, nullptr);
+        }
+    }
+    resume_reader(pd, pd->stderrReaderRef, nullptr, 0);
+    return 0;
+}
+
+static int process_stderr_close_sync(lua_State* L) { return process_stderr_close(L); }
+
+static int process_stdin_index(lua_State* L) {
+    auto* pd = check_stdin_stream(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+
+    if (strcmp(key, "readable") == 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (strcmp(key, "writable") == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (strcmp(key, "closed") == 0) {
+        lua_pushboolean(L, uv_is_closing((uv_handle_t*)&pd->stdinPipe));
         return 1;
     }
 
-    if (pd->stderrClosed) {
-        lua_pushnil(L);
+    luaL_getmetatable(L, PROCESS_STDIN_STREAM_MT);
+    lua_getfield(L, -1, key);
+    return 1;
+}
+
+static int process_stdout_index(lua_State* L) {
+    auto* pd = check_stdout_stream(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+
+    if (strcmp(key, "readable") == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (strcmp(key, "writable") == 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (strcmp(key, "closed") == 0) {
+        lua_pushboolean(L, pd->stdoutClosed);
         return 1;
     }
 
-    lua_pushthread(L);
-    pd->stderrReaderRef = lua_ref(L, -1);
-    lua_pop(L, 1);
-    return lua_yield(L, 0);
+    luaL_getmetatable(L, PROCESS_STDOUT_STREAM_MT);
+    lua_getfield(L, -1, key);
+    return 1;
+}
+
+static int process_stderr_index(lua_State* L) {
+    auto* pd = check_stderr_stream(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+
+    if (strcmp(key, "readable") == 0) {
+        lua_pushboolean(L, 1);
+        return 1;
+    }
+    if (strcmp(key, "writable") == 0) {
+        lua_pushboolean(L, 0);
+        return 1;
+    }
+    if (strcmp(key, "closed") == 0) {
+        lua_pushboolean(L, pd->stderrClosed);
+        return 1;
+    }
+
+    luaL_getmetatable(L, PROCESS_STDERR_STREAM_MT);
+    lua_getfield(L, -1, key);
+    return 1;
+}
+
+static void push_process_stdin_stream(lua_State* L, ProcessData* pd) {
+    auto* h = (ProcessStdinStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdinStreamHandle));
+    h->pd = pd;
+    luaL_getmetatable(L, PROCESS_STDIN_STREAM_MT);
+    lua_setmetatable(L, -2);
+}
+
+static void push_process_stdout_stream(lua_State* L, ProcessData* pd) {
+    auto* h = (ProcessStdoutStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdoutStreamHandle));
+    h->pd = pd;
+    luaL_getmetatable(L, PROCESS_STDOUT_STREAM_MT);
+    lua_setmetatable(L, -2);
+}
+
+static void push_process_stderr_stream(lua_State* L, ProcessData* pd) {
+    auto* h = (ProcessStderrStreamHandle*)lua_newuserdata(L, sizeof(ProcessStderrStreamHandle));
+    h->pd = pd;
+    luaL_getmetatable(L, PROCESS_STDERR_STREAM_MT);
+    lua_setmetatable(L, -2);
 }
 
 // ProcessHandle.pid
@@ -990,6 +1217,21 @@ static int process_index(lua_State* L) {
         return 1;
     }
 
+    if (strcmp(key, "stdin") == 0) {
+        push_process_stdin_stream(L, pd);
+        return 1;
+    }
+
+    if (strcmp(key, "stdout") == 0) {
+        push_process_stdout_stream(L, pd);
+        return 1;
+    }
+
+    if (strcmp(key, "stderr") == 0) {
+        push_process_stderr_stream(L, pd);
+        return 1;
+    }
+
     // Check methods in the metatable
     luaL_getmetatable(L, PROCESS_HANDLE_MT);
     lua_getfield(L, -1, key);
@@ -998,6 +1240,9 @@ static int process_index(lua_State* L) {
 
 static int process_gc(lua_State* L) {
     auto* h = (ProcessHandle*)luaL_checkudata(L, 1, PROCESS_HANDLE_MT);
+    if (h->pd) {
+        h->pd->ownerAlive = false;
+    }
     if (h->pd && !h->pd->exited) {
         uv_process_kill(&h->pd->process, SIGTERM);
     }
@@ -1014,18 +1259,6 @@ static void register_process_metatable(lua_State* L) {
         lua_pushcfunction(L, process_kill, "kill");
         lua_setfield(L, -2, "kill");
 
-        lua_pushcfunction(L, process_write, "write");
-        lua_setfield(L, -2, "write");
-
-        lua_pushcfunction(L, process_close_stdin, "closeStdin");
-        lua_setfield(L, -2, "closeStdin");
-
-        lua_pushcfunction(L, process_read_stdout, "readStdout");
-        lua_setfield(L, -2, "readStdout");
-
-        lua_pushcfunction(L, process_read_stderr, "readStderr");
-        lua_setfield(L, -2, "readStderr");
-
         lua_pushcfunction(L, process_index, "__index");
         lua_setfield(L, -2, "__index");
 
@@ -1033,6 +1266,64 @@ static void register_process_metatable(lua_State* L) {
         lua_setfield(L, -2, "__gc");
 
         lua_pushstring(L, PROCESS_HANDLE_MT);
+        lua_setfield(L, -2, "__type");
+    }
+    lua_pop(L, 1);
+}
+
+static void register_process_stream_metatables(lua_State* L) {
+    if (luaL_newmetatable(L, PROCESS_STDIN_STREAM_MT)) {
+        lua_pushcfunction(L, process_stdin_write, "write");
+        lua_setfield(L, -2, "write");
+        lua_pushcfunction(L, process_stdin_write_sync, "writeSync");
+        lua_setfield(L, -2, "writeSync");
+        lua_pushcfunction(L, process_stdin_close, "close");
+        lua_setfield(L, -2, "close");
+        lua_pushcfunction(L, process_stdin_close_sync, "closeSync");
+        lua_setfield(L, -2, "closeSync");
+        lua_pushcfunction(L, process_stdin_index, "__index");
+        lua_setfield(L, -2, "__index");
+        lua_pushstring(L, PROCESS_STDIN_STREAM_MT);
+        lua_setfield(L, -2, "__type");
+    }
+    lua_pop(L, 1);
+
+    if (luaL_newmetatable(L, PROCESS_STDOUT_STREAM_MT)) {
+        lua_pushcfunction(L, process_stdout_read, "read");
+        lua_setfield(L, -2, "read");
+        lua_pushcfunction(L, process_stdout_read_sync, "readSync");
+        lua_setfield(L, -2, "readSync");
+        lua_pushcfunction(L, process_stdout_read_buffer, "readBuffer");
+        lua_setfield(L, -2, "readBuffer");
+        lua_pushcfunction(L, process_stdout_read_buffer_sync, "readBufferSync");
+        lua_setfield(L, -2, "readBufferSync");
+        lua_pushcfunction(L, process_stdout_close, "close");
+        lua_setfield(L, -2, "close");
+        lua_pushcfunction(L, process_stdout_close_sync, "closeSync");
+        lua_setfield(L, -2, "closeSync");
+        lua_pushcfunction(L, process_stdout_index, "__index");
+        lua_setfield(L, -2, "__index");
+        lua_pushstring(L, PROCESS_STDOUT_STREAM_MT);
+        lua_setfield(L, -2, "__type");
+    }
+    lua_pop(L, 1);
+
+    if (luaL_newmetatable(L, PROCESS_STDERR_STREAM_MT)) {
+        lua_pushcfunction(L, process_stderr_read, "read");
+        lua_setfield(L, -2, "read");
+        lua_pushcfunction(L, process_stderr_read_sync, "readSync");
+        lua_setfield(L, -2, "readSync");
+        lua_pushcfunction(L, process_stderr_read_buffer, "readBuffer");
+        lua_setfield(L, -2, "readBuffer");
+        lua_pushcfunction(L, process_stderr_read_buffer_sync, "readBufferSync");
+        lua_setfield(L, -2, "readBufferSync");
+        lua_pushcfunction(L, process_stderr_close, "close");
+        lua_setfield(L, -2, "close");
+        lua_pushcfunction(L, process_stderr_close_sync, "closeSync");
+        lua_setfield(L, -2, "closeSync");
+        lua_pushcfunction(L, process_stderr_index, "__index");
+        lua_setfield(L, -2, "__index");
+        lua_pushstring(L, PROCESS_STDERR_STREAM_MT);
         lua_setfield(L, -2, "__type");
     }
     lua_pop(L, 1);
@@ -1073,6 +1364,7 @@ static int os_spawn(lua_State* L) {
 
 LUAU_MODULE_EXPORT int luauopen_os(lua_State* L) {
     register_process_metatable(L);
+    register_process_stream_metatables(L);
 
     lua_newtable(L);
 

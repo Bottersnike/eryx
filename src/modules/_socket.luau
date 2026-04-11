@@ -20,7 +20,29 @@
 	```
 ]=]
 
+local _socket = {}
+
+--[=[
+	Sentinel userdata returned by stream-style socket methods (`read`, `write`,
+	and their aliases) when non-blocking I/O would block.
+
+	Compare by identity:
+	```luau
+	if sock:read(4096) == _socket.WOULD_BLOCK then
+		-- retry later
+	end
+	```
+]=]
+_socket.WOULD_BLOCK = (nil :: any) :: WouldBlock
+
 export type Socket = {
+	--- Stream capability tag.
+	read readable: true,
+	--- Stream capability tag.
+	read writable: true,
+	--- `true` if the socket is closed.
+	read closed: boolean?,
+
 	--[=[
 		Binds the socket to a local address and port.
 
@@ -106,7 +128,7 @@ export type Socket = {
 		@param data The data to send.
 		@return number -- Number of bytes sent.
 	]=]
-	send: (self: Socket, data: buffer) -> number?,
+	send: (self: Socket, data: string | buffer) -> number?,
 
 	--[=[
 		Sends all data in the buffer, retrying internally until every byte
@@ -119,7 +141,7 @@ export type Socket = {
 
 		@param data The data to send.
 	]=]
-	sendAll: (self: Socket, data: buffer) -> boolean,
+	sendAll: (self: Socket, data: string | buffer) -> boolean,
 
 	--[=[
 		Sends data to a specific destination address (UDP).
@@ -135,7 +157,7 @@ export type Socket = {
 		@param port The destination port.
 		@return number -- Number of bytes sent.
 	]=]
-	sendTo: (self: Socket, data: buffer, host: string, port: number) -> number?,
+	sendTo: (self: Socket, data: string | buffer, host: string, port: number) -> number?,
 
 	--[=[
 		Receives up to `bufsize` bytes from the socket.
@@ -233,6 +255,15 @@ export type Socket = {
 		@return number -- The file descriptor.
 	]=]
 	fileNo: (self: Socket) -> number,
+
+	-- Stream-compatible aliases
+	read: (self: Socket, size: number) -> string | WouldBlock,
+	readSync: (self: Socket, size: number) -> string | WouldBlock,
+	readBuffer: (self: Socket, size: number) -> buffer | WouldBlock,
+	readBufferSync: (self: Socket, size: number) -> buffer | WouldBlock,
+	write: (self: Socket, data: string | buffer) -> number | WouldBlock,
+	writeSync: (self: Socket, data: string | buffer) -> number | WouldBlock,
+	closeSync: (self: Socket) -> (),
 }
 
 --[=[
@@ -247,8 +278,6 @@ export type AddrInfo = {
 	addr: string,
 	port: number,
 }
-
-local _socket = {}
 
 --[=[
 	Drives the async I/O scheduler.

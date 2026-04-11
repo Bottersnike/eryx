@@ -705,6 +705,13 @@ function Renderer.renderPage(
 		highlightSig = highlight.highlightSignature,
 		signatureHtml = signatureHtml,
 		signatureHtmlLinks = signatureHtmlLinks,
+		typeLink = function(typeName: string, ctx: { [string]: any }): string
+			local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
+			if not currentMod then
+				return ""
+			end
+			return self:_resolveTypeLink(typeName, currentMod) or ""
+		end,
 	}
 
 	-- Merge custom filters (user filters can override builtins)

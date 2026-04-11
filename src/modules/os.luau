@@ -17,11 +17,19 @@ export type ExecResult = {
 	code: number,
 }
 
+local stream = require("@eryx/stream")
+
 export type ProcessHandle = {
 	--- Process ID
 	pid: number,
 	--- Process return code, if it's exited
 	status: number?,
+	--- Writable stream connected to the child process stdin.
+	stdin: stream.WritableStream,
+	--- Readable stream connected to the child process stdout.
+	stdout: stream.ReadableStream,
+	--- Readable stream connected to the child process stderr.
+	stderr: stream.ReadableStream,
 	--- Wait for the process to complete
 	wait: (self: ProcessHandle) -> ExecResult,
 	--[=[
@@ -29,17 +37,6 @@ export type ProcessHandle = {
 		@param signal Optional signal to raise in process
 	]=]
 	kill: (self: ProcessHandle, signal: number?) -> (),
-	--[=[
-		Write data to the process' stdin
-		@param data Data to write
-	]=]
-	write: (self: ProcessHandle, data: string) -> (),
-	--- Close the connecting to the process' stdin
-	closeStdin: (self: ProcessHandle) -> (),
-	--- Read any data available on stdout
-	readStdout: (self: ProcessHandle) -> string?,
-	--- Read any data available on stderr
-	readStderr: (self: ProcessHandle) -> string?,
 }
 
 export type Platform = "windows" | "macos" | "linux" | nil
@@ -183,6 +180,15 @@ end
 
 --[=[
 	Spawn a process, returning an interactive handle to it
+
+	Use stream handles for child process stdio:
+	```luau
+	local p = os.spawn("cat")
+	p.stdin:write("hello\n")
+	p.stdin:close()
+	local chunk = p.stdout:read(4096)
+	```
+
 	@param cmd string The process to spawn. Can be either a complete path, or a name to be resolve on the PATH
 	@param args {string} Arguments to pass to the process
 	@param args SpawnOptions? Optional addition configuration

@@ -404,6 +404,22 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	-- ── Process a type alias ─────────────────────────────────────────────
+	local function extractFunctionExpr(val: luau.AstExpr?): luau.ExprFunction?
+		if not val then
+			return nil
+		end
+		if val.type == "ExprFunction" then
+			return val :: luau.ExprFunction
+		end
+		if val.type == "ExprTypeAssertion" then
+			local inner = (val :: luau.ExprTypeAssertion).expr
+			if inner then
+				return extractFunctionExpr(inner)
+			end
+		end
+		return nil
+	end
+
 	local function extractTableExpr(val: luau.AstExpr): luau.ExprTable?
 		if val.type == "ExprTable" then
 			return val :: luau.ExprTable
@@ -756,7 +772,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		-- Build signatureParts
 		local typeSignatureParts: { SignaturePart }? = nil
-		if not implTable and not isInlineClass and aliasedType and (not typeMembers or #typeMembers == 0) then
+		if not implTable and not isInlineClass and aliasedType then
 			local aliasParts: { SignaturePart } = { tp("type ", false, "keyword") }
 			table.insert(aliasParts, tp(stat.name, true, "type"))
 			if generics and #generics > 0 then
@@ -793,10 +809,13 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			exported = stat.exported,
 			kind = kind,
 			doc = if parsed then parsed.body else doc,
-			signatureFull = if typeMembers and #typeMembers > 0
-				then typePrefix .. members.buildTableSignatureFull(typeMembers :: { FuncDoc })
-				elseif not implTable and not isInlineClass and aliasedType then typePrefix .. td.describeTypeFull(
-					aliasedType
+			extendsTypes = if mixinTypes and #mixinTypes > 0 then mixinTypes else nil,
+			signatureFull = if not implTable
+					and not isInlineClass
+					and aliasedType
+				then typePrefix .. td.describeTypeFull(aliasedType)
+				elseif typeMembers and #typeMembers > 0 then typePrefix .. members.buildTableSignatureFull(
+					typeMembers :: { FuncDoc }
 				)
 				else nil,
 			signatureParts = typeSignatureParts,
@@ -856,14 +875,9 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 						continue
 					end
 
-					if val.type == "ExprFunction" and varName and returnedRoots[varName] then
-						processFunction(
-							varName,
-							nil,
-							val :: luau.ExprFunction,
-							stat.location,
-							if i == 1 then doc else nil
-						)
+					local fnExpr = extractFunctionExpr(val)
+					if fnExpr and varName and returnedRoots[varName] then
+						processFunction(varName, nil, fnExpr, stat.location, if i == 1 then doc else nil)
 						continue
 					end
 
@@ -906,17 +920,12 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 					end
 					local val: luau.AstExpr? = assignStat.values[i]
 
-					if val and val.type == "ExprFunction" then
+					local fnExpr = extractFunctionExpr(val)
+					if fnExpr then
 						local ownerPath = if var.type == "ExprIndexName"
 							then exprToPath((var :: luau.ExprIndexName).expr)
 							else nil
-						processFunction(
-							name,
-							ownerPath,
-							val :: luau.ExprFunction,
-							stat.location,
-							if i == 1 then doc else nil
-						)
+						processFunction(name, ownerPath, fnExpr, stat.location, if i == 1 then doc else nil)
 						continue
 					end
 
@@ -939,11 +948,12 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 								local itemDoc = findDocComment(item.value.location.start.line)
 
-								if item.value.type == "ExprFunction" then
+								local itemFnExpr = extractFunctionExpr(item.value)
+								if itemFnExpr then
 									processFunction(
 										keyName :: string,
 										ownerPath,
-										item.value :: luau.ExprFunction,
+										itemFnExpr,
 										item.value.location,
 										itemDoc
 									)
@@ -1025,7 +1035,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		local mixins = typeMemberMixins[t.name]
-		if mixins and #mixins > 0 then
+		if t.kind == "class" and mixins and #mixins > 0 then
 			if not t.members then
 				t.members = {}
 			end
@@ -1038,7 +1048,9 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		normalizeMemberOrder(t)
-		rebuildTypeSignature(t)
+		if t.kind == "class" then
+			rebuildTypeSignature(t)
+		end
 	end
 
 	local function collectReferencedTypeDocs(
@@ -1155,7 +1167,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		addTypeSection(typeDoc)
 
-		local queue = collectDirectTypeDependencies(typeDoc)
+		local queue = if typeDoc.kind == "class" then collectDirectTypeDependencies(typeDoc) else {}
 		local index = 1
 		while index <= #queue do
 			local dependency = queue[index]

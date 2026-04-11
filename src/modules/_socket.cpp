@@ -117,6 +117,12 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
+static char g_socketWouldBlockSentinel;
+
+static void push_socket_would_block(lua_State* L) {
+    lua_pushlightuserdata(L, &g_socketWouldBlockSentinel);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -177,7 +183,7 @@ static void make_nonblocking(SOCKET fd) {
 // The coroutine yields; whichever fires first resumes it.
 // ---------------------------------------------------------------------------
 
-enum class OpType { RECV, RECVFROM, SEND, SENDALL, SENDTO, ACCEPT, CONNECT };
+enum class OpType { RECV, READ_STR, RECVFROM, SEND, SENDALL, SENDTO, ACCEPT, CONNECT };
 
 struct SocketPendingOp {
     lua_State* thread;
@@ -384,6 +390,18 @@ static void execute_ready_op(SocketPendingOp* op) {
             break;
         }
 
+        case OpType::READ_STR: {
+            char stackbuf[8192];
+            char* tmp = (op->bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[op->bufsize];
+            int n = ::recv(op->socket->fd, tmp, op->bufsize, 0);
+            if (n >= 0) {
+                lua_pushlstring(L, tmp, n);
+                nresults = 1;
+            }
+            if (tmp != stackbuf) delete[] tmp;
+            break;
+        }
+
         case OpType::RECVFROM: {
             char stackbuf[8192];
             char* tmp = (op->bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[op->bufsize];
@@ -518,6 +536,9 @@ static void timeout_cb(uv_timer_t* handle) {
         case OpType::RECVFROM:
             opname = "recvfrom";
             break;
+        case OpType::READ_STR:
+            opname = "read";
+            break;
         case OpType::SEND:
         case OpType::SENDTO:
             opname = "send";
@@ -632,10 +653,16 @@ static int sock_shutdown(lua_State* L) {
     return 0;
 }
 
+static const char* sock_check_bytes_arg(lua_State* L, int idx, size_t* len) {
+    const void* bufData = lua_tobuffer(L, idx, len);
+    if (bufData) return (const char*)bufData;
+    return luaL_checklstring(L, idx, len);
+}
+
 static int sock_send(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
     size_t len = 0;
-    const char* data = (const char*)luaL_checkbuffer(L, 2, &len);
+    const char* data = sock_check_bytes_arg(L, 2, &len);
 
     int sent = ::send(s->fd, data, (int)len, 0);
     if (sent >= 0) {
@@ -653,10 +680,20 @@ static int sock_send(lua_State* L) {
     return lua_yield(L, 0);
 }
 
+static int sock_write_stream(lua_State* L) {
+    int n = sock_send(L);
+    if (n == 1 && lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        push_socket_would_block(L);
+        return 1;
+    }
+    return n;
+}
+
 static int sock_sendall(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
     size_t len = 0;
-    const char* data = (const char*)luaL_checkbuffer(L, 2, &len);
+    const char* data = sock_check_bytes_arg(L, 2, &len);
 
     size_t total = 0;
     while (total < len) {
@@ -684,7 +721,7 @@ static int sock_sendall(lua_State* L) {
 static int sock_sendto(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
     size_t len = 0;
-    const char* data = (const char*)luaL_checkbuffer(L, 2, &len);
+    const char* data = sock_check_bytes_arg(L, 2, &len);
     const char* host = luaL_checkstring(L, 3);
     int port = luaL_checkinteger(L, 4);
 
@@ -734,6 +771,44 @@ static int sock_recv(lua_State* L) {
     }
 
     schedule_socket_op(L, s, OpType::RECV, UV_READABLE, bufsize);
+    return lua_yield(L, 0);
+}
+
+static int sock_read_stream(lua_State* L) {
+    int n = sock_recv(L);
+    if (n == 1 && lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        push_socket_would_block(L);
+        return 1;
+    }
+    return n;
+}
+
+static int sock_read_string_stream(lua_State* L) {
+    LuaSocket* s = check_socket(L, 1);
+    int bufsize = luaL_checkinteger(L, 2);
+    if (bufsize <= 0) luaL_argerror(L, 2, "bufsize must be > 0");
+
+    char stackbuf[8192];
+    char* tmp = (bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[bufsize];
+
+    int n = ::recv(s->fd, tmp, bufsize, 0);
+    if (n >= 0) {
+        lua_pushlstring(L, tmp, n);
+        if (tmp != stackbuf) delete[] tmp;
+        return 1;
+    }
+
+    bool wouldblock = sock_would_block();
+    if (tmp != stackbuf) delete[] tmp;
+
+    if (!wouldblock) sock_error(L, "recv");
+    if (s->timeout == 0) {
+        push_socket_would_block(L);
+        return 1;
+    }
+
+    schedule_socket_op(L, s, OpType::READ_STR, UV_READABLE, bufsize);
     return lua_yield(L, 0);
 }
 
@@ -1029,6 +1104,11 @@ static void register_socket_metatable(lua_State* L) {
 
     // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "readable");
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "writable");
+
     lua_pushcfunction(L, sock_bind, "bind");
     lua_setfield(L, -2, "bind");
 
@@ -1049,6 +1129,10 @@ static void register_socket_metatable(lua_State* L) {
 
     lua_pushcfunction(L, sock_send, "send");
     lua_setfield(L, -2, "send");
+    lua_pushcfunction(L, sock_write_stream, "write");
+    lua_setfield(L, -2, "write");
+    lua_pushcfunction(L, sock_write_stream, "writeSync");
+    lua_setfield(L, -2, "writeSync");
 
     lua_pushcfunction(L, sock_sendall, "sendAll");
     lua_setfield(L, -2, "sendAll");
@@ -1058,6 +1142,14 @@ static void register_socket_metatable(lua_State* L) {
 
     lua_pushcfunction(L, sock_recv, "recv");
     lua_setfield(L, -2, "recv");
+    lua_pushcfunction(L, sock_read_string_stream, "read");
+    lua_setfield(L, -2, "read");
+    lua_pushcfunction(L, sock_read_string_stream, "readSync");
+    lua_setfield(L, -2, "readSync");
+    lua_pushcfunction(L, sock_read_stream, "readBuffer");
+    lua_setfield(L, -2, "readBuffer");
+    lua_pushcfunction(L, sock_read_stream, "readBufferSync");
+    lua_setfield(L, -2, "readBufferSync");
 
     lua_pushcfunction(L, sock_recvfrom, "recvFrom");
     lua_setfield(L, -2, "recvFrom");
@@ -1082,6 +1174,9 @@ static void register_socket_metatable(lua_State* L) {
 
     lua_pushcfunction(L, sock_fileno, "fileNo");
     lua_setfield(L, -2, "fileNo");
+
+    lua_pushcfunction(L, sock_close, "closeSync");
+    lua_setfield(L, -2, "closeSync");
 
     lua_pop(L, 1);
 }
@@ -1126,6 +1221,9 @@ LUAU_MODULE_EXPORT int luauopen__socket(lua_State* L) {
 
     lua_pushcfunction(L, socket_ntohl, "ntohl");
     lua_setfield(L, -2, "ntohl");
+
+    push_socket_would_block(L);
+    lua_setfield(L, -2, "WOULD_BLOCK");
 
     SETCONST(AF_UNSPEC);
     SETCONST(AF_INET);

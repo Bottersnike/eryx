@@ -8,7 +8,9 @@
 	Pure path manipulation lives under `fs.path.*`.
 ]=]
 
-export type File = {
+local stream = require("@eryx/stream")
+
+export type BaseFile = {
 	--- The file path passed to `open`.
 	read path: string,
 	--- The underlying file descriptor number.
@@ -20,50 +22,52 @@ export type File = {
 	--- `true` if the file was opened for writing.
 	read writable: boolean,
 
-	--- Reads up to `size` bytes as a string. Pass `nil` to read remaining.
-	--- @yields
-	read: (self: File, size: number?) -> string,
-	--- Reads up to `size` bytes as a string. Pass `nil` to read remaining.
-	readSync: (self: File, size: number?) -> string,
-	--- Reads up to `size` bytes as a buffer. Pass `nil` to read remaining.
-	--- @yields
-	readBuffer: (self: File, size: number?) -> buffer,
-	--- Reads up to `size` bytes as a buffer. Pass `nil` to read remaining.
-	readBufferSync: (self: File, size: number?) -> buffer,
-
-	--- Writes a string to the file, returns bytes written.
-	--- @yields
-	write: (self: File, data: string) -> number,
-	--- Writes a string to the file, returns bytes written.
-	writeSync: (self: File, data: string) -> number,
-	--- Writes a buffer to the file, returns bytes written.
-	--- @yields
-	writeBuffer: (self: File, data: buffer) -> number,
-	--- Writes a buffer to the file, returns bytes written.
-	writeBufferSync: (self: File, data: buffer) -> number,
-
 	--- Moves the file cursor.
 	--- @param whence string: `set` is default if unspecified, and treats `offset` as an absolute position. `cur` treats `offset` as relative from the current position. `end` seeks relative to the end of the file.
 	--- @return number: The new file offset
-	seek: (self: File, offset: number, whence: ("set" | "cur" | "end")?) -> number,
+	seek: (self: BaseFile, offset: number, whence: ("set" | "cur" | "end")?) -> number,
 	--- Returns the current file cursor position.
-	tell: (self: File) -> number,
+	tell: (self: BaseFile) -> number,
 	--- Truncates the file to `size` bytes, or at the current position if `nil`.
-	truncate: (self: File, size: number?) -> (),
+	truncate: (self: BaseFile, size: number?) -> (),
 	--- Returns the file size in bytes.
-	size: (self: File) -> number,
+	size: (self: BaseFile) -> number,
 
 	--- Flushes buffered writes to disk.
 	--- @yields
-	flush: (self: File) -> (),
+	flush: (self: BaseFile) -> (),
 	--- Flushes buffered writes to disk.
-	flushSync: (self: File) -> (),
+	flushSync: (self: BaseFile) -> (),
 	--- Closes the file. Yield is due to the implicit file flush.
 	--- @yields
-	close: (self: File) -> (),
+	close: (self: BaseFile) -> (),
 	--- Closes the file.
-	closeSync: (self: File) -> (),
+	closeSync: (self: BaseFile) -> (),
 }
+
+export type ReadableFile = BaseFile & stream.ReadableStream
+export type WritableFile = BaseFile & stream.WritableStream
+export type ReadWriteFile = BaseFile & stream.ReadWriteStream
+
+export type File = ReadableFile | WritableFile | ReadWriteFile
+
+type Open =
+	((path: string, mode: "r") -> ReadableFile)
+	& ((path: string, mode: "w") -> WritableFile)
+	& ((path: string, mode: "a") -> WritableFile)
+	& ((path: string, mode: "r+") -> ReadWriteFile)
+	& ((path: string, mode: "w+") -> ReadWriteFile)
+	& ((path: string, mode: "a+") -> ReadWriteFile)
+	& ((path: string, mode: string?) -> File)
+
+type OpenSync =
+	((path: string, mode: "r") -> ReadableFile)
+	& ((path: string, mode: "w") -> WritableFile)
+	& ((path: string, mode: "a") -> WritableFile)
+	& ((path: string, mode: "r+") -> ReadWriteFile)
+	& ((path: string, mode: "w+") -> ReadWriteFile)
+	& ((path: string, mode: "a+") -> ReadWriteFile)
+	& ((path: string, mode: string?) -> File)
 
 local fs = {}
 
@@ -98,14 +102,15 @@ fs.path = table.freeze({
 --- Opens a file and returns a `File` handle.
 --- Mode: `"r"` (default), `"w"`, `"a"`, `"r+"`, `"w+"`, `"a+"`.
 --- @yields
-function fs.open(path: string, mode: string?): File
+fs.open = function(path: string, mode: string?): File
 	return nil :: any
-end
+end :: Open
+
 --- Opens a file and returns a `File` handle.
 --- Mode: `"r"` (default), `"w"`, `"a"`, `"r+"`, `"w+"`, `"a+"`.
-function fs.openSync(path: string, mode: string?): File
+fs.openSync = function(path: string, mode: string?): File
 	return nil :: any
-end
+end :: OpenSync
 
 --- Returns `true` if the path exists on disk.
 function fs.exists(path: string): boolean

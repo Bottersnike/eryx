@@ -416,12 +416,18 @@ static int file_readBuffer(lua_State* L) {
 // File:write(data: string) / File:writeSync(data: string) -> number
 // ---------------------------------------------------------------------------
 
+static const char* check_bytes_arg(lua_State* L, int idx, size_t* len) {
+    const void* bufData = lua_tobuffer(L, idx, len);
+    if (bufData) return (const char*)bufData;
+    return luaL_checklstring(L, idx, len);
+}
+
 static int file_writeSync(lua_State* L) {
     LuaFile* f = check_open_file(L);
     if (!f->canWrite) luaL_error(L, "file not opened for writing");
 
     size_t len;
-    const char* data = luaL_checklstring(L, 2, &len);
+    const char* data = check_bytes_arg(L, 2, &len);
 
     uv_buf_t uvBuf = uv_buf_init((char*)data, (unsigned int)len);
     uv_fs_t req;
@@ -442,7 +448,7 @@ static int file_write(lua_State* L) {
     if (!f->canWrite) luaL_error(L, "file not opened for writing");
 
     size_t len;
-    const char* data = luaL_checklstring(L, 2, &len);
+    const char* data = check_bytes_arg(L, 2, &len);
 
     FsAsyncOp* op = begin_async(L);
     op->buf = uv_buf_init((char*)malloc(len), (unsigned int)len);

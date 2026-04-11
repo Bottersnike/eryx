@@ -365,6 +365,48 @@ local function resolveTypeLink(
 	allModules: { [string]: modules.ModuleInfo },
 	getLink: (any) -> string
 ): string?
+	-- Fully-qualified module path:
+	-- "@pkg/mod.TypeName" or "@pkg/mod" (module page)
+	if typeName:sub(1, 1) == "@" then
+		local lastSlash = typeName:find("/[^/]*$") or 0
+		local dotPos = typeName:find(".", lastSlash + 1, true)
+		if dotPos then
+			local modPath = typeName:sub(1, dotPos - 1)
+			local member = typeName:sub(dotPos + 1)
+			local mod = allModules[modPath]
+			if mod then
+				local anchor = resolveInModule(mod, member)
+				if anchor then
+					return getLink(mod) .. anchor
+				end
+			end
+			return nil
+		end
+
+		local mod = allModules[typeName]
+		if mod then
+			return getLink(mod)
+		end
+		return nil
+	end
+
+	-- Dotted cross-module shorthand:
+	-- "stream.ReadableStream" where "stream" is module last segment.
+	local dotPos = typeName:find(".", 1, true)
+	if dotPos then
+		local prefix = typeName:sub(1, dotPos - 1)
+		local member = typeName:sub(dotPos + 1)
+		for _, mod in allModules do
+			local lastSeg = mod.qualifiedName:match("/([^/]+)$") or mod.qualifiedName
+			if lastSeg == prefix then
+				local anchor = resolveInModule(mod, member)
+				if anchor then
+					return getLink(mod) .. anchor
+				end
+			end
+		end
+	end
+
 	local anchor = resolveInModule(currentModule, typeName)
 	if anchor then
 		return getLink(currentModule) .. anchor

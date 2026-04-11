@@ -151,7 +151,7 @@ suite:test("loop stats expose keyword locations", function()
 	test.expect(fs.hasDo):toBeType("boolean")
 	test.expect(fs.doLocation):toBeType("table")
 
-	local fi = parseOk("for k,v in pairs({}) do end")
+	local fi = parseOk("for k,v in {} do end")
 	local fis = findNode(fi.root, "StatForIn")
 	test.expect(fis.hasIn):toBeType("boolean")
 	test.expect(fis.inLocation):toBeType("table")
@@ -164,7 +164,7 @@ suite:test("basic statement nodes", function()
 		{ src = "print(1)", node = "StatExpr" },
 		{ src = "local x = 1", node = "StatLocal" },
 		{ src = "for i=1,10 do end", node = "StatFor" },
-		{ src = "for k,v in pairs({}) do end", node = "StatForIn" },
+		{ src = "for k,v in {} do end", node = "StatForIn" },
 		{ src = "x = 1", node = "StatAssign" },
 		{ src = "x += 1", node = "StatCompoundAssign" },
 		{ src = "function f() end", node = "StatFunction" },

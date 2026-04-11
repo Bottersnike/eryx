@@ -60,6 +60,7 @@ export type TypeDoc = {
 	exported: boolean,
 	kind: "class" | "table" | "alias",
 	doc: string?,
+	extendsTypes: { string }?,
 	signatureFull: string?,
 	signatureParts: { SignaturePart }?,
 	location: luau.Location,

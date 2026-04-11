@@ -23,6 +23,7 @@
 ]=]
 
 local stdio = {}
+local stream = require("@eryx/stream")
 
 --- Result of `isatty()` -- indicates which streams are connected to a terminal.
 export type TtyInfo = {
@@ -51,6 +52,16 @@ function stdio.readSync(bytes: number?): string?
 	return nil :: any
 end
 
+--- Yields and reads from stdin as a `buffer`.
+function stdio.readBuffer(bytes: number?): buffer?
+	return nil :: any
+end
+
+--- Reads from stdin synchronously as a `buffer`.
+function stdio.readBufferSync(bytes: number?): buffer?
+	return nil :: any
+end
+
 --[=[
 	Reads stdin in chunks until EOF and returns all data as one string.
 ]=]
@@ -67,12 +78,12 @@ function stdio.readline(): string?
 end
 
 --- Yields, writes a string to stdout, and returns bytes written.
-function stdio.write(data: string): number
+function stdio.write(data: string | buffer): number
 	return 0 :: any
 end
 
 --- Yields, writes a string to stderr, and returns bytes written.
-function stdio.writeerr(data: string): number
+function stdio.writeerr(data: string | buffer): number
 	return 0 :: any
 end
 
@@ -84,13 +95,13 @@ function stdio.flusherr() end
 
 --- Writes a string to stdout synchronously.
 --- Returns the number of bytes written.
-function stdio.writeSync(data: string): number
+function stdio.writeSync(data: string | buffer): number
 	return 0 :: any
 end
 
 --- Writes a string to stderr synchronously.
 --- Returns the number of bytes written.
-function stdio.writeerrSync(data: string): number
+function stdio.writeerrSync(data: string | buffer): number
 	return 0 :: any
 end
 
@@ -109,5 +120,27 @@ function stdio.flusherrSync() end
 function stdio.isatty(): TtyInfo
 	return nil :: any
 end
+
+-- Stream handles
+--[=[
+	Process stdin exposed as a stream object.
+	Use `stdio.stdin:read(...)` style calls.
+]=]
+local stdinStream: stream.ReadableStream = nil :: any
+stdio.stdin = stdinStream
+
+--[=[
+	Process stdout exposed as a stream object.
+	Use `stdio.stdout:write(...)` style calls.
+]=]
+local stdoutStream: stream.WritableStream = nil :: any
+stdio.stdout = stdoutStream
+
+--[=[
+	Process stderr exposed as a stream object.
+	Use `stdio.stderr:write(...)` style calls.
+]=]
+local stderrStream: stream.WritableStream = nil :: any
+stdio.stderr = stderrStream
 
 return table.freeze(stdio)

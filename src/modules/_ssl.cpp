@@ -112,6 +112,12 @@ static LuaSSLSocket* check_sslsocket(lua_State* L, int idx) {
     return (LuaSSLSocket*)luaL_checkudata(L, idx, SSLSOCKET_METATABLE);
 }
 
+static const char* sslsock_check_bytes_arg(lua_State* L, int idx, size_t* len) {
+    const void* bufData = lua_tobuffer(L, idx, len);
+    if (bufData) return (const char*)bufData;
+    return luaL_checklstring(L, idx, len);
+}
+
 // Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
 static void sslctx_dtor(void* ud);
 static void sslsock_dtor(void* ud);
@@ -597,7 +603,7 @@ static void sslctx_dtor(void* ud) {
 static int sslsock_send(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     size_t len = 0;
-    const char* data = (const char*)luaL_checkbuffer(L, 2, &len);
+    const char* data = sslsock_check_bytes_arg(L, 2, &len);
 
     int ret;
     do {
@@ -614,7 +620,7 @@ static int sslsock_send(lua_State* L) {
 static int sslsock_sendall(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     size_t len = 0;
-    const char* data = (const char*)luaL_checkbuffer(L, 2, &len);
+    const char* data = sslsock_check_bytes_arg(L, 2, &len);
 
     size_t total = 0;
     while (total < len) {
@@ -1216,17 +1222,38 @@ static void register_sslsocket_metatable(lua_State* L) {
 
     // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "readable");
+    lua_pushboolean(L, 1);
+    lua_setfield(L, -2, "writable");
+
     lua_pushcfunction(L, sslsock_send, "send");
     lua_setfield(L, -2, "send");
+    lua_pushcfunction(L, sslsock_send, "write");
+    lua_setfield(L, -2, "write");
+    lua_pushcfunction(L, sslsock_send, "writeSync");
+    lua_setfield(L, -2, "writeSync");
 
     lua_pushcfunction(L, sslsock_sendall, "sendAll");
     lua_setfield(L, -2, "sendAll");
+    lua_pushcfunction(L, sslsock_sendall, "writeAll");
+    lua_setfield(L, -2, "writeAll");
 
     lua_pushcfunction(L, sslsock_recv, "recv");
     lua_setfield(L, -2, "recv");
+    lua_pushcfunction(L, sslsock_recv, "read");
+    lua_setfield(L, -2, "read");
+    lua_pushcfunction(L, sslsock_recv, "readSync");
+    lua_setfield(L, -2, "readSync");
+    lua_pushcfunction(L, sslsock_recv, "readBuffer");
+    lua_setfield(L, -2, "readBuffer");
+    lua_pushcfunction(L, sslsock_recv, "readBufferSync");
+    lua_setfield(L, -2, "readBufferSync");
 
     lua_pushcfunction(L, sslsock_close, "close");
     lua_setfield(L, -2, "close");
+    lua_pushcfunction(L, sslsock_close, "closeSync");
+    lua_setfield(L, -2, "closeSync");
 
     lua_pushcfunction(L, sslsock_getpeername, "getPeerName");
     lua_setfield(L, -2, "getPeerName");

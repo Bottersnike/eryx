@@ -50,6 +50,12 @@
     <div class="entry-content">{{ c.doc | markdown }}</div>
     {% end %}
 
+    {% if c.extendsTypes and c.extendsTypes | length > 0 then %}
+    <div class="param-entry">
+        <strong>Implements:</strong> {% for i, ext in c.extendsTypes do %}{% if i > 1 then %}, {% end %}{% set extLink = ext | typeLink %}{% if extLink and extLink ~= "" then %}<a href="{{ extLink }}">{{ ext | escape }}</a>{% else %}<span>{{ ext | escape }}</span>{% end %}{% end %}
+    </div>
+    {% end %}
+
 
     {# Properties #}
     <h4>Properties</h4>
@@ -272,7 +278,21 @@
             <div class="entry-content">{{ t.doc | markdown }}</div>
             {% end %}
 
-            {# Members for non-class/table types (show member docs similar to classes) #}
+            <div class="param-entry">
+                {% if t.signatureParts then %}
+                <div class="signature signature-linked">{{ t.signatureParts | signatureHtml }}</div>
+                {% elseif t.signatureFull then %}
+                <div class="signature">{{ t.signatureFull | highlightSig }}</div>
+                {% end %}
+            </div>
+
+            {% if t.extendsTypes and t.extendsTypes | length > 0 then %}
+            <div class="param-entry">
+                <strong>Implements:</strong> {% for i, ext in t.extendsTypes do %}{% if i > 1 then %}, {% end %}{% set extLink = ext | typeLink %}{% if extLink and extLink ~= "" then %}<a href="{{ extLink }}">{{ ext | escape }}</a>{% else %}<span>{{ ext | escape }}</span>{% end %}{% end %}
+            </div>
+            {% end %}
+
+            {# Document only directly declared members for types; inherited members are referenced via Implements. #}
             {% if t.members and t.members | length > 0 then %}
                 {% for _, m in t.members do %}
                 <div class="param-entry">
@@ -286,14 +306,6 @@
                 {% end %}
                 </div>
                 {% end %}
-            {% else %}
-            <div class="param-entry">
-                {% if t.signatureParts then %}
-                <div class="signature signature-linked">{{ t.signatureParts | signatureHtml }}</div>
-                {% elseif t.signatureFull then %}
-                <div class="signature">{{ t.signatureFull | highlightSig }}</div>
-                {% end %}
-            </div>
             {% end %}
         </details>
         {% end %}
