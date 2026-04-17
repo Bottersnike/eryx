@@ -5,6 +5,8 @@
 # For local development
 .luaurc
 
+/src/temp_projects/
+
 # clangd
 /.cache/
 

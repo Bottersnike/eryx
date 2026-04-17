@@ -32,6 +32,14 @@ export type TtyInfo = {
 	stderr: boolean,
 }
 
+export type ReadLineOptions = {
+	--- Line terminator sequence to stop at. Defaults to `"\n"`.
+	terminator: string?,
+	--- Whether to keep the matched terminator in the returned value.
+	--- Defaults to `false`.
+	keepTerminator: boolean?,
+}
+
 -- Reading
 
 --[=[
@@ -70,10 +78,15 @@ function stdio.readall(chunkSize: number?): string
 end
 
 --[=[
-	Reads one line from stdin, stripping the trailing newline.
+	Reads one line from stdin.
+
+	By default this reads until `"\n"` and strips the terminator.
+	Use `options.terminator` to change the delimiter and
+	`options.keepTerminator=true` to keep it.
+
 	Returns `nil` on EOF.
 ]=]
-function stdio.readline(): string?
+function stdio.readline(options: ReadLineOptions?): string?
 	return nil :: any
 end
 
@@ -119,6 +132,21 @@ function stdio.flusherrSync() end
 ]=]
 function stdio.isatty(): TtyInfo
 	return nil :: any
+end
+
+--[=[
+	Enables or disables terminal raw mode for stdin.
+
+	Raw mode is only available when stdin is a TTY.
+	Returns the active raw-mode state after applying the change.
+]=]
+function stdio.setRawMode(enabled: boolean): boolean
+	return false :: any
+end
+
+--- Returns whether stdin raw mode is currently enabled.
+function stdio.isRawMode(): boolean
+	return false :: any
 end
 
 -- Stream handles

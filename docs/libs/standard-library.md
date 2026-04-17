@@ -35,6 +35,7 @@ The remainder of this page lists out every available library. Each available lib
 | [[@eryx/signal]]  | Complete | Provides signals that can be subscribed to              |
 | [[@eryx/date]]    | Complete | Dates and times with timezone support                   |
 | [[@eryx/logging]] | Complete | Structured logging utilities                            |
+| [[@eryx/stream]]  | Complete | Types for interacting with [[Stream]]s                  |
 | Retry helpers     | Planned  | Helpers for retrying failed actions                     |
 | Caching (LRU)?    | Planned  | Function result caching                                 |
 
@@ -55,7 +56,7 @@ The remainder of this page lists out every available library. Each available lib
 
 [^argparse]: Still lacks some advanced CLI ergonomics, but now supports variadic positionals, multi-value options, mutually exclusive groups, and generated shell completion scripts
 
-[^stdio]: Missing raw mode, line terminators, streaming
+[^stdio]: Missing higher-level terminal controls (cursor/screen management, key events), though raw mode and configurable line terminators are supported
 
 ## I/O and OS operations
 
@@ -66,8 +67,8 @@ The remainder of this page lists out every available library. Each available lib
 | [[@eryx/vfs]]       | Mostly complete[^vfs] | Virtual filesystem operations                          |
 | [[@eryx/fs_watch]]  | Complete              | High level filesystem water bindings                   |
 | [[@eryx/_fs_watch]] | Complete              | Low level interface consumed by `fs_watch`             |
-| Glob                | Planned               | Filesystem search using globs                          |
-| Temp files          | Planned               | Creation and management of temporary files and folders |
+| [[@eryx/glob]]      | Complete              | Filesystem search using globs                          |
+| [[@eryx/tempfile]]  | Complete              | Creation and management of temporary files and folders |
 | Windows registry    | Planned               | Access to the Windows registry                         |
 
 [^os]: No OS signals, no users/groups, no resource limits, no forking
@@ -185,4 +186,4 @@ The remainder of this page lists out every available library. Each available lib
 
 [^webui]: Missing most things that make wrapping a webview useful
 
-[^image]: Missing must image manipulation features
+[^image]: Missing most image manipulation features

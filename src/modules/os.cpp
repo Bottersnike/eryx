@@ -33,15 +33,31 @@
 #include "module_api.h"
 #ifdef _WIN32
 // This comment forces module API above shellapi
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <aclapi.h>
+#include <sddl.h>
 #include <shellapi.h>
+#include <windows.h>
 #else
+#include <grp.h>
+#include <pwd.h>
+#include <sys/types.h>
 #include <sys/utsname.h>
+#include <unistd.h>
 
 #include <csignal>
 
 #endif
 
+#include <algorithm>
+#include <cctype>
+#include <csignal>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -53,6 +69,189 @@ static const LuauModuleInfo INFO = {
     .entry = "luauopen_os",
 };
 LUAU_MODULE_INFO()
+
+struct SignalEntry {
+    const char* name;
+    int value;
+};
+
+static std::string normalize_signal_name(const char* in) {
+    std::string out;
+    for (const char* p = in; *p; ++p) {
+        char c = *p;
+        if (c == '-' || c == '_' || c == ' ') continue;
+        out.push_back((char)std::toupper((unsigned char)c));
+    }
+    if (out.rfind("SIG", 0) == 0) {
+        out = out.substr(3);
+    }
+    return out;
+}
+
+static const std::vector<SignalEntry>& supported_signals() {
+    static std::vector<SignalEntry> entries = [] {
+        std::vector<SignalEntry> out;
+#ifdef SIGHUP
+        out.push_back({ "HUP", SIGHUP });
+#endif
+#ifdef SIGINT
+        out.push_back({ "INT", SIGINT });
+#endif
+#ifdef SIGQUIT
+        out.push_back({ "QUIT", SIGQUIT });
+#endif
+#ifdef SIGKILL
+        out.push_back({ "KILL", SIGKILL });
+#endif
+#ifdef SIGTERM
+        out.push_back({ "TERM", SIGTERM });
+#endif
+#ifdef SIGABRT
+        out.push_back({ "ABRT", SIGABRT });
+#endif
+#ifdef SIGUSR1
+        out.push_back({ "USR1", SIGUSR1 });
+#endif
+#ifdef SIGUSR2
+        out.push_back({ "USR2", SIGUSR2 });
+#endif
+#ifdef SIGPIPE
+        out.push_back({ "PIPE", SIGPIPE });
+#endif
+#ifdef SIGCHLD
+        out.push_back({ "CHLD", SIGCHLD });
+#endif
+        return out;
+    }();
+    return entries;
+}
+
+static bool parse_signal_arg(lua_State* L, int idx, int* outSignal) {
+    if (lua_isnoneornil(L, idx)) {
+        *outSignal = SIGTERM;
+        return true;
+    }
+    if (lua_isnumber(L, idx)) {
+        *outSignal = (int)lua_tointeger(L, idx);
+        return true;
+    }
+    if (lua_isstring(L, idx)) {
+        std::string normalized = normalize_signal_name(lua_tostring(L, idx));
+        for (const auto& sig : supported_signals()) {
+            if (normalized == sig.name) {
+                *outSignal = sig.value;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+#ifdef _WIN32
+static bool sid_to_string(PSID sid, std::string& out) {
+    LPSTR sidStr = nullptr;
+    if (!ConvertSidToStringSidA(sid, &sidStr) || sidStr == nullptr) return false;
+    out.assign(sidStr);
+    LocalFree(sidStr);
+    return true;
+}
+
+static bool open_current_process_token(HANDLE* outToken) {
+    return OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, outToken) == TRUE;
+}
+
+static bool get_current_token_sid(TOKEN_INFORMATION_CLASS klass, std::string& sidOut) {
+    HANDLE token = nullptr;
+    if (!open_current_process_token(&token)) return false;
+    DWORD needed = 0;
+    GetTokenInformation(token, klass, nullptr, 0, &needed);
+    if (needed == 0) {
+        CloseHandle(token);
+        return false;
+    }
+    std::vector<unsigned char> buffer(needed);
+    if (!GetTokenInformation(token, klass, buffer.data(), needed, &needed)) {
+        CloseHandle(token);
+        return false;
+    }
+    bool ok = false;
+    if (klass == TokenUser) {
+        auto* user = (TOKEN_USER*)buffer.data();
+        ok = sid_to_string(user->User.Sid, sidOut);
+    } else if (klass == TokenPrimaryGroup) {
+        auto* group = (TOKEN_PRIMARY_GROUP*)buffer.data();
+        ok = sid_to_string(group->PrimaryGroup, sidOut);
+    }
+    CloseHandle(token);
+    return ok;
+}
+
+static bool lookup_account_from_sid_string(const std::string& sidString, std::string& accountName,
+                                           std::string& domain) {
+    PSID sid = nullptr;
+    if (!ConvertStringSidToSidA(sidString.c_str(), &sid)) return false;
+    DWORD nameLen = 0;
+    DWORD domainLen = 0;
+    SID_NAME_USE use = SidTypeUnknown;
+    LookupAccountSidA(nullptr, sid, nullptr, &nameLen, nullptr, &domainLen, &use);
+    if (nameLen == 0) {
+        LocalFree(sid);
+        return false;
+    }
+    std::vector<char> name(nameLen);
+    std::vector<char> dom(domainLen > 0 ? domainLen : 1);
+    if (!LookupAccountSidA(nullptr, sid, name.data(), &nameLen, dom.data(), &domainLen, &use)) {
+        LocalFree(sid);
+        return false;
+    }
+    accountName.assign(name.data());
+    domain.assign(domainLen > 0 ? dom.data() : "");
+    LocalFree(sid);
+    return true;
+}
+
+static bool lookup_sid_string_from_name(const char* name, std::string& sidOut) {
+    DWORD sidSize = 0;
+    DWORD domainSize = 0;
+    SID_NAME_USE use = SidTypeUnknown;
+    LookupAccountNameA(nullptr, name, nullptr, &sidSize, nullptr, &domainSize, &use);
+    if (sidSize == 0) return false;
+    std::vector<unsigned char> sidBuf(sidSize);
+    std::vector<char> domain(domainSize > 0 ? domainSize : 1);
+    if (!LookupAccountNameA(nullptr, name, sidBuf.data(), &sidSize, domain.data(), &domainSize,
+                            &use)) {
+        return false;
+    }
+    return sid_to_string((PSID)sidBuf.data(), sidOut);
+}
+
+static std::string read_profile_path_from_registry_sid(const std::string& sidString) {
+    std::string key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\ProfileList\\" + sidString;
+    DWORD type = 0;
+    DWORD bytes = 0;
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, key.c_str(), "ProfileImagePath",
+                     RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, nullptr,
+                     &bytes) != ERROR_SUCCESS) {
+        return "";
+    }
+    std::vector<char> buf(bytes > 1 ? bytes : 2, '\0');
+    if (RegGetValueA(HKEY_LOCAL_MACHINE, key.c_str(), "ProfileImagePath",
+                     RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, &type, buf.data(),
+                     &bytes) != ERROR_SUCCESS) {
+        return "";
+    }
+    std::string value(buf.data());
+    if (type == REG_EXPAND_SZ) {
+        DWORD needed = ExpandEnvironmentStringsA(value.c_str(), nullptr, 0);
+        if (needed > 0) {
+            std::vector<char> expanded(needed);
+            ExpandEnvironmentStringsA(value.c_str(), expanded.data(), needed);
+            return std::string(expanded.data());
+        }
+    }
+    return value;
+}
+#endif
 
 // ===========================================================================
 // Environment
@@ -289,6 +488,269 @@ static int os_uptime(lua_State* L) {
 static int os_pid(lua_State* L) {
     lua_pushinteger(L, uv_os_getpid());
     return 1;
+}
+
+static int os_uid(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (!get_current_token_sid(TokenUser, sid)) {
+        luaL_error(L, "failed to resolve current user SID");
+    }
+    lua_pushlstring(L, sid.data(), sid.size());
+#else
+    lua_pushinteger(L, (lua_Integer)getuid());
+#endif
+    return 1;
+}
+
+static int os_gid(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (!get_current_token_sid(TokenPrimaryGroup, sid)) {
+        luaL_error(L, "failed to resolve current primary group SID");
+    }
+    lua_pushlstring(L, sid.data(), sid.size());
+#else
+    lua_pushinteger(L, (lua_Integer)getgid());
+#endif
+    return 1;
+}
+
+static int os_euid(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (!get_current_token_sid(TokenUser, sid)) {
+        luaL_error(L, "failed to resolve effective user SID");
+    }
+    lua_pushlstring(L, sid.data(), sid.size());
+#else
+    lua_pushinteger(L, (lua_Integer)geteuid());
+#endif
+    return 1;
+}
+
+static int os_egid(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (!get_current_token_sid(TokenPrimaryGroup, sid)) {
+        luaL_error(L, "failed to resolve effective group SID");
+    }
+    lua_pushlstring(L, sid.data(), sid.size());
+#else
+    lua_pushinteger(L, (lua_Integer)getegid());
+#endif
+    return 1;
+}
+
+#ifndef _WIN32
+static bool parse_uid_subject(lua_State* L, int idx, uid_t* outUid) {
+    if (lua_isnoneornil(L, idx)) {
+        *outUid = geteuid();
+        return true;
+    }
+    if (lua_isnumber(L, idx)) {
+        *outUid = (uid_t)lua_tointeger(L, idx);
+        return true;
+    }
+    const char* value = luaL_checkstring(L, idx);
+    passwd* pwByName = getpwnam(value);
+    if (pwByName) {
+        *outUid = pwByName->pw_uid;
+        return true;
+    }
+    char* end = nullptr;
+    long parsed = strtol(value, &end, 10);
+    if (end && *end == '\0' && parsed >= 0) {
+        *outUid = (uid_t)parsed;
+        return true;
+    }
+    return false;
+}
+
+static bool parse_gid_subject(lua_State* L, int idx, gid_t* outGid) {
+    if (lua_isnoneornil(L, idx)) {
+        *outGid = getegid();
+        return true;
+    }
+    if (lua_isnumber(L, idx)) {
+        *outGid = (gid_t)lua_tointeger(L, idx);
+        return true;
+    }
+    const char* value = luaL_checkstring(L, idx);
+    group* grByName = getgrnam(value);
+    if (grByName) {
+        *outGid = grByName->gr_gid;
+        return true;
+    }
+    char* end = nullptr;
+    long parsed = strtol(value, &end, 10);
+    if (end && *end == '\0' && parsed >= 0) {
+        *outGid = (gid_t)parsed;
+        return true;
+    }
+    return false;
+}
+#endif
+
+static int os_userInfo(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (lua_isnoneornil(L, 1)) {
+        if (!get_current_token_sid(TokenUser, sid)) {
+            luaL_error(L, "failed to resolve current user SID");
+        }
+    } else if (lua_isstring(L, 1)) {
+        sid = lua_tostring(L, 1);
+        if (sid.rfind("S-", 0) != 0) {
+            if (!lookup_sid_string_from_name(sid.c_str(), sid)) {
+                luaL_error(L, "unable to resolve user '%s' to SID", lua_tostring(L, 1));
+            }
+        }
+    } else {
+        luaL_error(L, "userInfo subject must be SID string, account name, or nil");
+    }
+
+    std::string account;
+    std::string domain;
+    lookup_account_from_sid_string(sid, account, domain);
+
+    lua_newtable(L);
+    lua_pushliteral(L, "user");
+    lua_setfield(L, -2, "kind");
+    lua_pushliteral(L, "windows");
+    lua_setfield(L, -2, "platform");
+    lua_pushlstring(L, sid.data(), sid.size());
+    lua_setfield(L, -2, "id");
+    lua_pushlstring(L, sid.data(), sid.size());
+    lua_setfield(L, -2, "sid");
+    if (!account.empty()) {
+        lua_pushlstring(L, account.data(), account.size());
+        lua_setfield(L, -2, "name");
+        lua_pushlstring(L, account.data(), account.size());
+        lua_setfield(L, -2, "accountName");
+    }
+    if (!domain.empty()) {
+        lua_pushlstring(L, domain.data(), domain.size());
+        lua_setfield(L, -2, "domain");
+    }
+    std::string home = read_profile_path_from_registry_sid(sid);
+    if (!home.empty()) {
+        lua_pushlstring(L, home.data(), home.size());
+        lua_setfield(L, -2, "home");
+    }
+    return 1;
+#else
+    uid_t uid = 0;
+    if (!parse_uid_subject(L, 1, &uid)) {
+        luaL_error(L, "unable to resolve user subject");
+    }
+    passwd* pw = getpwuid(uid);
+    if (!pw) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushliteral(L, "user");
+    lua_setfield(L, -2, "kind");
+#if defined(__APPLE__)
+    lua_pushliteral(L, "macos");
+#else
+    lua_pushliteral(L, "linux");
+#endif
+    lua_setfield(L, -2, "platform");
+    lua_pushinteger(L, (lua_Integer)pw->pw_uid);
+    lua_setfield(L, -2, "id");
+    lua_pushinteger(L, (lua_Integer)pw->pw_uid);
+    lua_setfield(L, -2, "uid");
+    lua_pushinteger(L, (lua_Integer)pw->pw_gid);
+    lua_setfield(L, -2, "gid");
+    if (pw->pw_name) {
+        lua_pushstring(L, pw->pw_name);
+        lua_setfield(L, -2, "name");
+    }
+    if (pw->pw_dir) {
+        lua_pushstring(L, pw->pw_dir);
+        lua_setfield(L, -2, "home");
+    }
+    if (pw->pw_shell) {
+        lua_pushstring(L, pw->pw_shell);
+        lua_setfield(L, -2, "shell");
+    }
+    return 1;
+#endif
+}
+
+static int os_groupInfo(lua_State* L) {
+#ifdef _WIN32
+    std::string sid;
+    if (lua_isnoneornil(L, 1)) {
+        if (!get_current_token_sid(TokenPrimaryGroup, sid)) {
+            luaL_error(L, "failed to resolve current primary group SID");
+        }
+    } else if (lua_isstring(L, 1)) {
+        sid = lua_tostring(L, 1);
+        if (sid.rfind("S-", 0) != 0) {
+            if (!lookup_sid_string_from_name(sid.c_str(), sid)) {
+                luaL_error(L, "unable to resolve group '%s' to SID", lua_tostring(L, 1));
+            }
+        }
+    } else {
+        luaL_error(L, "groupInfo subject must be SID string, account name, or nil");
+    }
+
+    std::string account;
+    std::string domain;
+    lookup_account_from_sid_string(sid, account, domain);
+
+    lua_newtable(L);
+    lua_pushliteral(L, "group");
+    lua_setfield(L, -2, "kind");
+    lua_pushliteral(L, "windows");
+    lua_setfield(L, -2, "platform");
+    lua_pushlstring(L, sid.data(), sid.size());
+    lua_setfield(L, -2, "id");
+    lua_pushlstring(L, sid.data(), sid.size());
+    lua_setfield(L, -2, "sid");
+    if (!account.empty()) {
+        lua_pushlstring(L, account.data(), account.size());
+        lua_setfield(L, -2, "name");
+        lua_pushlstring(L, account.data(), account.size());
+        lua_setfield(L, -2, "accountName");
+    }
+    if (!domain.empty()) {
+        lua_pushlstring(L, domain.data(), domain.size());
+        lua_setfield(L, -2, "domain");
+    }
+    return 1;
+#else
+    gid_t gid = 0;
+    if (!parse_gid_subject(L, 1, &gid)) {
+        luaL_error(L, "unable to resolve group subject");
+    }
+    group* gr = getgrgid(gid);
+    if (!gr) {
+        lua_pushnil(L);
+        return 1;
+    }
+    lua_newtable(L);
+    lua_pushliteral(L, "group");
+    lua_setfield(L, -2, "kind");
+#if defined(__APPLE__)
+    lua_pushliteral(L, "macos");
+#else
+    lua_pushliteral(L, "linux");
+#endif
+    lua_setfield(L, -2, "platform");
+    lua_pushinteger(L, (lua_Integer)gr->gr_gid);
+    lua_setfield(L, -2, "id");
+    lua_pushinteger(L, (lua_Integer)gr->gr_gid);
+    lua_setfield(L, -2, "gid");
+    if (gr->gr_name) {
+        lua_pushstring(L, gr->gr_name);
+        lua_setfield(L, -2, "name");
+    }
+    return 1;
+#endif
 }
 
 // ===========================================================================
@@ -937,7 +1399,10 @@ static int process_wait(lua_State* L) {
 // ProcessHandle:kill(signal?)
 static int process_kill(lua_State* L) {
     auto* pd = check_process(L, 1);
-    int signum = (int)luaL_optinteger(L, 2, SIGTERM);
+    int signum = SIGTERM;
+    if (!parse_signal_arg(L, 2, &signum)) {
+        luaL_error(L, "invalid signal; expected number or signal name like TERM/SIGTERM");
+    }
     if (!pd->exited) {
         uv_process_kill(&pd->process, signum);
     }
@@ -1358,6 +1823,20 @@ static int os_spawn(lua_State* L) {
     return 1;
 }
 
+static void push_signal_constants(lua_State* L) {
+    lua_newtable(L);
+    const auto& entries = supported_signals();
+    for (const auto& sig : entries) {
+        lua_pushinteger(L, sig.value);
+        lua_setfield(L, -2, sig.name);
+
+        std::string sigAlias = std::string("SIG") + sig.name;
+        lua_pushinteger(L, sig.value);
+        lua_setfield(L, -2, sigAlias.c_str());
+    }
+    lua_setreadonly(L, -1, true);
+}
+
 // ===========================================================================
 // Module entry
 // ===========================================================================
@@ -1399,6 +1878,20 @@ LUAU_MODULE_EXPORT int luauopen_os(lua_State* L) {
     lua_setfield(L, -2, "uptime");
     lua_pushcfunction(L, os_pid, "pid");
     lua_setfield(L, -2, "pid");
+    lua_pushcfunction(L, os_uid, "uid");
+    lua_setfield(L, -2, "uid");
+    lua_pushcfunction(L, os_gid, "gid");
+    lua_setfield(L, -2, "gid");
+    lua_pushcfunction(L, os_euid, "euid");
+    lua_setfield(L, -2, "euid");
+    lua_pushcfunction(L, os_egid, "egid");
+    lua_setfield(L, -2, "egid");
+    lua_pushcfunction(L, os_userInfo, "userInfo");
+    lua_setfield(L, -2, "userInfo");
+    lua_pushcfunction(L, os_groupInfo, "groupInfo");
+    lua_setfield(L, -2, "groupInfo");
+    push_signal_constants(L);
+    lua_setfield(L, -2, "signals");
 
     // Misc
     lua_pushcfunction(L, os_exit, "exit");

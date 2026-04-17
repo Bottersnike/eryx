@@ -566,23 +566,83 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 
 	local watchers: { any } = {}
 	local wsClients: { any } = {}
-	local lastRefreshTime = 0
 	local WATCH_DEBOUNCE_DEFAULT = 0.6 -- seconds (heavier debounce to avoid loops)
+	local debounceSec = (cfg.watchDebounce or WATCH_DEBOUNCE_DEFAULT)
+	local pendingRefreshTimer: thread? = nil
+	local refreshInProgress = false
+	local refreshRequestedWhileRunning = false
+	local pendingRefreshCount = 0
+	local lastRefreshTrigger = "manual"
+
+	local function notifyReloadClients()
+		for i = #wsClients, 1, -1 do
+			local ws = wsClients[i]
+			local ok = pcall(function()
+				ws:send("reload")
+			end)
+			if not ok then
+				table.remove(wsClients, i)
+			end
+		end
+	end
+
+	local function performRefresh(trigger: string)
+		if refreshInProgress then
+			refreshRequestedWhileRunning = true
+			lastRefreshTrigger = trigger
+			return
+		end
+		refreshInProgress = true
+		log:info(
+			string.format(
+				"Refreshing content... (%s, %d queued change%s)",
+				trigger,
+				pendingRefreshCount,
+				if pendingRefreshCount == 1 then "" else "s"
+			)
+		)
+		pendingRefreshCount = 0
+		lastRefreshTrigger = trigger
+
+		local ok, newState = pcall(buildState, cfg)
+		if ok then
+			state = newState :: DevState
+			notifyReloadClients()
+		else
+			log:error(string.format("Refresh failed (%s): %s", trigger, exception.format(newState)))
+		end
+
+		refreshInProgress = false
+		if refreshRequestedWhileRunning then
+			refreshRequestedWhileRunning = false
+			-- Ensure we don't miss a trailing burst that arrived during refresh.
+			pendingRefreshCount += 1
+			if pendingRefreshTimer then
+				pcall(task.cancel, pendingRefreshTimer)
+				pendingRefreshTimer = nil
+			end
+			pendingRefreshTimer = task.delay(debounceSec, function()
+				pendingRefreshTimer = nil
+				performRefresh(lastRefreshTrigger .. " (post-refresh)")
+			end)
+		end
+	end
+
+	local function scheduleRefresh(trigger: string)
+		pendingRefreshCount += 1
+		lastRefreshTrigger = trigger
+		if pendingRefreshTimer then
+			pcall(task.cancel, pendingRefreshTimer)
+		end
+		pendingRefreshTimer = task.delay(debounceSec, function()
+			pendingRefreshTimer = nil
+			performRefresh(lastRefreshTrigger)
+		end)
+	end
 
 	local handle: DevHandle = {
 		refresh = function()
-			log:info("Refreshing content...")
-			state = buildState(cfg)
-			-- Notify WebSocket clients to reload
-			for i = #wsClients, 1, -1 do
-				local ws = wsClients[i]
-				local ok = pcall(function()
-					ws:send("reload")
-				end)
-				if not ok then
-					table.remove(wsClients, i)
-				end
-			end
+			performRefresh("manual")
 		end,
 	}
 
@@ -591,20 +651,13 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		if not path or not fs.isDirectory(path) then
 			return
 		end
-		local debounceSec = (cfg.watchDebounce or WATCH_DEBOUNCE_DEFAULT)
 		local w = fsWatch.watchDir(path, { recursive = true, debounce = debounceSec })
 		w.changed:connect(function(filename: string, eventType: string)
 			if filter and not filter(filename) then
 				return
 			end
-			local now = os.clock()
-			if now - lastRefreshTime < debounceSec then
-				log:debug(string.format("Skipping rapid watcher event (%s): %s", desc, filename))
-				return
-			end
 			log:info(string.format("Watcher (%s) changed: %s (%s)", desc, filename, eventType))
-			handle.refresh()
-			lastRefreshTime = os.clock()
+			scheduleRefresh(string.format("%s: %s (%s)", desc, filename, eventType))
 		end)
 		table.insert(watchers, w)
 	end
@@ -676,6 +729,10 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 	-- Stop method to cleanup watchers and close server
 	local origStop = handle.stop or function() end
 	function handle.stop()
+		if pendingRefreshTimer then
+			pcall(task.cancel, pendingRefreshTimer)
+			pendingRefreshTimer = nil
+		end
 		for _, w in watchers do
 			pcall(function()
 				w:stop()

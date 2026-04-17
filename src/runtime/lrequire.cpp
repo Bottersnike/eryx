@@ -16,42 +16,6 @@
 
 namespace fs = std::filesystem;
 
-static void dump_stack(lua_State* L) {
-    int top = lua_gettop(L);
-    printf("----- STACK DUMP (top = %d) -----\n", top);
-
-    for (int i = 1; i <= top; i++) {
-        int t = lua_type(L, i);
-        printf("%d: %s", i, lua_typename(L, t));
-
-        switch (t) {
-            case LUA_TSTRING:
-                printf(" = \"%s\"", lua_tostring(L, i));
-                break;
-
-            case LUA_TNUMBER:
-                printf(" = %g", lua_tonumber(L, i));
-                break;
-
-            case LUA_TBOOLEAN:
-                printf(" = %s", lua_toboolean(L, i) ? "true" : "false");
-                break;
-
-            case LUA_TTABLE:
-                printf(" = table@%p", lua_topointer(L, i));
-                break;
-
-            case LUA_TFUNCTION:
-                printf(" = function@%p", lua_topointer(L, i));
-                break;
-        }
-
-        printf("\n");
-    }
-
-    printf("-------------------------------\n");
-}
-
 // Cache status values stored in a parallel registry table named "_LOADED_STATUS".
 static const int CACHE_STATUS_UNSEEN = 0;
 static const int CACHE_STATUS_LOADING = 1;
@@ -97,7 +61,8 @@ static void eryx_cache_registry_set_status(lua_State* L, const char* cacheKey, i
 }
 
 // Store the loader thread (the coroutine actually executing the module)
-static void eryx_cache_registry_set_loader_thread(lua_State* L, const char* cacheKey) {
+static void eryx_cache_registry_set_loader_thread(lua_State* L, lua_State* loaderThread,
+                                                  const char* cacheKey) {
     lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_THREADS");
 
     if (lua_isnil(L, -1)) {
@@ -107,10 +72,22 @@ static void eryx_cache_registry_set_loader_thread(lua_State* L, const char* cach
         lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_THREADS");
     }
 
-    // The loader thread object should be just below the top (at -2)
-    lua_pushvalue(L, -2);
+    lua_pushlightuserdata(L, loaderThread);
     lua_setfield(L, -2, cacheKey);
     lua_pop(L, 1);  // pop _LOADED_THREADS table
+
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_THREAD_KEYS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        lua_newtable(L);
+        lua_pushvalue(L, -1);
+        lua_setfield(L, LUA_REGISTRYINDEX, "_LOADED_THREAD_KEYS");
+    }
+
+    lua_pushlightuserdata(L, loaderThread);
+    lua_pushstring(L, cacheKey);
+    lua_settable(L, -3);
+    lua_pop(L, 1);  // pop _LOADED_THREAD_KEYS table
 }
 
 static void eryx_cache_registry_clear_loader_thread(lua_State* L, const char* cacheKey) {
@@ -119,9 +96,91 @@ static void eryx_cache_registry_clear_loader_thread(lua_State* L, const char* ca
         lua_pop(L, 1);
         return;
     }
+    lua_getfield(L, -1, cacheKey);
+    bool hasThread = lua_islightuserdata(L, -1);
+
     lua_pushnil(L);
-    lua_setfield(L, -2, cacheKey);
-    lua_pop(L, 1);
+    lua_setfield(L, -3, cacheKey);
+
+    lua_remove(L, -2);  // remove _LOADED_THREADS table, leave thread ptr/nil on top
+
+    if (hasThread) {
+        lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_THREAD_KEYS");
+        if (!lua_isnil(L, -1)) {
+            lua_pushvalue(L, -2);
+            lua_pushnil(L);
+            lua_settable(L, -3);
+        }
+        lua_pop(L, 1);  // pop _LOADED_THREAD_KEYS table or nil
+    }
+
+    lua_pop(L, 1);  // pop thread/nil
+}
+
+static bool eryx_cache_registry_get_loader_key(lua_State* GL, lua_State* targetThread,
+                                               std::string* cacheKey) {
+    lua_getfield(GL, LUA_REGISTRYINDEX, "_LOADED_THREAD_KEYS");
+    if (lua_isnil(GL, -1)) {
+        lua_pop(GL, 1);
+        return false;
+    }
+
+    lua_pushlightuserdata(GL, targetThread);
+    lua_gettable(GL, -2);
+
+    bool found = lua_isstring(GL, -1);
+    if (found && cacheKey) {
+        cacheKey->assign(lua_tostring(GL, -1));
+    }
+
+    lua_pop(GL, 2);
+    return found;
+}
+
+static std::string eryx_chunk_name_from_cache_key(const std::string& cacheKey) {
+    size_t separator = cacheKey.find(':');
+    if (separator == std::string::npos || separator + 1 >= cacheKey.size()) {
+        return cacheKey;
+    }
+
+    int type = atoi(cacheKey.substr(0, separator).c_str());
+    std::string path = cacheKey.substr(separator + 1);
+
+    switch (type) {
+        case LocatedModule::TYPE_FILE:
+            return "@" + path;
+        case LocatedModule::TYPE_VFS:
+            return std::string(CHUNK_PREFIX_VFS) + path;
+        case LocatedModule::TYPE_EMBEDDED_NATIVE:
+        case LocatedModule::TYPE_EMBEDDED_SCRIPT:
+            return std::string(CHUNK_PREFIX_ERYX) + path;
+        default:
+            return path;
+    }
+}
+
+static void eryx_push_module_arity_exception(lua_State* L, const std::string& chunkName,
+                                             int returnedCount) {
+    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
+    new (exception) LuaException();
+    luaL_getmetatable(L, EXCEPTION_METATABLE);
+    lua_setmetatable(L, -2);
+    exception->type = ETYPE_RUNTIME;
+    exception->message = "Module " + chunkName + " must return a single value. Returned " +
+                         std::to_string(returnedCount);
+
+    std::string shortSrc = chunkName;
+    if (!shortSrc.empty() && shortSrc[0] == '@') {
+        shortSrc.erase(0, 1);
+    }
+
+    exception->traceback.push_back({
+        .source = chunkName,
+        .short_src = shortSrc,
+        .line = 1,
+        .function = "<top level>",
+        .lineContext = getSourceLine(chunkName.c_str(), 1),
+    });
 }
 
 // Waiters: store a list of threads waiting for a module to finish loading
@@ -167,24 +226,164 @@ static void eryx_cache_registry_wake_waiters(lua_State* L, const char* cacheKey)
         return;
     }
 
-    // waiters table is at top
-    size_t len = lua_objlen(L, -1);
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 3);
+        return;
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 4);
+        return;
+    }
+
+    auto rt = eryx_get_runtime(L);
+    int resultIndex = lua_gettop(L);
+
+    // waiters table is at -3, _LOADED at -2, cached value at -1
+    size_t len = lua_objlen(L, -3);
     for (size_t i = 1; i <= len; ++i) {
-        lua_rawgeti(L, -1, (int)i);
+        lua_rawgeti(L, -3, (int)i);
         if (lua_isthread(L, -1)) {
             lua_State* th = lua_tothread(L, -1);
-            // resume waiter with 0 args; ignore result here
-            int r = lua_resume(th, L, 0);
-            (void)r;
+            lua_pushvalue(L, resultIndex);
+            lua_xmove(L, th, 1);
+
+            lua_pushvalue(L, -1);
+            int waiterRef = lua_ref(L, -1);
+            eryx_push_thread(rt, waiterRef, 1, false);
         }
         lua_pop(L, 1);
     }
 
     // clear the waiters list for this key
     lua_pushnil(L);
-    lua_setfield(L, -3, cacheKey);
+    lua_setfield(L, -5, cacheKey);
 
-    lua_pop(L, 1);  // pop _LOADED_WAITERS table
+    lua_pop(L, 4);  // pop cached value + _LOADED + waiters + _LOADED_WAITERS
+}
+
+static void eryx_require_push_exception_copy(lua_State* L, const LuaException* source) {
+    lua_checkstack(L, 2);
+
+    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
+    new (exception) LuaException();
+    luaL_getmetatable(L, EXCEPTION_METATABLE);
+    lua_setmetatable(L, -2);
+
+    exception->type = source->type;
+    exception->message = source->message;
+    exception->traceback = source->traceback;
+    exception->extra = source->extra;
+
+    std::unique_ptr<LuaExceptionSnapshot> snapshot = eryx_copy_exception(source);
+    if (snapshot) {
+        exception->parent = std::move(snapshot->parent);
+    }
+}
+
+static void eryx_cache_registry_fail_waiters_with_module_arity(lua_State* L, const char* cacheKey,
+                                                               int returnedCount) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 2);
+        return;
+    }
+
+    auto rt = eryx_get_runtime(L);
+    std::string chunkName = eryx_chunk_name_from_cache_key(cacheKey);
+    size_t len = lua_objlen(L, -1);
+    for (size_t i = 1; i <= len; ++i) {
+        lua_rawgeti(L, -1, (int)i);
+        if (lua_isthread(L, -1)) {
+            lua_State* th = lua_tothread(L, -1);
+            eryx_push_module_arity_exception(th, chunkName, returnedCount);
+
+            lua_pushvalue(L, -1);
+            int waiterRef = lua_ref(L, -1);
+            eryx_push_thread(rt, waiterRef, 1, true);
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_pushnil(L);
+    lua_setfield(L, -3, cacheKey);
+    lua_pop(L, 2);
+}
+
+static void eryx_cache_registry_fail_waiters(lua_State* L, const char* cacheKey,
+                                             const char* message) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 2);
+        return;
+    }
+
+    auto rt = eryx_get_runtime(L);
+    size_t len = lua_objlen(L, -1);
+    for (size_t i = 1; i <= len; ++i) {
+        lua_rawgeti(L, -1, (int)i);
+        if (lua_isthread(L, -1)) {
+            lua_State* th = lua_tothread(L, -1);
+            eryx_exception_push_exception(th, ETYPE_REQUIRE, message, nullptr);
+
+            lua_pushvalue(L, -1);
+            int waiterRef = lua_ref(L, -1);
+            eryx_push_thread(rt, waiterRef, 1, true);
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_pushnil(L);
+    lua_setfield(L, -3, cacheKey);
+    lua_pop(L, 2);
+}
+
+static void eryx_cache_registry_fail_waiters_with_exception(lua_State* L, const char* cacheKey,
+                                                            const LuaException* exception) {
+    lua_getfield(L, LUA_REGISTRYINDEX, "_LOADED_WAITERS");
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 1);
+        return;
+    }
+
+    lua_getfield(L, -1, cacheKey);
+    if (lua_isnil(L, -1)) {
+        lua_pop(L, 2);
+        return;
+    }
+
+    auto rt = eryx_get_runtime(L);
+    size_t len = lua_objlen(L, -1);
+    for (size_t i = 1; i <= len; ++i) {
+        lua_rawgeti(L, -1, (int)i);
+        if (lua_isthread(L, -1)) {
+            lua_State* th = lua_tothread(L, -1);
+            eryx_require_push_exception_copy(th, exception);
+
+            lua_pushvalue(L, -1);
+            int waiterRef = lua_ref(L, -1);
+            eryx_push_thread(rt, waiterRef, 1, true);
+        }
+        lua_pop(L, 1);
+    }
+
+    lua_pushnil(L);
+    lua_setfield(L, -3, cacheKey);
+    lua_pop(L, 2);
 }
 
 /**
@@ -235,6 +434,40 @@ static void eryx_cache_registry_cache(lua_State* L, const char* cacheKey) {
     eryx_cache_registry_wake_waiters(L, cacheKey);
 
     lua_pop(L, 1);  // pop _LOADED table
+}
+
+ERYX_API bool eryx_require_maybe_finalize_loader(lua_State* GL, lua_State* L, int status) {
+    if (status == LUA_YIELD) return false;
+
+    std::string cacheKey;
+    if (!eryx_cache_registry_get_loader_key(GL, L, &cacheKey)) {
+        return false;
+    }
+
+    if (status == LUA_OK) {
+        if (lua_gettop(L) == 1) {
+            eryx_cache_registry_cache(L, cacheKey.c_str());
+        } else {
+            eryx_cache_registry_clear_loader_thread(GL, cacheKey.c_str());
+            eryx_cache_registry_set_status(GL, cacheKey.c_str(), CACHE_STATUS_UNSEEN);
+            eryx_cache_registry_fail_waiters_with_module_arity(GL, cacheKey.c_str(), lua_gettop(L));
+        }
+
+        return true;
+    }
+
+    if (!eryx_get_exception(L, -1)) {
+        eryx_coerce_to_exception(L);
+    }
+    eryx_cache_registry_clear_loader_thread(GL, cacheKey.c_str());
+    eryx_cache_registry_set_status(GL, cacheKey.c_str(), CACHE_STATUS_UNSEEN);
+    if (LuaException* exception = eryx_get_exception(L, -1)) {
+        eryx_cache_registry_fail_waiters_with_exception(GL, cacheKey.c_str(), exception);
+    } else {
+        std::string message = eryx_format_exception(L, -1, false);
+        eryx_cache_registry_fail_waiters(GL, cacheKey.c_str(), message.c_str());
+    }
+    return true;
 }
 
 typedef struct ErrorParts {
@@ -417,12 +650,12 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
     int status = lua_resume(ML, L, 0);
 
     bool ok = false;
-
-    // TODO: Make these all exceptions
+    bool badReturnCount = false;
+    int returnedCount = 0;
     if (status == LUA_OK) {
         if (lua_gettop(ML) != 1) {
-            lua_pushfstring(ML, "Module %s must return a single value. Returned %d\n",
-                            chunkName.c_str(), lua_gettop(ML));
+            badReturnCount = true;
+            returnedCount = lua_gettop(ML);
         } else {
             ok = true;
         }
@@ -431,10 +664,10 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
         // be resumed later when the module finishes its async work.
         eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_YIELDED);
 
-        // The thread object for ML was moved onto L earlier and should be
-        // positioned just below the result on the stack; stash it in the
-        // registry so other code can find and resume it.
-        eryx_cache_registry_set_loader_thread(L, cacheKey.c_str());
+        // Stash the loader coroutine in the registry, then remove the copied
+        // thread object from the caller stack before we yield require().
+        eryx_cache_registry_set_loader_thread(L, ML, cacheKey.c_str());
+        lua_pop(L, 1);
 
         // Indicate to the caller that the module yielded. We return -1 as a
         // sentinel; the caller (`eryx_lua_require`) will add the current
@@ -442,6 +675,15 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
         return -1;
     } else {
         // Any runtime error. Leave it on the stack where it is
+    }
+
+    if (badReturnCount) {
+        eryx_push_module_arity_exception(L, chunkName, returnedCount);
+
+        // remove ML thread from L stack
+        lua_remove(L, -2);
+
+        lua_error(L);
     }
 
     if (!ok) {

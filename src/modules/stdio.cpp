@@ -6,6 +6,15 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <termios.h>
+#include <unistd.h>
+#endif
 
 #include "lua.h"
 #include "lualib.h"
@@ -43,6 +52,95 @@ struct AsyncWriteData {
     size_t written;
     int errNo;
 };
+
+struct RawModeState {
+    bool initialized;
+    bool supported;
+    bool enabled;
+#ifdef _WIN32
+    HANDLE stdinHandle;
+    DWORD originalMode;
+#else
+    struct termios originalTermios;
+#endif
+};
+
+static RawModeState g_rawMode = {};
+
+static void stdio_init_raw_mode_state() {
+    if (g_rawMode.initialized) return;
+    g_rawMode.initialized = true;
+    g_rawMode.supported = false;
+    g_rawMode.enabled = false;
+
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_INPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE || handle == nullptr) return;
+
+    DWORD mode = 0;
+    if (!GetConsoleMode(handle, &mode)) return;
+
+    g_rawMode.supported = true;
+    g_rawMode.stdinHandle = handle;
+    g_rawMode.originalMode = mode;
+#else
+    if (!isatty(STDIN_FILENO)) return;
+
+    struct termios term = {};
+    if (tcgetattr(STDIN_FILENO, &term) != 0) return;
+
+    g_rawMode.supported = true;
+    g_rawMode.originalTermios = term;
+#endif
+}
+
+static void stdio_set_raw_mode_impl(lua_State* L, bool enabled) {
+    stdio_init_raw_mode_state();
+    if (!g_rawMode.supported) {
+        if (!enabled) {
+            g_rawMode.enabled = false;
+            return;
+        }
+        luaL_error(L, "raw mode is unavailable because stdin is not a TTY");
+    }
+
+    if (enabled) {
+        if (g_rawMode.enabled) return;
+#ifdef _WIN32
+        DWORD mode = g_rawMode.originalMode;
+        mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
+        mode |= ENABLE_EXTENDED_FLAGS;
+        if (!SetConsoleMode(g_rawMode.stdinHandle, mode)) {
+            luaL_error(L, "failed to enable raw mode");
+        }
+#else
+        struct termios raw = g_rawMode.originalTermios;
+        raw.c_iflag &= ~(BRKINT | ICRNL | INPCK | ISTRIP | IXON);
+        raw.c_oflag &= ~(OPOST);
+        raw.c_cflag |= CS8;
+        raw.c_lflag &= ~(ECHO | ICANON | IEXTEN | ISIG);
+        raw.c_cc[VMIN] = 1;
+        raw.c_cc[VTIME] = 0;
+        if (tcsetattr(STDIN_FILENO, TCSANOW, &raw) != 0) {
+            luaL_error(L, "failed to enable raw mode: %s", strerror(errno));
+        }
+#endif
+        g_rawMode.enabled = true;
+        return;
+    }
+
+    if (!g_rawMode.enabled) return;
+#ifdef _WIN32
+    if (!SetConsoleMode(g_rawMode.stdinHandle, g_rawMode.originalMode)) {
+        luaL_error(L, "failed to disable raw mode");
+    }
+#else
+    if (tcsetattr(STDIN_FILENO, TCSANOW, &g_rawMode.originalTermios) != 0) {
+        luaL_error(L, "failed to disable raw mode: %s", strerror(errno));
+    }
+#endif
+    g_rawMode.enabled = false;
+}
 
 static const char* stdio_check_bytes_arg(lua_State* L, int idx, size_t* len) {
     const void* bufData = lua_tobuffer(L, idx, len);
@@ -132,6 +230,40 @@ static std::string stdio_error_message(const char* prefix, int errNo) {
     if (errNo == 0) return std::string(prefix) + ": unknown error";
     int uvErr = uv_translate_sys_error(errNo);
     return std::string(prefix) + ": " + uv_strerror(uvErr);
+}
+
+struct ReadLineOptions {
+    std::string terminator;
+    bool keepTerminator;
+};
+
+static ReadLineOptions stdio_readline_options(lua_State* L) {
+    ReadLineOptions opts;
+    opts.terminator = "\n";
+    opts.keepTerminator = false;
+
+    if (lua_gettop(L) < 1 || lua_isnoneornil(L, 1)) return opts;
+    luaL_checktype(L, 1, LUA_TTABLE);
+
+    lua_getfield(L, 1, "terminator");
+    if (!lua_isnil(L, -1)) {
+        size_t len = 0;
+        const char* term = luaL_checklstring(L, -1, &len);
+        if (len == 0) {
+            lua_pop(L, 1);
+            luaL_error(L, "readline terminator must not be empty");
+        }
+        opts.terminator.assign(term, len);
+    }
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "keepTerminator");
+    if (!lua_isnil(L, -1)) {
+        opts.keepTerminator = lua_toboolean(L, -1);
+    }
+    lua_pop(L, 1);
+
+    return opts;
 }
 
 static void async_write_after_cb(uv_work_t* req, int status) {
@@ -239,22 +371,52 @@ static int stdio_readall(lua_State* L) {
 
 // stdio.readline() -> string?
 static int stdio_readline(lua_State* L) {
+    ReadLineOptions options = stdio_readline_options(L);
+    const std::string& terminator = options.terminator;
+    bool keepTerminator = options.keepTerminator;
+
     std::string line;
+    bool matched = false;
     int c;
     while ((c = fgetc(stdin)) != EOF) {
-        if (c == '\n') break;
         line += (char)c;
+        if (line.size() >= terminator.size()) {
+            size_t start = line.size() - terminator.size();
+            if (memcmp(line.data() + start, terminator.data(), terminator.size()) == 0) {
+                matched = true;
+                break;
+            }
+        }
     }
 
     if (c == EOF && line.empty()) {
         lua_pushnil(L);
     } else {
-        // Strip trailing \r for Windows line endings
-        if (!line.empty() && line.back() == '\r') {
+        if (matched && !keepTerminator) {
+            line.resize(line.size() - terminator.size());
+        }
+        // Keep backwards-compatible behavior for default newline handling.
+        if (!keepTerminator && terminator == "\n" && !line.empty() && line.back() == '\r') {
             line.pop_back();
         }
         lua_pushlstring(L, line.data(), line.size());
     }
+    return 1;
+}
+
+// stdio.setRawMode(enabled: boolean) -> boolean
+static int stdio_setRawMode(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    bool enabled = lua_toboolean(L, 1);
+    stdio_set_raw_mode_impl(L, enabled);
+    lua_pushboolean(L, g_rawMode.enabled);
+    return 1;
+}
+
+// stdio.isRawMode() -> boolean
+static int stdio_isRawMode(lua_State* L) {
+    stdio_init_raw_mode_state();
+    lua_pushboolean(L, g_rawMode.enabled);
     return 1;
 }
 
@@ -572,6 +734,10 @@ static int stdio_stdin_readBufferSync(lua_State* L) {
     stdio_stream_shift_optional_arg(L);
     return stdio_readBufferSync(L);
 }
+static int stdio_stdin_readline(lua_State* L) {
+    stdio_stream_shift_optional_arg(L);
+    return stdio_readline(L);
+}
 
 // stdout stream wrappers
 static int stdio_stdout_write(lua_State* L) {
@@ -629,6 +795,10 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "flusherrSync");
     lua_pushcfunction(L, stdio_readline, "readline");
     lua_setfield(L, -2, "readline");
+    lua_pushcfunction(L, stdio_setRawMode, "setRawMode");
+    lua_setfield(L, -2, "setRawMode");
+    lua_pushcfunction(L, stdio_isRawMode, "isRawMode");
+    lua_setfield(L, -2, "isRawMode");
 
     // Utility
     lua_pushcfunction(L, stdio_isatty, "isatty");
@@ -650,6 +820,8 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "readBuffer");
     lua_pushcfunction(L, stdio_stdin_readBufferSync, "readBufferSync");
     lua_setfield(L, -2, "readBufferSync");
+    lua_pushcfunction(L, stdio_stdin_readline, "readline");
+    lua_setfield(L, -2, "readline");
     lua_pushcfunction(L, stdio_stream_cannot_close, "close");
     lua_setfield(L, -2, "close");
     lua_pushcfunction(L, stdio_stream_cannot_close, "closeSync");

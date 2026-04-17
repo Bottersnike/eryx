@@ -1,3 +1,6 @@
+--[=[
+	Options controlling how a child process is spawned.
+]=]
 export type SpawnOptions = {
 	--- Specify the directory for the child process
 	cwd: string?,
@@ -6,19 +9,29 @@ export type SpawnOptions = {
 	--[=[
 		Run this as a shell command
 		:::warning
-		    This passes the provided command and arguments directly to `cmd.exe /C`
+		This passes the provided command and arguments directly to `cmd.exe /C`
+		:::
 	]=]
 	shell: boolean?,
 }
 
+--[=[
+	Result of `os.exec(...)`.
+]=]
 export type ExecResult = {
+	--- Captured stdout output.
 	stdout: string,
+	--- Captured stderr output.
 	stderr: string,
+	--- Process exit status code.
 	code: number,
 }
 
 local stream = require("@eryx/stream")
 
+--[=[
+	Handle to a running child process returned by [[os.spawn]].
+]=]
 export type ProcessHandle = {
 	--- Process ID
 	pid: number,
@@ -36,17 +49,63 @@ export type ProcessHandle = {
 		Kill the process
 		@param signal Optional signal to raise in process
 	]=]
-	kill: (self: ProcessHandle, signal: number?) -> (),
+	kill: (self: ProcessHandle, signal: number | string?) -> (),
 }
 
+--[=[
+	Cross-platform principal identifier.
+	On POSIX this is typically numeric (`uid`/`gid`), and on Windows this is typically a SID string.
+]=]
+export type PrincipalId = number | string
+
+--[=[
+	Resolved user/group metadata.
+	Fields may vary by platform.
+]=]
+export type PrincipalInfo = {
+	--- Canonical identifier for the principal.
+	id: PrincipalId,
+	--- Friendly account/group name when available.
+	name: string?,
+	--- Principal category.
+	kind: "user" | "group",
+	--- Platform that produced this identity record.
+	platform: Platform,
+	--- POSIX uid when available.
+	uid: number?,
+	--- POSIX gid when available.
+	gid: number?,
+	--- Windows SID when available.
+	sid: string?,
+	--- Home/profile directory when available.
+	home: string?,
+	--- Login shell when available (POSIX).
+	shell: string?,
+	--- Windows account domain when available.
+	domain: string?,
+	--- Windows account name when available.
+	accountName: string?,
+}
+
+--[=[
+	Supported host platforms.
+]=]
 export type Platform = "windows" | "macos" | "linux" | nil
+
+--[=[
+	Supported CPU architecture identifiers.
+]=]
 export type Arch = "x64" | "arm64" | "arm" | "x86" | nil
 
 local os = {}
 
+--- Common process signal constants (`TERM`, `SIGTERM`, `INT`, etc).
+os.signals = nil :: any
+
 --[=[
 	Get a specific environment variable
-	@param key string Environment variable to get
+	@param key Environment variable name.
+	@return Environment variable value, or nil when undefined.
 ]=]
 function os.getenv(key: string): string?
 	return nil :: any
@@ -54,12 +113,15 @@ end
 
 --[=[
 	Set or unset a specific environment variable
-	@param key string Environment variable to set
-	@param value string? Value to set, or nil to unset
+	@param key Environment variable name.
+	@param value Value to set, or nil to unset.
 ]=]
 function os.setenv(key: string, value: string?) end
 
---- Get all currently defined environment variables
+--[=[
+	Get all currently defined environment variables.
+	@return A table of environment variables keyed by name.
+]=]
 function os.environ(): { [string]: string }
 	return nil :: any
 end
@@ -78,75 +140,161 @@ function os.luauVersion(): { release: string, hash: string }
 	return nil :: any
 end
 
---- Get the current system platform
+--[=[
+	Get the current system platform.
+	@return Current platform identifier.
+]=]
 function os.platform(): Platform
 	return nil :: any
 end
 
---- Get the current system arch
+--[=[
+	Get the current system architecture.
+	@return Current CPU architecture identifier.
+]=]
 function os.arch(): Arch
 	return nil :: any
 end
 
---- Get the current system hostname
+--[=[
+	Get the current system hostname.
+	@return Hostname reported by the operating system.
+]=]
 function os.hostname(): string
 	return nil :: any
 end
 
---- Get the current user's temporary directory
+--[=[
+	Get the current user's temporary directory.
+	@return Absolute path to the temp directory.
+]=]
 function os.tmpdir(): string
 	return nil :: any
 end
 
---- Get the current user's home directory
+--[=[
+	Get the current user's home directory.
+	@return Absolute path to the home/profile directory.
+]=]
 function os.homedir(): string
 	return nil :: any
 end
 
---- Get the number of CPUs present
+--[=[
+	Get the number of CPUs present.
+	@return Number of logical CPUs.
+]=]
 function os.cpucount(): number
 	return nil :: any
 end
 
---- Get the total system memory in KiB
+--[=[
+	Get the total system memory in KiB.
+	@return Total memory in kibibytes.
+]=]
 function os.totalmem(): number
 	return nil :: any
 end
 
---- Get the free system memory in KiB
+--[=[
+	Get the free system memory in KiB.
+	@return Free memory in kibibytes.
+]=]
 function os.freemem(): number
 	return nil :: any
 end
 
---- Get the system uptime in seconds
+--[=[
+	Get the system uptime in seconds.
+	@return Seconds since system boot.
+]=]
 function os.uptime(): number
 	return nil :: any
 end
 
---- Get the current process PID
+--[=[
+	Get the current process PID.
+	@return Current process identifier.
+]=]
 function os.pid(): number
 	return nil :: any
 end
 
 --[=[
+	Current process user identifier (`uid` on POSIX, SID string on Windows).
+	@return Current user identifier.
+]=]
+function os.uid(): PrincipalId
+	return nil :: any
+end
+
+--[=[
+	Current process group identifier (`gid` on POSIX, SID string on Windows).
+	@return Current group identifier.
+]=]
+function os.gid(): PrincipalId
+	return nil :: any
+end
+
+--[=[
+	Effective user identifier (`euid` on POSIX, SID string on Windows).
+	@return Effective user identifier.
+]=]
+function os.euid(): PrincipalId
+	return nil :: any
+end
+
+--[=[
+	Effective group identifier (`egid` on POSIX, SID string on Windows).
+	@return Effective group identifier.
+]=]
+function os.egid(): PrincipalId
+	return nil :: any
+end
+
+--[=[
+	Resolve user details for current user or an explicit subject.
+	@param subject Optional uid/SID or user name. Defaults to current user.
+	@return Resolved user details, or nil when not found.
+]=]
+function os.userInfo(subject: PrincipalId?): PrincipalInfo?
+	return nil :: any
+end
+
+--[=[
+	Resolve group details for current group or an explicit subject.
+	@param subject Optional gid/SID or group name. Defaults to current group.
+	@return Resolved group details, or nil when not found.
+]=]
+function os.groupInfo(subject: PrincipalId?): PrincipalInfo?
+	return nil :: any
+end
+
+--[=[
 	Exit the process with a specific status code
-	@param code number? Process exit code
+	@param code Process exit code. Defaults to `0`.
 ]=]
 function os.exit(code: number?) end
 
---- Get the current time of the system clock
+--[=[
+	Get the current monotonic system clock time in seconds.
+	@return Monotonic clock value in seconds.
+]=]
 function os.clock(): number
 	return nil :: any
 end
 
---- Get the current working directory
+--[=[
+	Get the current working directory.
+	@return Absolute path to the current working directory.
+]=]
 function os.cwd(): string
 	return nil :: any
 end
 
 --[=[
 	Change the current working directory
-	@param path string New directory
+	@param path New working directory path.
 ]=]
 function os.chdir(path: string) end
 
@@ -157,6 +305,7 @@ function os.chdir(path: string) end
 	and script path are automatically stripped.
 
 	For example, `eryx run foo.luau --verbose bar` returns `{"--verbose", "bar"}`.
+	@return Ordered list of user-supplied command-line arguments.
 ]=]
 function os.cliargs(): { string }
 	return nil :: any
@@ -170,9 +319,10 @@ end
 	os.spawn(...):wait()
 	```
 
-	@param cmd string The process to spawn. Can be either a complete path, or a name to be resolve on the PATH
-	@param args {string} Arguments to pass to the process
-	@param args SpawnOptions? Optional addition configuration
+	@param cmd Executable path or name to resolve on PATH.
+	@param args Ordered argument list passed to the process.
+	@param opts Optional spawn configuration.
+	@return Process result containing captured output and exit code.
 ]=]
 function os.exec(cmd: string, args: { string }, opts: SpawnOptions?): ExecResult
 	return nil :: any
@@ -189,9 +339,10 @@ end
 	local chunk = p.stdout:read(4096)
 	```
 
-	@param cmd string The process to spawn. Can be either a complete path, or a name to be resolve on the PATH
-	@param args {string} Arguments to pass to the process
-	@param args SpawnOptions? Optional addition configuration
+	@param cmd Executable path or name to resolve on PATH.
+	@param args Ordered argument list passed to the process.
+	@param opts Optional spawn configuration.
+	@return Handle for interacting with the running child process.
 ]=]
 function os.spawn(cmd: string, args: { string }, opts: SpawnOptions?): ProcessHandle
 	return nil :: any
@@ -205,11 +356,12 @@ end
 	`SpawnOptions.shell` is ignored when calling this function.
 
 	:::warning
-	    This function passes the provided argument directly to `cmd.exe /C`
+	This function passes the provided argument directly to `cmd.exe /C`
+	:::
 
-	@param cmd string  The command to run
-	@param opts SpawnOptions? Optional addition configuration
-	@return number The process' status code after completion
+	@param cmd Command string to execute through the shell.
+	@param opts Optional spawn configuration.
+	@return Process exit status code.
 ]=]
 function os.shell(cmd: string, opts: SpawnOptions?): number
 	return nil :: any

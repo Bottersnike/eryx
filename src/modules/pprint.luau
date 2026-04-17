@@ -37,9 +37,9 @@ local function isLegalName(name: string): boolean
 	return name:match("^[A-Za-z_][A-Za-z0-9_]*$") ~= nil
 end
 
-local formatTable: (val: { [any]: any }, depth: number) -> string
+local formatTable: (val: { [any]: any }, depth: number, seen: { [any]: boolean }) -> string
 
-local function formatValue(val: any, depth: number): string
+local function formatValue(val: any, depth: number, seen: { [any]: boolean }): string
 	local t = type(val)
 
 	if t == "nil" then
@@ -59,7 +59,11 @@ local function formatValue(val: any, depth: number): string
 		return `"{val}"`
 	end
 	if t == "table" then
-		return formatTable(val :: { [any]: any }, depth)
+		local tableVal = val :: { [any]: any }
+		if seen[tableVal] then
+			return "{...}"
+		end
+		return formatTable(tableVal, depth, seen)
 	end
 	if t == "function" or t == "userdata" or t == "thread" then
 		-- TODO: We should be able to do nicer here
@@ -77,7 +81,7 @@ local function formatValue(val: any, depth: number): string
 	error(`Unknown value type {t}`)
 end
 
-local function formatKey(val: any, depth: number): string
+local function formatKey(val: any, depth: number, seen: { [any]: boolean }): string
 	if type(val) == "string" then
 		if isLegalName(val) then
 			return val
@@ -85,16 +89,17 @@ local function formatKey(val: any, depth: number): string
 			return `["{val}"]`
 		end
 	end
-	return `[{formatValue(val, depth)}]`
+	return `[{formatValue(val, depth, seen)}]`
 end
 
-formatTable = function(val: { [any]: any }, depth: number): string
+formatTable = function(val: { [any]: any }, depth: number, seen: { [any]: boolean }): string
+	seen[val] = true
 	local str = "{\n"
 
 	-- Print array part
 	for i = 1, #val do
 		str ..= string.rep(" ", (depth + 2) :: number)
-		str ..= formatValue(val[i], depth + 2)
+		str ..= formatValue(val[i], depth + 2, seen)
 		str ..= ",\n"
 	end
 
@@ -105,22 +110,24 @@ formatTable = function(val: { [any]: any }, depth: number): string
 		end
 
 		str ..= string.rep(" ", (depth + 2) :: number)
-		str ..= formatKey(k, depth + 2)
+		str ..= formatKey(k, depth + 2, seen)
 		str ..= " = "
-		str ..= formatValue(v, depth + 2)
+		str ..= formatValue(v, depth + 2, seen)
 		str ..= ",\n"
 	end
 
 	-- TODO: This
 	str ..= string.rep(" ", depth :: number) .. "}"
+	seen[val] = nil
 	return str
 end
 
 function pprint.format(val: any, depth: number?): string
+	local seen: { [any]: boolean } = {}
 	if type(val) == "table" then
-		return formatTable(val :: { [any]: any }, depth or 0)
+		return formatTable(val :: { [any]: any }, depth or 0, seen)
 	end
-	return formatValue(val, depth or 0)
+	return formatValue(val, depth or 0, seen)
 end
 function pprint.pprint(val: any): ()
 	print(pprint.format(val))

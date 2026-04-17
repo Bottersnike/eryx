@@ -153,4 +153,13 @@ add_luau_script_module(schema/
     src/modules/schema/types.luau
 )
 
+add_luau_script_module(parser/
+    src/modules/parser/init.luau
+    src/modules/parser/engine.luau
+    src/modules/parser/lexer.luau
+    src/modules/parser/types.luau
+    src/modules/parser/bootstrap.luau
+    src/modules/parser/visualize.luau
+)
+
 add_luau_script_module(tempfile src/modules/tempfile.luau)

@@ -28,18 +28,21 @@ local function toSidebar(node: TTree, parentPath: string, activePage: string?): 
 				anyChildrenOpen = true
 			end
 
+			local fullName = v.info and v.info.qualifiedName or v.path
+			local displayName = if parentPath ~= "" then "/" .. (v.path:match("[^/]+$") or v.path) else fullName
+
 			local entry: SidebarEntry = {
-				name = v.info and v.info.qualifiedName or v.path,
-				displayName = v.info and v.info.qualifiedName or v.path,
+				name = fullName,
+				displayName = displayName,
 				filename = v.info and v.info.filename or nil,
 				children = #children > 0 and children or nil,
 				isOpen = false,
 				isActive = false,
 			}
-			if entry.displayName == activePage then
+			if entry.name == activePage then
 				entry.isActive = true
 			end
-			if entry.displayName == activePage or hadActiveChildren then
+			if entry.name == activePage or hadActiveChildren then
 				entry.isOpen = true
 				anyChildrenOpen = true
 			end
@@ -64,7 +67,7 @@ local function toSidebar(node: TTree, parentPath: string, activePage: string?): 
 			return not a_und
 		end
 
-		return a.displayName < b.displayName
+		return a.name < b.name
 	end)
 
 	return result, anyChildrenOpen

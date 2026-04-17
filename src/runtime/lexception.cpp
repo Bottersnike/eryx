@@ -180,7 +180,7 @@ static void format_exception_into(std::ostringstream& ss, const char* type,
             ss << style.dim() << " --> " << style.reset() << style.cyan()
                << traceback[i + 1].short_src << style.reset() << ":" << style.yellow()
                << traceback[i + 1].line << style.reset() << std::endl;
-            if (traceback[i + 1].source[0] == '@') {
+            if (!traceback[i + 1].source.empty() && traceback[i + 1].source[0] == '@') {
                 ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
                    << std::endl;
                 ss << " " << style.yellow() << traceback[i + 1].line << style.reset() << " "
@@ -209,7 +209,7 @@ static void format_exception_into(std::ostringstream& ss, const char* type,
 
     ss << style.dim() << " --> " << style.reset() << style.cyan() << traceback[0].short_src
        << style.reset() << ":" << style.yellow() << traceback[0].line << style.reset() << std::endl;
-    if (traceback[0].source[0] == '@') {
+    if (!traceback[0].source.empty() && traceback[0].source[0] == '@') {
         ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
            << std::endl;
         ss << " " << style.yellow() << traceback[0].line << style.reset() << " " << style.dim()
@@ -386,18 +386,22 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
         if (!ttisfunction(ci->func)) continue;
         if (!lua_getinfo(L, level, "sln", &ar)) continue;
 
+        const char* arSource = ar.source ? ar.source : "";
+        const char* arShortSource = ar.short_src ? ar.short_src : "";
+        const char* arName = ar.name ? ar.name : nullptr;
+
         // An =[C] at top level suggests we might have a unique type of error
-        if (strcmp(ar.source, "=[C]") == 0) {
+        if (strcmp(arSource, "=[C]") == 0) {
             if (level == initialLevel) {
-                if (ar.name && strcmp(ar.name, "error") == 0) {
+                if (arName && strcmp(arName, "error") == 0) {
                     exception->type = ETYPE_THROWN;
                     continue;
                 }
-                if (ar.name && strcmp(ar.name, "assert") == 0) {
+                if (arName && strcmp(arName, "assert") == 0) {
                     exception->type = ETYPE_ASSERT;
                     continue;
                 }
-                if (ar.name && strcmp(ar.name, "require") == 0) {
+                if (arName && strcmp(arName, "require") == 0) {
                     exception->type = ETYPE_REQUIRE;
                     continue;
                 }
@@ -414,11 +418,11 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
 
         // Otherwise, push this as a frame to the traceback
         LuaFrame frame = {
-            ar.source ? std::string(ar.source) : "",
-            ar.short_src ? std::string(ar.short_src) : "",
+            std::string(arSource),
+            std::string(arShortSource),
             ar.currentline,
-            ar.name ? std::string(ar.name) : "<top level>",
-            getSourceLine(ar.source, ar.currentline),
+            arName ? std::string(arName) : "<top level>",
+            getSourceLine(arSource, ar.currentline),
         };
         newFrames.push_back(frame);
     }

@@ -15,4 +15,5 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
                                           const std::string& cacheKey);
 ERYX_API int eryx_execute_module_script(lua_State* L, const std::string source,
                                         const std::string& scriptName, const std::string& cacheKey);
+ERYX_API bool eryx_require_maybe_finalize_loader(lua_State* GL, lua_State* L, int status);
 ERYX_API int eryx_lua_require(lua_State* L);

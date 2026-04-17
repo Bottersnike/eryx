@@ -1,12 +1,24 @@
 #include <fcntl.h>
 
+#include <cstring>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <vector>
 
 #ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <aclapi.h>
 #include <io.h>
+#include <sddl.h>
+#include <sys/stat.h>
+#include <windows.h>
 #else
+#include <grp.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 
@@ -25,6 +37,143 @@ namespace fs = std::filesystem;
 
 #ifndef O_BINARY
 #define O_BINARY 0
+#endif
+
+static bool parse_permission_token(const char* token, uint32_t* outMask) {
+    if (strcmp(token, "read") == 0) {
+#ifdef _WIN32
+        *outMask = FILE_GENERIC_READ;
+#else
+        *outMask = 1;
+#endif
+        return true;
+    }
+    if (strcmp(token, "write") == 0) {
+#ifdef _WIN32
+        *outMask = FILE_GENERIC_WRITE;
+#else
+        *outMask = 2;
+#endif
+        return true;
+    }
+    if (strcmp(token, "execute") == 0) {
+#ifdef _WIN32
+        *outMask = FILE_GENERIC_EXECUTE;
+#else
+        *outMask = 4;
+#endif
+        return true;
+    }
+    if (strcmp(token, "delete") == 0) {
+#ifdef _WIN32
+        *outMask = DELETE;
+#else
+        *outMask = 8;
+#endif
+        return true;
+    }
+    if (strcmp(token, "readAcl") == 0) {
+#ifdef _WIN32
+        *outMask = READ_CONTROL;
+#else
+        *outMask = 16;
+#endif
+        return true;
+    }
+    if (strcmp(token, "writeAcl") == 0) {
+#ifdef _WIN32
+        *outMask = WRITE_DAC;
+#else
+        *outMask = 32;
+#endif
+        return true;
+    }
+    if (strcmp(token, "writeOwner") == 0) {
+#ifdef _WIN32
+        *outMask = WRITE_OWNER;
+#else
+        *outMask = 64;
+#endif
+        return true;
+    }
+    return false;
+}
+
+#ifdef _WIN32
+static bool win_sid_to_string(PSID sid, std::string& out) {
+    LPSTR sidStr = nullptr;
+    if (!ConvertSidToStringSidA(sid, &sidStr) || sidStr == nullptr) return false;
+    out.assign(sidStr);
+    LocalFree(sidStr);
+    return true;
+}
+
+static bool win_parse_sid_string(const char* value, PSID* sidOut) {
+    return ConvertStringSidToSidA(value, sidOut) == TRUE;
+}
+
+static DWORD win_rights_from_list(lua_State* L, int idx) {
+    DWORD mask = 0;
+    if (!lua_istable(L, idx)) {
+        luaL_error(L, "rights must be an array");
+    }
+    int n = lua_objlen(L, idx);
+    for (int i = 1; i <= n; i++) {
+        lua_rawgeti(L, idx, i);
+        const char* token = luaL_checkstring(L, -1);
+        uint32_t part = 0;
+        if (!parse_permission_token(token, &part)) {
+            lua_pop(L, 1);
+            luaL_error(L, "unknown permission token '%s'", token);
+        }
+        mask |= (DWORD)part;
+        lua_pop(L, 1);
+    }
+    return mask;
+}
+
+static void win_push_rights_list(lua_State* L, DWORD mask) {
+    lua_newtable(L);
+    int index = 1;
+    const char* tokens[] = { "read",    "write",    "execute",   "delete",
+                             "readAcl", "writeAcl", "writeOwner" };
+    for (const char* token : tokens) {
+        uint32_t part = 0;
+        parse_permission_token(token, &part);
+        if ((mask & part) == part) {
+            lua_pushstring(L, token);
+            lua_rawseti(L, -2, index++);
+        }
+    }
+}
+
+static DWORD win_inheritance_flags(lua_State* L, int idx, bool* inheritsOut) {
+    bool inherits = false;
+    DWORD flags = 0;
+
+    lua_getfield(L, idx, "inherits");
+    if (!lua_isnil(L, -1)) inherits = lua_toboolean(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, idx, "appliesTo");
+    const char* appliesTo = lua_isstring(L, -1) ? lua_tostring(L, -1) : "this";
+    lua_pop(L, 1);
+
+    if (strcmp(appliesTo, "children") == 0) {
+        flags |= INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        inherits = true;
+    } else if (strcmp(appliesTo, "this_and_children") == 0) {
+        flags |= OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+        inherits = true;
+    } else if (strcmp(appliesTo, "this") == 0) {
+        if (inherits) flags |= OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE;
+    } else {
+        luaL_error(L, "appliesTo must be 'this', 'children', or 'this_and_children'");
+    }
+
+    *inheritsOut = inherits;
+    return flags;
+}
 #endif
 
 // ---------------------------------------------------------------------------
@@ -1043,7 +1192,480 @@ static int fs_stat(lua_State* L) {
     lua_pushboolean(L, !ec && fs::is_symlink(linkStatus));
     lua_settable(L, -3);
 
+    // readonly (cross-platform)
+    lua_pushstring(L, "readonly");
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    lua_pushboolean(L,
+                    attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_READONLY) != 0));
+#else
+    struct stat st;
+    if (::stat(path, &st) == 0) {
+        lua_pushboolean(L, (st.st_mode & S_IWUSR) == 0);
+    } else {
+        lua_pushnil(L);
+    }
+#endif
+    lua_settable(L, -3);
+
     return 1;
+}
+
+static int fs_hasPermission(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    const char* permission = luaL_checkstring(L, 2);
+    uint32_t requested = 0;
+    if (!parse_permission_token(permission, &requested)) {
+        luaL_error(L, "unknown permission token '%s'", permission);
+    }
+
+#ifdef _WIN32
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "principal");
+        bool hasPrincipal = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        lua_getfield(L, 3, "groups");
+        bool hasGroups = !lua_isnil(L, -1);
+        lua_pop(L, 1);
+        if (hasPrincipal || hasGroups) {
+            luaL_error(L,
+                       "hasPermission principal/groups override is not supported on Windows yet");
+        }
+    }
+
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    PACL dacl = nullptr;
+    DWORD secErr = GetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                         nullptr, nullptr, &dacl, nullptr, &sd);
+    if (secErr != ERROR_SUCCESS) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    HANDLE token = nullptr;
+    HANDLE impToken = nullptr;
+    BOOL allowed = FALSE;
+    DWORD granted = 0;
+    PRIVILEGE_SET ps = {};
+    DWORD psLen = sizeof(ps);
+    GENERIC_MAPPING mapping = { FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_GENERIC_EXECUTE,
+                                FILE_ALL_ACCESS };
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &token)) {
+        LocalFree(sd);
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    if (!DuplicateToken(token, SecurityImpersonation, &impToken)) {
+        CloseHandle(token);
+        LocalFree(sd);
+        lua_pushboolean(L, false);
+        return 1;
+    }
+    MapGenericMask((PDWORD)&requested, &mapping);
+    AccessCheck(sd, impToken, requested, &mapping, &ps, &psLen, &granted, &allowed);
+    CloseHandle(impToken);
+    CloseHandle(token);
+    LocalFree(sd);
+    lua_pushboolean(L, allowed == TRUE);
+    return 1;
+#else
+    uid_t checkUid = geteuid();
+    std::vector<gid_t> checkGroups;
+    checkGroups.push_back(getegid());
+
+    if (lua_istable(L, 3)) {
+        lua_getfield(L, 3, "principal");
+        if (!lua_isnil(L, -1)) {
+            if (lua_isnumber(L, -1)) {
+                checkUid = (uid_t)lua_tointeger(L, -1);
+            } else {
+                luaL_error(L, "principal must be a uid number on POSIX");
+            }
+        }
+        lua_pop(L, 1);
+
+        lua_getfield(L, 3, "groups");
+        if (!lua_isnil(L, -1)) {
+            if (!lua_istable(L, -1)) luaL_error(L, "groups must be an array");
+            checkGroups.clear();
+            int n = lua_objlen(L, -1);
+            for (int i = 1; i <= n; i++) {
+                lua_rawgeti(L, -1, i);
+                checkGroups.push_back((gid_t)luaL_checkinteger(L, -1));
+                lua_pop(L, 1);
+            }
+        }
+        lua_pop(L, 1);
+    }
+
+    struct stat st;
+    if (::stat(path, &st) != 0) {
+        lua_pushboolean(L, false);
+        return 1;
+    }
+
+    auto inGroups = [&](gid_t gid) {
+        for (gid_t g : checkGroups) {
+            if (g == gid) return true;
+        }
+        return false;
+    };
+
+    bool allowed = false;
+    if (requested == 16) {
+        allowed = true;
+    } else if (requested == 32 || requested == 64) {
+        allowed = (checkUid == 0 || checkUid == st.st_uid);
+    } else if (requested == 8) {
+        // delete permission is controlled by parent directory permissions
+        fs::path parent = fs::path(path).parent_path();
+        struct stat pst;
+        if (::stat(parent.empty() ? "." : parent.string().c_str(), &pst) == 0) {
+            mode_t writeBit = 0;
+            mode_t execBit = 0;
+            if (checkUid == pst.st_uid) {
+                writeBit = S_IWUSR;
+                execBit = S_IXUSR;
+            } else if (inGroups(pst.st_gid)) {
+                writeBit = S_IWGRP;
+                execBit = S_IXGRP;
+            } else {
+                writeBit = S_IWOTH;
+                execBit = S_IXOTH;
+            }
+            allowed = ((pst.st_mode & writeBit) != 0) && ((pst.st_mode & execBit) != 0);
+        }
+    } else {
+        mode_t bit = 0;
+        if (requested == 1) {
+            if (checkUid == st.st_uid)
+                bit = S_IRUSR;
+            else if (inGroups(st.st_gid))
+                bit = S_IRGRP;
+            else
+                bit = S_IROTH;
+        } else if (requested == 2) {
+            if (checkUid == st.st_uid)
+                bit = S_IWUSR;
+            else if (inGroups(st.st_gid))
+                bit = S_IWGRP;
+            else
+                bit = S_IWOTH;
+        } else if (requested == 4) {
+            if (checkUid == st.st_uid)
+                bit = S_IXUSR;
+            else if (inGroups(st.st_gid))
+                bit = S_IXGRP;
+            else
+                bit = S_IXOTH;
+        }
+        allowed = (st.st_mode & bit) != 0;
+        if (checkUid == 0 && requested != 4) {
+            allowed = true;
+        }
+    }
+
+    lua_pushboolean(L, allowed);
+    return 1;
+#endif
+}
+
+static int fs_getReadonly(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    lua_pushboolean(L,
+                    attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_READONLY) != 0));
+#else
+    struct stat st;
+    if (::stat(path, &st) == 0)
+        lua_pushboolean(L, (st.st_mode & S_IWUSR) == 0);
+    else
+        lua_pushboolean(L, false);
+#endif
+    return 1;
+}
+
+static int fs_setReadonly(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    bool readonly = lua_toboolean(L, 2);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
+    if (readonly)
+        attrs |= FILE_ATTRIBUTE_READONLY;
+    else
+        attrs &= ~FILE_ATTRIBUTE_READONLY;
+    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set readonly attribute");
+#else
+    struct stat st;
+    if (::stat(path, &st) != 0) luaL_error(L, "path does not exist");
+    mode_t mode = st.st_mode;
+    if (readonly)
+        mode &= ~(S_IWUSR | S_IWGRP | S_IWOTH);
+    else
+        mode |= S_IWUSR;
+    if (::chmod(path, mode) != 0) luaL_error(L, "failed to set readonly state");
+#endif
+    return 0;
+}
+
+static int fs_getHidden(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    lua_pushboolean(L, attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_HIDDEN) != 0));
+#else
+    luaL_error(L, "hidden attribute is only supported on Windows");
+#endif
+    return 1;
+}
+
+static int fs_setHidden(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    bool hidden = lua_toboolean(L, 2);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
+    if (hidden)
+        attrs |= FILE_ATTRIBUTE_HIDDEN;
+    else
+        attrs &= ~FILE_ATTRIBUTE_HIDDEN;
+    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set hidden attribute");
+#else
+    luaL_error(L, "hidden attribute is only supported on Windows");
+#endif
+    return 0;
+}
+
+static int fs_getSystem(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    lua_pushboolean(L, attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_SYSTEM) != 0));
+#else
+    luaL_error(L, "system attribute is only supported on Windows");
+#endif
+    return 1;
+}
+
+static int fs_setSystem(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    bool systemBit = lua_toboolean(L, 2);
+#ifdef _WIN32
+    DWORD attrs = GetFileAttributesA(path);
+    if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
+    if (systemBit)
+        attrs |= FILE_ATTRIBUTE_SYSTEM;
+    else
+        attrs &= ~FILE_ATTRIBUTE_SYSTEM;
+    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set system attribute");
+#else
+    luaL_error(L, "system attribute is only supported on Windows");
+#endif
+    return 0;
+}
+
+static int fs_chmod(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    (void)path;
+    luaL_error(L, "fs.chmod is not supported on Windows; use fs.setReadonly/fs.setAcl");
+#else
+    lua_Integer mode = luaL_checkinteger(L, 2);
+    if (::chmod(path, (mode_t)mode) != 0) {
+        luaL_error(L, "failed to chmod '%s'", path);
+    }
+#endif
+    return 0;
+}
+
+static int fs_chown(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    const char* sidString = luaL_checkstring(L, 2);
+    PSID sid = nullptr;
+    if (!win_parse_sid_string(sidString, &sid)) {
+        luaL_error(L, "owner must be a SID string on Windows");
+    }
+    DWORD err = SetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, sid,
+                                      nullptr, nullptr, nullptr);
+    LocalFree(sid);
+    if (err != ERROR_SUCCESS) {
+        luaL_error(L, "failed to set owner SID");
+    }
+#else
+    uid_t uid = (uid_t)luaL_checkinteger(L, 2);
+    if (::chown(path, uid, (gid_t)-1) != 0) {
+        luaL_error(L, "failed to chown '%s'", path);
+    }
+#endif
+    return 0;
+}
+
+static int fs_chgrp(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    (void)path;
+    luaL_error(L, "fs.chgrp is not supported on Windows");
+#else
+    gid_t gid = (gid_t)luaL_checkinteger(L, 2);
+    if (::chown(path, (uid_t)-1, gid) != 0) {
+        luaL_error(L, "failed to chgrp '%s'", path);
+    }
+#endif
+    return 0;
+}
+
+static int fs_getAcl(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+#ifdef _WIN32
+    PSECURITY_DESCRIPTOR sd = nullptr;
+    PACL dacl = nullptr;
+    DWORD err = GetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                      nullptr, nullptr, &dacl, nullptr, &sd);
+    if (err != ERROR_SUCCESS || dacl == nullptr) {
+        if (sd) LocalFree(sd);
+        lua_newtable(L);
+        return 1;
+    }
+
+    ACL_SIZE_INFORMATION info = {};
+    if (!GetAclInformation(dacl, &info, sizeof(info), AclSizeInformation)) {
+        LocalFree(sd);
+        lua_newtable(L);
+        return 1;
+    }
+
+    lua_newtable(L);
+    int outIndex = 1;
+    for (DWORD i = 0; i < info.AceCount; i++) {
+        void* aceRaw = nullptr;
+        if (!GetAce(dacl, i, &aceRaw)) continue;
+        ACE_HEADER* hdr = (ACE_HEADER*)aceRaw;
+        DWORD mask = 0;
+        PSID sid = nullptr;
+        const char* aceType = nullptr;
+        if (hdr->AceType == ACCESS_ALLOWED_ACE_TYPE) {
+            auto* ace = (ACCESS_ALLOWED_ACE*)aceRaw;
+            mask = ace->Mask;
+            sid = &ace->SidStart;
+            aceType = "allow";
+        } else if (hdr->AceType == ACCESS_DENIED_ACE_TYPE) {
+            auto* ace = (ACCESS_DENIED_ACE*)aceRaw;
+            mask = ace->Mask;
+            sid = &ace->SidStart;
+            aceType = "deny";
+        } else {
+            continue;
+        }
+
+        std::string sidString;
+        if (!win_sid_to_string(sid, sidString)) continue;
+
+        lua_newtable(L);
+        lua_pushstring(L, aceType);
+        lua_setfield(L, -2, "type");
+        lua_pushlstring(L, sidString.data(), sidString.size());
+        lua_setfield(L, -2, "principal");
+        win_push_rights_list(L, mask);
+        lua_setfield(L, -2, "rights");
+        lua_pushboolean(L, (hdr->AceFlags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) != 0);
+        lua_setfield(L, -2, "inherits");
+        lua_pushboolean(L, (hdr->AceFlags & INHERITED_ACE) != 0);
+        lua_setfield(L, -2, "inherited");
+
+        if ((hdr->AceFlags & INHERIT_ONLY_ACE) != 0) {
+            lua_pushliteral(L, "children");
+        } else if ((hdr->AceFlags & (OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE)) != 0) {
+            lua_pushliteral(L, "this_and_children");
+        } else {
+            lua_pushliteral(L, "this");
+        }
+        lua_setfield(L, -2, "appliesTo");
+        lua_rawseti(L, -2, outIndex++);
+    }
+    LocalFree(sd);
+    return 1;
+#else
+    luaL_error(L, "ACL APIs are only supported on Windows in this release");
+#endif
+    return 1;
+}
+
+static int fs_setAcl(lua_State* L) {
+    const char* path = luaL_checkstring(L, 1);
+    luaL_checktype(L, 2, LUA_TTABLE);
+#ifdef _WIN32
+    std::vector<EXPLICIT_ACCESSA> entries;
+    std::vector<PSID> sidPointers;
+
+    int n = lua_objlen(L, 2);
+    entries.reserve((size_t)n);
+    sidPointers.reserve((size_t)n);
+
+    for (int i = 1; i <= n; i++) {
+        lua_rawgeti(L, 2, i);
+        luaL_checktype(L, -1, LUA_TTABLE);
+
+        lua_getfield(L, -1, "type");
+        const char* type = luaL_checkstring(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "principal");
+        const char* principal = luaL_checkstring(L, -1);
+        PSID sid = nullptr;
+        if (!win_parse_sid_string(principal, &sid)) {
+            lua_pop(L, 1);
+            luaL_error(L, "principal must be SID string on Windows");
+        }
+        sidPointers.push_back(sid);
+        lua_pop(L, 1);
+
+        lua_getfield(L, -1, "rights");
+        DWORD rights = win_rights_from_list(L, lua_gettop(L));
+        lua_pop(L, 1);
+
+        bool inherits = false;
+        DWORD inheritFlags = win_inheritance_flags(L, lua_gettop(L), &inherits);
+
+        EXPLICIT_ACCESSA ea = {};
+        ea.grfAccessPermissions = rights;
+        ea.grfAccessMode = (strcmp(type, "deny") == 0) ? DENY_ACCESS : GRANT_ACCESS;
+        ea.grfInheritance = inheritFlags;
+        ea.Trustee.TrusteeForm = TRUSTEE_IS_SID;
+        ea.Trustee.TrusteeType = TRUSTEE_IS_UNKNOWN;
+        entries.push_back(ea);
+        lua_pop(L, 1);
+    }
+
+    for (size_t i = 0; i < entries.size(); i++) {
+        entries[i].Trustee.ptstrName = (LPSTR)sidPointers[i];
+    }
+
+    PACL acl = nullptr;
+    DWORD err = SetEntriesInAclA((ULONG)entries.size(), entries.data(), nullptr, &acl);
+    if (err != ERROR_SUCCESS) {
+        for (PSID sid : sidPointers) {
+            if (sid) LocalFree(sid);
+        }
+        luaL_error(L, "failed to build ACL");
+    }
+    err = SetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
+                                nullptr, acl, nullptr);
+    LocalFree(acl);
+    for (PSID sid : sidPointers) {
+        if (sid) LocalFree(sid);
+    }
+    if (err != ERROR_SUCCESS) {
+        luaL_error(L, "failed to apply ACL");
+    }
+#else
+    (void)path;
+    luaL_error(L, "ACL APIs are only supported on Windows in this release");
+#endif
+    return 0;
 }
 
 // ===========================================================================
@@ -1154,6 +1776,30 @@ LUAU_MODULE_EXPORT int luauopen_fs(lua_State* L) {
     lua_setfield(L, -2, "isSymlink");
     lua_pushcfunction(L, fs_stat, "stat");
     lua_setfield(L, -2, "stat");
+    lua_pushcfunction(L, fs_hasPermission, "hasPermission");
+    lua_setfield(L, -2, "hasPermission");
+    lua_pushcfunction(L, fs_chmod, "chmod");
+    lua_setfield(L, -2, "chmod");
+    lua_pushcfunction(L, fs_chown, "chown");
+    lua_setfield(L, -2, "chown");
+    lua_pushcfunction(L, fs_chgrp, "chgrp");
+    lua_setfield(L, -2, "chgrp");
+    lua_pushcfunction(L, fs_getReadonly, "getReadonly");
+    lua_setfield(L, -2, "getReadonly");
+    lua_pushcfunction(L, fs_setReadonly, "setReadonly");
+    lua_setfield(L, -2, "setReadonly");
+    lua_pushcfunction(L, fs_getHidden, "getHidden");
+    lua_setfield(L, -2, "getHidden");
+    lua_pushcfunction(L, fs_setHidden, "setHidden");
+    lua_setfield(L, -2, "setHidden");
+    lua_pushcfunction(L, fs_getSystem, "getSystem");
+    lua_setfield(L, -2, "getSystem");
+    lua_pushcfunction(L, fs_setSystem, "setSystem");
+    lua_setfield(L, -2, "setSystem");
+    lua_pushcfunction(L, fs_getAcl, "getAcl");
+    lua_setfield(L, -2, "getAcl");
+    lua_pushcfunction(L, fs_setAcl, "setAcl");
+    lua_setfield(L, -2, "setAcl");
 
     lua_setreadonly(L, -1, true);
     return 1;

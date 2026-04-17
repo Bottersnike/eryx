@@ -362,7 +362,7 @@ export type ExprFunction = {
 	genericPacks: { AstGenericTypePack }?,
 	args: { AstLocal },
 	vararg: boolean,
-	varargLocation: Location,
+	varargLocation: Location?,
 	varargAnnotation: AstTypePack?,
 	returnAnnotation: AstTypePack?,
 	self: AstLocal?,

@@ -293,7 +293,7 @@ function tempfile.withTempFile<T>(fn: (file: TempFile) -> ...T, options: { name:
 	if not result[1] then
 		error(result[2], 2)
 	end
-	return (result[2] :: any) :: T
+	return table.unpack(result, 2, result.n)
 end
 
 --[=[
@@ -313,7 +313,7 @@ function tempfile.withTempDir<T>(fn: (path: string) -> ...T, name: string?): ...
 	if not result[1] then
 		error(result[2], 2)
 	end
-	return (result[2] :: any) :: T
+	return table.unpack(result, 2, result.n)
 end
 
 return table.freeze(tempfile)

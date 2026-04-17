@@ -81,6 +81,16 @@ void eryx_print_error(lua_State* L, int idx) {
     fprintf(stderr, "%s\n", eryx_format_exception(L, idx, should_use_ansi_for_fd(2)).c_str());
 }
 
+static int eryx_find_exception_index(lua_State* L) {
+    for (int index = lua_gettop(L); index >= 1; --index) {
+        if (eryx_get_exception(L, index)) {
+            return index;
+        }
+    }
+
+    return 0;
+}
+
 bool eryx_has_work(EryxRuntime* rt) { return !rt->threads.empty() || uv_loop_alive(rt->loop); }
 
 enum class ERYX_RUN_ONCE_STATE { kNoThreads = 0, kError, kSuccess };
@@ -117,11 +127,22 @@ ERYX_RUN_ONCE_STATE eryx_run_once(lua_State* GL, EryxRuntime* rt, lua_State** ru
         status = lua_resume(L, nullptr, thread.nargs);
     }
 
+    if (!thread.inError && eryx_require_maybe_finalize_loader(GL, L, status)) {
+        return ERYX_RUN_ONCE_STATE::kSuccess;
+    }
+
     switch (status) {
         case LUA_YIELD:
         case LUA_OK:
             return ERYX_RUN_ONCE_STATE::kSuccess;
         default:
+            if (int exceptionIndex = eryx_find_exception_index(L)) {
+                if (exceptionIndex != lua_gettop(L)) {
+                    lua_pushvalue(L, exceptionIndex);
+                    lua_replace(L, -2);
+                }
+                return ERYX_RUN_ONCE_STATE::kError;
+            }
             // Wrap raw string errors into LuaException before the coroutine's
             // frames are discarded. Must happen here while the dead coroutine's
             // call stack is still introspectable via lua_getinfo.

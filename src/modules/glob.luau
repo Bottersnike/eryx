@@ -31,6 +31,11 @@ export type MatchOptions = {
 --[=[
 	Options used by filesystem glob expansion.
 	Extends [[MatchOptions]] with traversal controls.
+
+	:::warning
+	Enabling `followSymlinks` can recurse forever when directory symlink
+	cycles exist (for example, symlink A -> B and B -> A). Keep it disabled
+	for untrusted or unknown filesystems.
 ]=]
 export type GlobOptions = MatchOptions & {
 	--- Root directory used for filesystem traversal.

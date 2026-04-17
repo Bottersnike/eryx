@@ -36,4 +36,24 @@ suite:test("mktemp returns a unique path that does not exist", function()
 	test.expect(fs.exists(pathB)):toBeFalse()
 end)
 
+suite:test("withTempFile preserves multiple return values", function()
+	local a, b, c = tempfile.withTempFile(function(file)
+		return "ok", 42, file.path
+	end)
+
+	test.expect(a):toBe("ok")
+	test.expect(b):toBe(42)
+	test.expect(c):toBeType("string")
+end)
+
+suite:test("withTempDir preserves multiple return values", function()
+	local a, b, c = tempfile.withTempDir(function(path)
+		return "ok", 42, path
+	end, "tempdir-multiret")
+
+	test.expect(a):toBe("ok")
+	test.expect(b):toBe(42)
+	test.expect(c):toBeType("string")
+end)
+
 return suite
