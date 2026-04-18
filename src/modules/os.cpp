@@ -911,7 +911,7 @@ static void try_resume_exec(ProcessData* pd) {
     // pd will be freed when process handle closes
 }
 
-// Resume a coroutine that is waiting for a read, pushing `data` (or nil if closed)
+// Resume a coroutine that is waiting for a read, pushing `data` (or an empty value on EOF)
 static void resume_reader(ProcessData* pd, int& readerRef, const char* data, size_t len) {
     if (readerRef == LUA_NOREF) return;
     EryxRuntime* rt = pd->rt;
@@ -938,7 +938,11 @@ static void resume_reader(ProcessData* pd, int& readerRef, const char* data, siz
             lua_pushlstring(TL, data, len);
         }
     } else {
-        lua_pushnil(TL);
+        if (wantsBuffer) {
+            lua_newbuffer(TL, 0);
+        } else {
+            lua_pushliteral(TL, "");
+        }
     }
 
     int ref = readerRef;
@@ -963,7 +967,7 @@ static void stdout_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
         uv_read_stop(stream);
         pd->stdoutClosed = true;
         if (!uv_is_closing((uv_handle_t*)stream)) uv_close((uv_handle_t*)stream, nullptr);
-        // Wake up any waiting reader with nil (EOF)
+        // Wake up any waiting reader with an empty value (EOF)
         resume_reader(pd, pd->stdoutReaderRef, nullptr, 0);
         try_resume_exec(pd);
     }
@@ -1471,12 +1475,20 @@ static int process_stream_read_impl(lua_State* L, std::deque<std::string>& chunk
     }
 
     if (isClosed) {
-        lua_pushnil(L);
+        if (returnBuffer) {
+            lua_newbuffer(L, 0);
+        } else {
+            lua_pushliteral(L, "");
+        }
         return 1;
     }
 
     if (!canYield) {
-        lua_pushnil(L);
+        if (returnBuffer) {
+            lua_newbuffer(L, 0);
+        } else {
+            lua_pushliteral(L, "");
+        }
         return 1;
     }
 

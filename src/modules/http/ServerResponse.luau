@@ -72,7 +72,7 @@ local ServerResponse = {}
 ServerResponse.__index = ServerResponse
 
 export type ResponseBodyStream = {
-	read: (self: ResponseBodyStream, size: number?) -> string?,
+	read: (self: ResponseBodyStream, size: number?) -> string,
 	close: ((self: ResponseBodyStream) -> ())?,
 }
 
@@ -382,7 +382,7 @@ function ServerResponse.sendStream(
 	local ok, err = pcall(function()
 		while true do
 			local chunk = bodyStream:read(65536)
-			if chunk == nil then
+			if #chunk == 0 then
 				break
 			end
 			if #chunk > 0 then

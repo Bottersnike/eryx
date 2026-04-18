@@ -46,7 +46,7 @@ local rsa = {}
 	@return string -- PEM-encoded RSA private key.
 ]=]
 function rsa.generateKey(bits: number?): string
-	return _rsa.generateKey(bits)
+	return _rsa.generate_key(bits)
 end
 
 --[=[
@@ -56,7 +56,7 @@ end
 	@return string -- PEM-encoded RSA public key.
 ]=]
 function rsa.getPublicPem(private_pem: string): string
-	return _rsa.getPublicPem(private_pem)
+	return _rsa.get_public_pem(private_pem)
 end
 
 --[=[
@@ -73,7 +73,7 @@ end
 	@return buffer -- Ciphertext (same length as the key modulus).
 ]=]
 function rsa.encryptPkcs1(public_pem: string, data: buffer): buffer
-	return _rsa.encryptPkcs1(public_pem, data)
+	return _rsa.encrypt_pkcs1(public_pem, data)
 end
 
 --[=[
@@ -84,7 +84,7 @@ end
 	@return buffer -- Plaintext.
 ]=]
 function rsa.decryptPkcs1(private_pem: string, data: buffer): buffer
-	return _rsa.decryptPkcs1(private_pem, data)
+	return _rsa.decrypt_pkcs1(private_pem, data)
 end
 
 --[=[
@@ -103,7 +103,7 @@ end
 	@return buffer -- Ciphertext.
 ]=]
 function rsa.encryptOaep(public_pem: string, data: buffer, hash: string?): buffer
-	return _rsa.encryptOaep(public_pem, data, hash)
+	return _rsa.encrypt_oaep(public_pem, data, hash)
 end
 
 --[=[
@@ -115,7 +115,7 @@ end
 	@return buffer -- Plaintext.
 ]=]
 function rsa.decryptOaep(private_pem: string, data: buffer, hash: string?): buffer
-	return _rsa.decryptOaep(private_pem, data, hash)
+	return _rsa.decrypt_oaep(private_pem, data, hash)
 end
 
 --[=[
@@ -135,7 +135,7 @@ end
 	@return buffer -- Signature (same length as the key modulus).
 ]=]
 function rsa.signPkcs1(private_pem: string, data: buffer, hash: string?): buffer
-	return _rsa.signPkcs1(private_pem, data, hash)
+	return _rsa.sign_pkcs1(private_pem, data, hash)
 end
 
 --[=[
@@ -151,7 +151,7 @@ end
 	@return boolean -- `true` if the signature is valid.
 ]=]
 function rsa.verifyPkcs1(public_pem: string, data: buffer, signature: buffer, hash: string?): boolean
-	return _rsa.verifyPkcs1(public_pem, data, signature, hash)
+	return _rsa.verify_pkcs1(public_pem, data, signature, hash)
 end
 
 --[=[
@@ -209,7 +209,7 @@ end
 	@return buffer -- Raw DER-encoded private key.
 ]=]
 function rsa.privateToDer(private_pem: string): buffer
-	return _rsa.privateToDer(private_pem)
+	return _rsa.private_to_der(private_pem)
 end
 
 --[=[
@@ -219,7 +219,7 @@ end
 	@return buffer -- Raw DER-encoded public key (SubjectPublicKeyInfo format).
 ]=]
 function rsa.publicToDer(public_pem: string): buffer
-	return _rsa.publicToDer(public_pem)
+	return _rsa.public_to_der(public_pem)
 end
 
 --[=[
@@ -229,7 +229,7 @@ end
 	@return string -- PEM-encoded RSA private key.
 ]=]
 function rsa.privateFromDer(der: buffer): string
-	return _rsa.privateFromDer(der)
+	return _rsa.private_from_der(der)
 end
 
 --[=[
@@ -239,7 +239,7 @@ end
 	@return string -- PEM-encoded RSA public key.
 ]=]
 function rsa.publicFromDer(der: buffer): string
-	return _rsa.publicFromDer(der)
+	return _rsa.public_from_der(der)
 end
 
 --[=[
@@ -258,7 +258,7 @@ end
 	@return number -- Key size in bits (e.g. 2048, 3072, 4096).
 ]=]
 function rsa.getKeyBits(pem: string): number
-	return _rsa.getKeyBits(pem)
+	return _rsa.get_key_bits(pem)
 end
 
 return rsa

@@ -106,7 +106,7 @@ local function funcToMoonwave(f: any): { [string]: any }
 			}
 			else nil,
 		source = {
-			line = if f.location then f.location.start.line else 0,
+			line = if f.location then f.location.beginline else 0,
 			path = "",
 		},
 	}
@@ -143,7 +143,7 @@ local function typeToMoonwave(t: any): { [string]: any }
 		fields = fields,
 		tags = {},
 		source = {
-			line = if t.location then t.location.start.line else 0,
+			line = if t.location then t.location.beginline else 0,
 			path = "",
 		},
 	}
@@ -184,7 +184,7 @@ local function moduleToJSON(mod: modules.ModuleInfo): string
 			is_primary_export = isPrimary or false,
 			tags = {},
 			source = {
-				line = if c.location then c.location.start.line else 0,
+				line = if c.location then c.location.beginline else 0,
 				path = "",
 			},
 			functions = functions,

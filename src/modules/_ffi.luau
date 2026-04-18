@@ -176,29 +176,29 @@ function _ffi.loadLibrary(path: string): ForeignLibrary
 end
 
 --- The `void` type (zero-sized, used only as a return type).
-_ffi.void = nil :: ForeignType
+_ffi.void = (nil :: any) :: ForeignType
 --- Unsigned char (`unsigned char`, 1 byte).
-_ffi["unsigned char"] = nil :: ForeignType
+_ffi["unsigned char"] = (nil :: any) :: ForeignType
 --- Signed char (`char`, 1 byte).
-_ffi.char = nil :: ForeignType
+_ffi.char = (nil :: any) :: ForeignType
 --- Null-terminated C string (`const char*`).
-_ffi.str = nil :: ForeignType
+_ffi.str = (nil :: any) :: ForeignType
 --- Unsigned 8-bit integer.
-_ffi.u8 = nil :: ForeignType
+_ffi.u8 = (nil :: any) :: ForeignType
 --- Unsigned 16-bit integer.
-_ffi.u16 = nil :: ForeignType
+_ffi.u16 = (nil :: any) :: ForeignType
 --- Unsigned 32-bit integer.
-_ffi.u32 = nil :: ForeignType
+_ffi.u32 = (nil :: any) :: ForeignType
 --- Unsigned 64-bit integer.
-_ffi.u64 = nil :: ForeignType
+_ffi.u64 = (nil :: any) :: ForeignType
 --- Signed 8-bit integer.
-_ffi.i8 = nil :: ForeignType
+_ffi.i8 = (nil :: any) :: ForeignType
 --- Signed 16-bit integer.
-_ffi.i16 = nil :: ForeignType
+_ffi.i16 = (nil :: any) :: ForeignType
 --- Signed 32-bit integer.
-_ffi.i32 = nil :: ForeignType
+_ffi.i32 = (nil :: any) :: ForeignType
 --- Signed 64-bit integer.
-_ffi.i64 = nil :: ForeignType
+_ffi.i64 = (nil :: any) :: ForeignType
 
 return table.freeze(
 	capability.require(

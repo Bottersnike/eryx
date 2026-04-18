@@ -18,7 +18,7 @@ type PathLike = path.PathLike
 
 	local result = luau.parse(source, { captureComments = true })
 	for _, stat in result.root.body do
-	    print(stat.type, stat.location.start.line)
+	    print(stat.type, stat.location.beginline)
 	end
 
 	-- Type check a file
@@ -43,10 +43,12 @@ export type Position = {
 	column: number,
 }
 
---- A span in source code, from a start [[Position]] to an end [[Position]].
+--- A span in source code with 1-based line and column coordinates.
 export type Location = {
-	start: Position,
-	["end"]: Position,
+	beginline: number,
+	begincolumn: number,
+	endline: number,
+	endcolumn: number,
 }
 
 --- A parse error with its location in the source.
@@ -801,6 +803,8 @@ export type TypeErrorInfo = {
 	location: Location,
 	--- Error category: `"TypeError"` or `"SyntaxError"`.
 	category: "TypeError" | "SyntaxError",
+	--- Human-readable module path that produced the error, when available.
+	moduleName: string?,
 }
 
 --- A lint diagnostic produced by Luau's built-in linter.
@@ -841,10 +845,22 @@ export type AnalysisTypeDetail = {
 	[string]: any,
 }
 
+export type AnalysisTypePackDetail = {
+	kind: string,
+	[string]: any,
+}
+
 export type TypeAtResult = {
 	display: string,
 	source: "Expression" | "Binding" | "ScopeBinding",
 	type: AnalysisTypeDetail,
+}
+
+export type ModuleTypeResult = {
+	display: string,
+	source: "Module",
+	typePack: AnalysisTypePackDetail,
+	moduleName: string?,
 }
 
 --- Options for [[typeAt]].
@@ -856,6 +872,18 @@ export type TypeAtOptions = {
 	--- Absolute file path of the source. Enables require() resolution.
 	filePath: string?,
 	--- If true, return a structured type object instead of just a string.
+	detailed: boolean?,
+}
+
+--- Options for [[typeofModule]].
+export type ModuleTypeOptions = {
+	--- Type-checking mode. Defaults to `"strict"` for best inference.
+	mode: ("strict" | "nonstrict" | "nocheck")?,
+	--- Additional type definition sources to load before inference.
+	definitions: { DefinitionSource }?,
+	--- Absolute file path of the source. Enables require() resolution.
+	filePath: string?,
+	--- If true, return a structured type-pack object instead of just a string.
 	detailed: boolean?,
 }
 
@@ -1055,7 +1083,7 @@ end
 	```luau
 	local result = luau.check(source, { mode = "strict", annotate = true })
 	for _, err in result.errors do
-	    print(err.message, err.location.start.line)
+	    print(err.message, err.location.beginline)
 	end
 	if result.annotated then
 	    print(result.annotated)
@@ -1093,6 +1121,30 @@ end
 	@return string? -- The inferred type as a string, or nil.
 ]=]
 function luau.typeAt(source: string, line: number, column: number, options: TypeAtOptions?): (string | TypeAtResult)?
+	return nil :: any
+end
+
+--[=[
+	Returns the inferred return type pack for a Luau module.
+
+	This runs the type checker for the provided source and then returns the
+	module's exported return pack, i.e. the type-level shape produced by the
+	module's top-level `return` statement(s).
+
+	By default this returns a human-readable string. Pass
+	`{ detailed = true }` to receive a structured type-pack payload.
+
+	```luau
+	local source = "return { answer = 42 }"
+	local moduleType = luau.typeofModule(source)
+	print(moduleType) -- "({ answer: number })"
+	```
+
+	@param source The Luau module source code.
+	@param options Module type inference options.
+	@return string? -- The inferred module return pack as a string, or nil.
+]=]
+function luau.typeofModule(source: string, options: ModuleTypeOptions?): (string | ModuleTypeResult)?
 	return nil :: any
 end
 

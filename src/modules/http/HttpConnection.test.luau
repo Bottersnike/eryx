@@ -113,6 +113,7 @@ suite:test("getResponseStream: chunked responses can be read incrementally", fun
 	test.expect(stream:read(2)):toBe("ab")
 	test.expect(stream:read(2)):toBe("c")
 	test.expect(stream:readAll()):toBe("def")
+	test.expect(stream:read(2)):toBe("")
 
 	local response = conn:getResponse()
 	test.expect(response.body):toBe("ok")

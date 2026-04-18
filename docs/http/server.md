@@ -109,12 +109,12 @@ res:status(200)
 res:header("content-type", "text/plain")
 res:sendStream({
     read = function(self, size)
-        return nextChunkOrNil()
+        return nextChunkOrEmptyString()
     end,
 })
 ```
 
-The stream object only needs a `read(size?)` method that returns a string chunk or `nil` at end-of-stream.
+The stream object only needs a `read(size?)` method that returns a string chunk or `""` at end-of-stream.
 
 ## Trailers
 
@@ -186,7 +186,7 @@ local server = http.HttpServer.new(function(req, res)
 
     while true do
         local chunk = stream:read(64 * 1024)
-        if chunk == nil then
+        if chunk == "" then
             break
         end
         total += #chunk

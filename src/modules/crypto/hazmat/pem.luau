@@ -102,8 +102,8 @@ function pem.decodeAll(pemStr: string): { { label: string, data: buffer } }
 	local pos = 1
 	while true do
 		-- Find the next BEGIN header
-		local ls, le, label = pemStr:find("%-%-%-%-%-BEGIN ([^%-%\n]+)%-%-%-%-%-", pos)
-		if not ls then
+		local ls, le, label = pemStr:find("-----BEGIN ([^-\n]+)-----", pos)
+		if not ls or not le or not label then
 			break
 		end
 
@@ -125,6 +125,7 @@ function pem.decodeAll(pemStr: string): { { label: string, data: buffer } }
 		-- Extract and clean the base64 body
 		local b64 = pemStr:sub(bodyStart, endPos - 1):gsub("[\r\n%s]+", "")
 		label = label:match("^%s*(.-)%s*$") -- trim whitespace
+		assert(label)
 
 		table.insert(results, { label = label, data = base64.decode(b64) })
 

@@ -60,4 +60,4 @@ handle:close()
 While tempting, avoid using `directory .. "/" .. fileName`. While this will work in the majority of cases, it can be fragile, especially if `directory` or `fileName` are not well-formed, or a mix of forward and back slashes are present.
 :::
 
-[[The `@eryx/path` API reference|@eryx/path]] contains the full high-level path API, and [[fs#fn-group-path|the `fs.path` reference]] documents the compatibility helpers.
+[[@eryx/path|The `@eryx/path` API reference]] contains the full high-level path API, and [[fs#fn-group-path|the `fs.path` reference]] documents the compatibility helpers.

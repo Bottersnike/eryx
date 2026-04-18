@@ -381,7 +381,7 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 	if #result.errors > 0 then
 		log:error(string.format("  %s: %d parse errors", path, #result.errors))
 		for _, err in result.errors do
-			log:error(string.format("    [%d:%d] %s", err.location.start.line, err.location.start.column, err.message))
+			log:error(string.format("    [%d:%d] %s", err.location.beginline, err.location.begincolumn, err.message))
 		end
 		error("")
 	end
@@ -508,7 +508,7 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 					exportedOwner = exportedOwner,
 					sourceModule = sourceModule,
 					sourcePath = rest,
-					line = stat.location.start.line,
+					line = stat.location.beginline,
 				})
 			end
 		end

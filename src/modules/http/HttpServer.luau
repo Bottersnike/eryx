@@ -291,11 +291,11 @@ end
 	processing.
 
 	@param count Maximum number of bytes to read. Defaults to `65536`.
-	@return string? -- The next body chunk, or `nil` when the stream ends.
+	@return string -- The next body chunk, or `""` when the stream ends.
 ]=]
-function RequestBodyStream.read(self: RequestBodyStream, count: number?): string?
+function RequestBodyStream.read(self: RequestBodyStream, count: number?): string
 	if self._closed then
-		return nil
+		return ""
 	end
 
 	local limit = count or 65536
@@ -305,13 +305,13 @@ function RequestBodyStream.read(self: RequestBodyStream, count: number?): string
 
 	if self._mode == "empty" then
 		self:_finish()
-		return nil
+		return ""
 	end
 
 	if self._mode == "length" then
 		if self._remaining <= 0 then
 			self:_finish()
-			return nil
+			return ""
 		end
 
 		local toRead = math.min(limit, self._remaining)
@@ -327,7 +327,7 @@ function RequestBodyStream.read(self: RequestBodyStream, count: number?): string
 	if self._chunkRemaining <= 0 then
 		self:_readChunkHeader()
 		if self._closed then
-			return nil
+			return ""
 		end
 	end
 
@@ -356,7 +356,7 @@ function RequestBodyStream.readAll(self: RequestBodyStream): string
 	local parts = {}
 	while true do
 		local chunk = self:read()
-		if chunk == nil then
+		if #chunk == 0 then
 			break
 		end
 		table.insert(parts, chunk)
@@ -374,7 +374,7 @@ function RequestBodyStream.close(self: RequestBodyStream)
 	if self._closed then
 		return
 	end
-	while self:read() ~= nil do
+	while #self:read() > 0 do
 	end
 end
 

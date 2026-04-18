@@ -24,17 +24,17 @@ export type ZipReader = {
 		List entries in the opened archive. Directories have names ending with '/'.
 		@return { EntryInfo } -- list of entries in archive
 	]=]
-	List: (self: ZipReader) -> { EntryInfo },
+	list: (self: ZipReader) -> { EntryInfo },
 
 	--[=[
 		Read a named entry from the opened archive. Returns nil if not found.
 		@param name string -- entry filename (case-sensitive)
 		@return buffer? -- the entry contents or nil
 	]=]
-	Read: (self: ZipReader, name: string) -> buffer?,
+	read: (self: ZipReader, name: string) -> buffer?,
 
 	--- Close the reader and release any pinned buffer. Safe to call multiple times.
-	Close: (self: ZipReader) -> (),
+	close: (self: ZipReader) -> (),
 }
 
 local zip = {}

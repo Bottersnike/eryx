@@ -53,6 +53,7 @@ ERYX_API void eryx_unregister_interrupt_callback(EryxRuntime* rt, EryxInterruptC
 ERYX_API int eryx_luau_check(lua_State* L);
 ERYX_API int eryx_luau_typeAt(lua_State* L);
 ERYX_API int eryx_luau_autocomplete(lua_State* L);
+ERYX_API int eryx_luau_typeofModule(lua_State* L);
 
 // CLI args offset: number of leading argv entries to skip in os.cliargs()
 // (exe, subcommand, script path, etc.). Set by main() before script execution

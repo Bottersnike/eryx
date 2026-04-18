@@ -18,9 +18,10 @@
 
 	## Return conventions
 
-	- `nil` means EOF (or closed peer for read-like operations).
-	- Socket-specific would-block signaling is exposed by `@eryx/_socket`
-	  via `_socket.WOULD_BLOCK`, not this shared module.
+	- EOF is returned as `""` for string reads and an empty `buffer` for
+	  buffer reads.
+	- `nil` is reserved for non-blocking "would block" style results on
+	  stream-like APIs that support them.
 
 	## Quick examples
 
@@ -43,10 +44,10 @@ export type ReadableStream = {
 	readable: true,
 	writable: false,
 	closed: boolean?,
-	read: (self: ReadableStream, size: number?) -> string | nil,
-	readSync: (self: ReadableStream, size: number?) -> string | nil,
-	readBuffer: (self: ReadableStream, size: number?) -> buffer | nil,
-	readBufferSync: (self: ReadableStream, size: number?) -> buffer | nil,
+	read: (self: ReadableStream, size: number?) -> string,
+	readSync: (self: ReadableStream, size: number?) -> string,
+	readBuffer: (self: ReadableStream, size: number?) -> buffer,
+	readBufferSync: (self: ReadableStream, size: number?) -> buffer,
 	close: (self: ReadableStream) -> (),
 	closeSync: (self: ReadableStream) -> (),
 }
@@ -76,10 +77,10 @@ export type ReadWriteStream = {
 	readable: true,
 	writable: true,
 	closed: boolean?,
-	read: (self: ReadWriteStream, size: number?) -> string | nil,
-	readSync: (self: ReadWriteStream, size: number?) -> string | nil,
-	readBuffer: (self: ReadWriteStream, size: number?) -> buffer | nil,
-	readBufferSync: (self: ReadWriteStream, size: number?) -> buffer | nil,
+	read: (self: ReadWriteStream, size: number?) -> string,
+	readSync: (self: ReadWriteStream, size: number?) -> string,
+	readBuffer: (self: ReadWriteStream, size: number?) -> buffer,
+	readBufferSync: (self: ReadWriteStream, size: number?) -> buffer,
 	write: (self: ReadWriteStream, data: string | buffer) -> number,
 	writeSync: (self: ReadWriteStream, data: string | buffer) -> number,
 	close: (self: ReadWriteStream) -> (),

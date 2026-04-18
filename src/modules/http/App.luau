@@ -402,9 +402,6 @@ local function sendFileResponse(response: ServerResponse.ServerResponse, path: s
 	response:sendStream({
 		read = function(self, size)
 			local chunk = handle:readSync(size)
-			if chunk == "" then
-				return nil
-			end
 			return chunk
 		end,
 		close = function(self)

@@ -432,11 +432,40 @@
                 var input = document.getElementById("search-input");
                 var results = document.getElementById("search-results");
                 var container = document.getElementById("search-container");
+                var toggle = document.getElementById("search-toggle");
                 if (!input || !results) {
                     if (window.console && console.warn) {
                         console.warn("[eryxdoc search nav] init skipped", { hasInput: !!input, hasResults: !!results });
                     }
                     return;
+                }
+
+                function isCompactSearch() {
+                    return !!(window.matchMedia && window.matchMedia("(max-width: 500px)").matches);
+                }
+
+                function setSearchOpen(open) {
+                    if (!container) return;
+                    container.classList.toggle("mobile-open", open);
+                    if (toggle) {
+                        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+                    }
+                    if (!open) {
+                        results.classList.remove("visible");
+                        selectedIdx = -1;
+                    }
+                }
+
+                function openSearch() {
+                    setSearchOpen(true);
+                    input.focus();
+                    input.select();
+                }
+
+                function closeSearch() {
+                    if (!isCompactSearch()) return;
+                    input.blur();
+                    setSearchOpen(false);
                 }
 
                 // Fetch search index on first focus
@@ -617,9 +646,12 @@
                         }
                         return;
                     } else if (navKey === "escape") {
-                        input.blur();
-                        results.classList.remove("visible");
-                        selectedIdx = -1;
+                        closeSearch();
+                        if (!isCompactSearch()) {
+                            input.blur();
+                            results.classList.remove("visible");
+                            selectedIdx = -1;
+                        }
                         return;
                     } else {
                         selectedIdx = -1;
@@ -640,18 +672,53 @@
 
                 // Close on outside click
                 document.addEventListener("click", function (e) {
+                    if (toggle && e.target === toggle) return;
                     if (!container.contains(e.target)) {
-                        results.classList.remove("visible");
-                        selectedIdx = -1;
+                        closeSearch();
+                        if (!isCompactSearch()) {
+                            results.classList.remove("visible");
+                            selectedIdx = -1;
+                        }
                     }
                 });
+
+                if (toggle) {
+                    toggle.addEventListener("click", function () {
+                        if (container.classList.contains("mobile-open")) {
+                            closeSearch();
+                            return;
+                        }
+                        openSearch();
+                    });
+                }
+
+                if (window.matchMedia) {
+                    var compactSearchQuery = window.matchMedia("(max-width: 500px)");
+                    function syncSearchLayout(e) {
+                        if (e.matches) {
+                            setSearchOpen(false);
+                        } else {
+                            container.classList.remove("mobile-open");
+                            if (toggle) toggle.setAttribute("aria-expanded", "false");
+                        }
+                    }
+                    if (compactSearchQuery.addEventListener) {
+                        compactSearchQuery.addEventListener("change", syncSearchLayout);
+                    } else if (compactSearchQuery.addListener) {
+                        compactSearchQuery.addListener(syncSearchLayout);
+                    }
+                }
 
                 // Ctrl+K / Cmd+K shortcut
                 document.addEventListener("keydown", function (e) {
                     if ((e.ctrlKey || e.metaKey) && e.key && e.key.toLowerCase() === "k") {
                         e.preventDefault();
-                        input.focus();
-                        input.select();
+                        if (isCompactSearch()) {
+                            openSearch();
+                        } else {
+                            input.focus();
+                            input.select();
+                        }
                     }
                 });
             })();

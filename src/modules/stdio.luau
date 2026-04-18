@@ -45,28 +45,30 @@ export type ReadLineOptions = {
 --[=[
 	Yields the current coroutine until data is available on stdin,
 	then returns up to `bytes` bytes (default 4096).
-	Returns `nil` on EOF. Passing `0` returns `""`.
+	Returns `""` on EOF. Passing `0` also returns `""`.
 	Only one `read` may be pending at a time.
 ]=]
-function stdio.read(bytes: number?): string?
+function stdio.read(bytes: number?): string
 	return nil :: any
 end
 
 --[=[
 	Reads up to `bytes` bytes from stdin (default 4096).
-	Returns `nil` on EOF. Passing `0` returns `""`.
+	Returns `""` on EOF. Passing `0` also returns `""`.
 ]=]
-function stdio.readSync(bytes: number?): string?
+function stdio.readSync(bytes: number?): string
 	return nil :: any
 end
 
 --- Yields and reads from stdin as a `buffer`.
-function stdio.readBuffer(bytes: number?): buffer?
+--- Returns an empty buffer on EOF.
+function stdio.readBuffer(bytes: number?): buffer
 	return nil :: any
 end
 
 --- Reads from stdin synchronously as a `buffer`.
-function stdio.readBufferSync(bytes: number?): buffer?
+--- Returns an empty buffer on EOF.
+function stdio.readBufferSync(bytes: number?): buffer
 	return nil :: any
 end
 
@@ -84,9 +86,9 @@ end
 	Use `options.terminator` to change the delimiter and
 	`options.keepTerminator=true` to keep it.
 
-	Returns `nil` on EOF.
+	Returns `""` on EOF.
 ]=]
-function stdio.readline(options: ReadLineOptions?): string?
+function stdio.readline(options: ReadLineOptions?): string
 	return nil :: any
 end
 

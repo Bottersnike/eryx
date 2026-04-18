@@ -70,6 +70,8 @@
 	:::
 ]=]
 
+local nativePath = require("@eryx/_native/_path")
+
 type Platform = "nt" | "unix"
 type PrefixKind = "disk" | "unc" | "verbatim_disk" | "verbatim_unc" | "device" | "verbatim"
 
@@ -1338,14 +1340,14 @@ end
 	Resolves a path to an absolute canonical form via the filesystem.
 
 	Unlike most of `@eryx/path`, this helper is not purely lexical. It bridges
-	into [[@eryx/fs]] and returns the canonicalized result as a [[Path]].
+	into a native filesystem helper and returns the canonicalized result as a
+	[[Path]].
 
 	@param input Path to canonicalize.
 	@return Path -- Canonical absolute path.
 ]=]
 function path.canonicalize(input: PathLike): Path
-	local fs = require("@eryx/fs")
-	return path.new(fs.path.canonicalize(input))
+	return path.new(nativePath.canonicalize(input))
 end
 
 --[=[

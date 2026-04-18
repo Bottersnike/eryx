@@ -1,5 +1,6 @@
 #include "_wrapper_lib.hpp"
 
+#include "../LuaLocation.hpp"
 #include "../vfs.hpp"
 #include "embedded_modules.h"
 #include "lconfig.hpp"
@@ -24,6 +25,7 @@
 #include "Luau/BuiltinDefinitions.h"
 #include "Luau/Common.h"
 #include "Luau/Config.h"
+#include "Luau/Error.h"
 #include "Luau/Frontend.h"
 #include "Luau/ModuleResolver.h"
 #include "Luau/PrettyPrinter.h"
@@ -184,11 +186,7 @@ static void analysis_push_position(lua_State* L, const Luau::Position& pos) {
     lua_setfield(L, -2, "column");
 }
 static void analysis_push_location(lua_State* L, const Luau::Location& loc) {
-    lua_createtable(L, 0, 2);
-    analysis_push_position(L, loc.begin);
-    lua_setfield(L, -2, "start");
-    analysis_push_position(L, loc.end);
-    lua_setfield(L, -2, "end");
+    eryx_lua_push_location(L, loc);
 }
 
 static Luau::ToStringOptions analysis_type_to_string_options() {
@@ -244,19 +242,7 @@ static void analysis_push_internal_error(lua_State* L, const char* message) {
     lua_createtable(L, 0, 3);
     lua_pushstring(L, message);
     lua_setfield(L, -2, "message");
-    lua_createtable(L, 0, 2);
-    lua_createtable(L, 0, 2);
-    lua_pushinteger(L, 1);
-    lua_setfield(L, -2, "line");
-    lua_pushinteger(L, 1);
-    lua_setfield(L, -2, "column");
-    lua_setfield(L, -2, "start");
-    lua_createtable(L, 0, 2);
-    lua_pushinteger(L, 1);
-    lua_setfield(L, -2, "line");
-    lua_pushinteger(L, 1);
-    lua_setfield(L, -2, "column");
-    lua_setfield(L, -2, "end");
+    analysis_push_location(L, Luau::Location{ { 0, 0 }, { 0, 0 } });
     lua_setfield(L, -2, "location");
     lua_pushstring(L, "InternalError");
     lua_setfield(L, -2, "category");
@@ -643,29 +629,14 @@ static void read_file_path_opt(lua_State* L, int optIdx, const char*& filePath,
 
 static void analysis_push_type_error(lua_State* L, const Luau::Frontend& fe,
                                      const Luau::TypeError& err) {
-    (void)fe;
-    lua_createtable(L, 0, 4);
+    lua_createtable(L, 0, 5);
 
     std::string msg;
-    if (const auto* syntax = Luau::get_if<Luau::SyntaxError>(&err.data))
+    if (const auto* syntax = Luau::get_if<Luau::SyntaxError>(&err.data)) {
         msg = syntax->message;
-    else if (const auto* unknown = Luau::get_if<Luau::UnknownSymbol>(&err.data))
-        msg = std::string(unknown->context == Luau::UnknownSymbol::Type ? "Unknown type '"
-                                                                        : "Unknown global '") +
-              unknown->name + "'";
-    else if (const auto* generic = Luau::get_if<Luau::GenericError>(&err.data))
-        msg = generic->message;
-    else if (const auto* internal = Luau::get_if<Luau::InternalError>(&err.data))
-        msg = internal->message;
-    else if (const auto* illegalReq = Luau::get_if<Luau::IllegalRequire>(&err.data))
-        msg =
-            std::string("Illegal require '") + illegalReq->moduleName + "': " + illegalReq->reason;
-    else if (const auto* unknownReq = Luau::get_if<Luau::UnknownRequire>(&err.data))
-        msg = std::string("Unknown require: ") + unknownReq->modulePath;
-    else if (const auto* mismatch = Luau::get_if<Luau::TypeMismatch>(&err.data))
-        msg = mismatch->reason.empty() ? "Type mismatch" : mismatch->reason;
-    else
-        msg = "Type checking failed";
+    } else {
+        msg = Luau::toString(err, Luau::TypeErrorToStringOptions{ fe.fileResolver });
+    }
 
     lua_pushlstring(L, msg.data(), msg.size());
     lua_setfield(L, -2, "message");
@@ -677,6 +648,12 @@ static void analysis_push_type_error(lua_State* L, const Luau::Frontend& fe,
     if (Luau::get_if<Luau::SyntaxError>(&err.data)) category = "SyntaxError";
     lua_pushstring(L, category);
     lua_setfield(L, -2, "category");
+
+    std::string moduleName = fe.fileResolver->getHumanReadableModuleName(err.moduleName);
+    if (!moduleName.empty()) {
+        lua_pushlstring(L, moduleName.data(), moduleName.size());
+        lua_setfield(L, -2, "moduleName");
+    }
 
     lua_pushinteger(L, (lua_Integer)err.code());
     lua_setfield(L, -2, "code");
@@ -715,6 +692,76 @@ static void analysis_push_lint_warning(lua_State* L, const Luau::LintWarning& wa
 struct EryxFileResolver : Luau::FileResolver {
     std::string mainSource;
     Luau::ModuleName mainModule;  // absolute path or "=main" fallback
+
+    static RequireContext requireContextForModuleName(const Luau::ModuleName& name) {
+        RequireContext ctx;
+        ctx.root = fs::current_path();
+
+        if (name == "=main") {
+            ctx.selfDir = ctx.root;
+            ctx.callerDir = ctx.root;
+            return ctx;
+        }
+
+        if (name.starts_with(CHUNK_PREFIX_ERYX)) {
+            ctx.isEmbedded = true;
+            std::string key = name.substr(CHUNK_PREFIX_ERYX_LEN);
+            size_t lastSlash = key.rfind('/');
+            ctx.embeddedSelfDir = (lastSlash != std::string::npos) ? key.substr(0, lastSlash) : "";
+
+            std::string stem = (lastSlash != std::string::npos) ? key.substr(lastSlash + 1) : key;
+            if (stem == "init") {
+                ctx.isInit = true;
+                size_t parentSlash = ctx.embeddedSelfDir.rfind('/');
+                ctx.embeddedCallerDir = (parentSlash != std::string::npos)
+                                            ? ctx.embeddedSelfDir.substr(0, parentSlash)
+                                            : "";
+            } else {
+                ctx.embeddedCallerDir = ctx.embeddedSelfDir;
+            }
+
+            return ctx;
+        }
+
+        if (name.starts_with(CHUNK_PREFIX_VFS)) {
+            ctx.isVFS = true;
+            std::string key = name.substr(CHUNK_PREFIX_VFS_LEN);
+
+            if (key.size() > 5 && key.substr(key.size() - 5) == ".luau")
+                key.resize(key.size() - 5);
+            else if (key.size() > 4 && key.substr(key.size() - 4) == ".lua")
+                key.resize(key.size() - 4);
+
+            size_t lastSlash = key.rfind('/');
+            ctx.vfsSelfDir = (lastSlash != std::string::npos) ? key.substr(0, lastSlash) : "";
+
+            std::string stem = (lastSlash != std::string::npos) ? key.substr(lastSlash + 1) : key;
+            if (stem == "init") {
+                ctx.isInit = true;
+                size_t parentSlash = ctx.vfsSelfDir.rfind('/');
+                ctx.vfsCallerDir =
+                    (parentSlash != std::string::npos) ? ctx.vfsSelfDir.substr(0, parentSlash) : "";
+            } else {
+                ctx.vfsCallerDir = ctx.vfsSelfDir;
+            }
+
+            return ctx;
+        }
+
+        fs::path modulePath(name);
+        ctx.selfDir = modulePath.parent_path();
+        if (ctx.selfDir.empty()) ctx.selfDir = ctx.root;
+
+        if (modulePath.stem().string() == "init") {
+            ctx.isInit = true;
+            ctx.callerDir = ctx.selfDir.parent_path();
+        } else {
+            ctx.callerDir = ctx.selfDir;
+        }
+
+        if (ctx.callerDir.empty()) ctx.callerDir = ctx.root;
+        return ctx;
+    }
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
         if (name == mainModule) return Luau::SourceCode{ mainSource, Luau::SourceCode::Module };
@@ -764,7 +811,9 @@ struct EryxFileResolver : Luau::FileResolver {
         std::string requirePath(expr->value.data, expr->value.size);
 
         lua_State* CL = eryx_initialise_environment(nullptr);
-        auto resolved = eryx_resolve_module(CL, requirePath);
+        RequireContext requireContext = context ? requireContextForModuleName(context->name)
+                                                : requireContextForModuleName(mainModule);
+        auto resolved = eryx_resolve_module(CL, requireContext, requirePath);
         lua_close(CL);
 
         if (!resolved) return std::nullopt;
@@ -1307,6 +1356,94 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
         lua_setfield(L, -2, name.c_str());
     }
     lua_setfield(L, -2, "entries");
+
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
+// eryx_luau_typeofModule(L)   –   lua_CFunction
+//
+// Args:  (source: string [, options: {mode?, detailed?, filePath?}])
+// Returns: string? | { display: string, source: "Module", typePack: table, moduleName?: string }
+// ---------------------------------------------------------------------------
+ERYX_API int eryx_luau_typeofModule(lua_State* L) {
+    size_t srcLen = 0;
+    const char* src = luaL_checklstring(L, 1, &srcLen);
+
+    Luau::Mode mode = parse_mode_opt(L, 2, Luau::Mode::Strict);
+    bool detailed = false;
+    std::optional<Luau::SolverMode> solverMode = std::nullopt;
+    if (lua_istable(L, 2)) {
+        solverMode = parse_solver_opt(L, 2);
+        lua_getfield(L, 2, "detailed");
+        if (lua_isboolean(L, -1)) detailed = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+    }
+    const char* filePath = nullptr;
+    size_t filePathLen = 0;
+    read_file_path_opt(L, 2, filePath, filePathLen);
+
+    const char* mainModule = filePath ? filePath : "=main";
+
+    if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
+
+    Luau::FrontendOptions frontendOptions;
+    frontendOptions.retainFullTypeGraphs = detailed;
+    frontendOptions.runLintChecks = true;
+
+    EryxFileResolver fileResolver;
+    fileResolver.mainSource = src;
+    fileResolver.mainModule = mainModule;
+    EryxConfigResolver configResolver;
+    configResolver.L = L;
+    configResolver.defaultMode = mode;
+
+    std::unique_ptr<Luau::Frontend> frontendPtr;
+    if (solverMode)
+        frontendPtr = std::make_unique<Luau::Frontend>(
+            *solverMode, (Luau::FileResolver*)&fileResolver, &configResolver, frontendOptions);
+    else
+        frontendPtr = std::make_unique<Luau::Frontend>((Luau::FileResolver*)&fileResolver,
+                                                       &configResolver, frontendOptions);
+    Luau::Frontend& frontend = *frontendPtr;
+
+    Luau::registerBuiltinGlobals(frontend, frontend.globals);
+    Luau::freeze(frontend.globals.globalTypes);
+
+    load_definitions_opt(L, 2, frontend);
+    std::string crashMessage;
+    if (!analysis_safe_check(frontend, mainModule, crashMessage)) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    Luau::ModulePtr m = frontend.moduleResolver.getModule(mainModule);
+    if (!m || !m->returnType) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    Luau::ToStringOptions o = analysis_type_to_string_options();
+    std::string s = Luau::toString(m->returnType, o);
+
+    if (detailed) {
+        lua_createtable(L, 0, 4);
+        lua_pushlstring(L, s.data(), s.size());
+        lua_setfield(L, -2, "display");
+        lua_pushstring(L, "Module");
+        lua_setfield(L, -2, "source");
+        AnalysisTypeSerdeCtx ctx;
+        analysis_push_typepack_id(L, m->returnType, ctx, 0);
+        lua_setfield(L, -2, "typePack");
+
+        std::string moduleName = frontend.fileResolver->getHumanReadableModuleName(m->name);
+        if (!moduleName.empty()) {
+            lua_pushlstring(L, moduleName.data(), moduleName.size());
+            lua_setfield(L, -2, "moduleName");
+        }
+    } else {
+        lua_pushlstring(L, s.data(), s.size());
+    }
 
     return 1;
 }

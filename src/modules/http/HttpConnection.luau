@@ -88,7 +88,7 @@ type HttpResponseStreamFields = {
 export type HttpResponseStream = typeof(setmetatable({} :: HttpResponseStreamFields, HttpResponseStream))
 
 export type UploadBodyStream = {
-	read: (self: UploadBodyStream, size: number?) -> string?,
+	read: (self: UploadBodyStream, size: number?) -> string,
 	close: ((self: UploadBodyStream) -> ())?,
 }
 
@@ -367,11 +367,8 @@ function HttpConnection.request(
 		local sentLength = 0
 		while true do
 			local chunk = bodyStream:read(65536)
-			if chunk == nil then
-				break
-			end
 			if #chunk == 0 then
-				continue
+				break
 			end
 
 			sentLength += #chunk
@@ -705,9 +702,9 @@ function HttpResponseStream._readChunkHeader(self: HttpResponseStream)
 	self._chunkRemaining = chunkSize
 end
 
-function HttpResponseStream.read(self: HttpResponseStream, count: number?): string?
+function HttpResponseStream.read(self: HttpResponseStream, count: number?): string
 	if self._closed then
-		return nil
+		return ""
 	end
 
 	local limit = count or 65536
@@ -718,7 +715,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 	if self._mode == "buffer" then
 		if self._bufferOffset > #self._buffer then
 			self._closed = true
-			return nil
+			return ""
 		end
 
 		local finish = math.min(#self._buffer, self._bufferOffset + limit - 1)
@@ -734,7 +731,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 	if self._mode == "length" then
 		if self._remaining <= 0 then
 			self:_finalize()
-			return nil
+			return ""
 		end
 
 		local connection = self._connection :: HttpConnection
@@ -742,7 +739,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 		local chunk = connection:_recvExact(toRead)
 		if #chunk == 0 then
 			self:_finalize()
-			return nil
+			return ""
 		end
 
 		self._remaining -= #chunk
@@ -756,7 +753,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 		if self._chunkRemaining <= 0 then
 			self:_readChunkHeader()
 			if self._closed then
-				return nil
+				return ""
 			end
 		end
 
@@ -765,7 +762,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 		local chunk = connection:_recvExact(toRead)
 		if #chunk == 0 then
 			self:_finalize()
-			return nil
+			return ""
 		end
 
 		self._chunkRemaining -= #chunk
@@ -782,7 +779,7 @@ function HttpResponseStream.read(self: HttpResponseStream, count: number?): stri
 	local chunk = connection:_recvSome(limit)
 	if #chunk == 0 then
 		self:_finalize()
-		return nil
+		return ""
 	end
 	return chunk
 end
@@ -791,7 +788,7 @@ function HttpResponseStream.readAll(self: HttpResponseStream): string
 	local parts = {}
 	while true do
 		local chunk = self:read()
-		if chunk == nil then
+		if #chunk == 0 then
 			break
 		end
 		table.insert(parts, chunk)
@@ -809,7 +806,7 @@ function HttpResponseStream.close(self: HttpResponseStream)
 		return
 	end
 
-	while self:read() ~= nil do
+	while #self:read() > 0 do
 	end
 end
 

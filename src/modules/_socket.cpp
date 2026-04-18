@@ -117,12 +117,6 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-static char g_socketWouldBlockSentinel;
-
-static void push_socket_would_block(lua_State* L) {
-    lua_pushlightuserdata(L, &g_socketWouldBlockSentinel);
-}
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -680,15 +674,7 @@ static int sock_send(lua_State* L) {
     return lua_yield(L, 0);
 }
 
-static int sock_write_stream(lua_State* L) {
-    int n = sock_send(L);
-    if (n == 1 && lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        push_socket_would_block(L);
-        return 1;
-    }
-    return n;
-}
+static int sock_write_stream(lua_State* L) { return sock_send(L); }
 
 static int sock_sendall(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
@@ -774,15 +760,7 @@ static int sock_recv(lua_State* L) {
     return lua_yield(L, 0);
 }
 
-static int sock_read_stream(lua_State* L) {
-    int n = sock_recv(L);
-    if (n == 1 && lua_isnil(L, -1)) {
-        lua_pop(L, 1);
-        push_socket_would_block(L);
-        return 1;
-    }
-    return n;
-}
+static int sock_read_stream(lua_State* L) { return sock_recv(L); }
 
 static int sock_read_string_stream(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
@@ -804,7 +782,7 @@ static int sock_read_string_stream(lua_State* L) {
 
     if (!wouldblock) sock_error(L, "recv");
     if (s->timeout == 0) {
-        push_socket_would_block(L);
+        lua_pushnil(L);
         return 1;
     }
 
@@ -1221,9 +1199,6 @@ LUAU_MODULE_EXPORT int luauopen__socket(lua_State* L) {
 
     lua_pushcfunction(L, socket_ntohl, "ntohl");
     lua_setfield(L, -2, "ntohl");
-
-    push_socket_would_block(L);
-    lua_setfield(L, -2, "WOULD_BLOCK");
 
     SETCONST(AF_UNSPEC);
     SETCONST(AF_INET);

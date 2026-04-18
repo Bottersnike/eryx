@@ -261,7 +261,7 @@ suite:test("request: bodyStream uploads fixed-length request bodies", function()
 			bodyStream = {
 				read = function(self, _size)
 					index += 1
-					return chunks[index]
+					return chunks[index] or ""
 				end,
 			},
 			bodyLength = 11,
@@ -292,7 +292,7 @@ suite:test("request: bodyStream uploads chunked request bodies when length is un
 			bodyStream = {
 				read = function(self, _size)
 					index += 1
-					return chunks[index]
+					return chunks[index] or ""
 				end,
 			},
 		})
@@ -323,7 +323,7 @@ suite:test("HttpServer: handlers can read request bodies incrementally", functio
 				_index = 0,
 				read = function(self, _size)
 					self._index += 1
-					return self._chunks[self._index]
+					return self._chunks[self._index] or ""
 				end,
 			} :: any,
 			bodyLength = 11,
@@ -384,7 +384,7 @@ suite:test("ServerResponse: sendStream streams chunked bodies and exposes traile
 		res:sendStream({
 			read = function(self, _size)
 				index += 1
-				return chunks[index]
+				return chunks[index] or ""
 			end,
 		})
 		task.defer(function()

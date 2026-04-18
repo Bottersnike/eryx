@@ -61,15 +61,15 @@ local function collectComments(
 	local inline: { [number]: string } = {}
 
 	local function sourceSlice(loc: luau.Location): string
-		local sl, el = loc.start.line, loc["end"].line
+		local sl, el = loc.beginline, loc.endline
 		if sl == el then
-			return sourceLines[sl]:sub(loc.start.column, loc["end"].column - 1)
+			return sourceLines[sl]:sub(loc.begincolumn, loc.endcolumn - 1)
 		end
-		local parts = { sourceLines[sl]:sub(loc.start.column) }
+		local parts = { sourceLines[sl]:sub(loc.begincolumn) }
 		for i = sl + 1, el - 1 do
 			table.insert(parts, sourceLines[i])
 		end
-		table.insert(parts, sourceLines[el]:sub(1, loc["end"].column - 1))
+		table.insert(parts, sourceLines[el]:sub(1, loc.endcolumn - 1))
 		return table.concat(parts, "\n")
 	end
 
@@ -82,9 +82,9 @@ local function collectComments(
 
 	for _, c in result.comments do
 		local raw = sourceSlice(c.location)
-		local cLine = c.location.start.line
-		local cEnd = c.location["end"].line
-		local cCol = c.location.start.column
+		local cLine = c.location.beginline
+		local cEnd = c.location.endline
+		local cCol = c.location.begincolumn
 
 		-- Inline/trailing comment: non-whitespace precedes it on the same line
 		local isInline = cCol > 1

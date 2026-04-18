@@ -453,9 +453,9 @@ local function executeStreamingRequest(
 			headers = headers,
 			trailers = response.trailers,
 			httpVersion = response.httpVersion,
-			read = function(self, count: number?): string?
+			read = function(self, count: number?): string
 				if closed then
-					return nil
+					return ""
 				end
 
 				local limit = count or 65536
@@ -465,7 +465,7 @@ local function executeStreamingRequest(
 
 				while #pending == 0 and not sourceClosed do
 					local chunk = response:read(65536)
-					if chunk == nil then
+					if #chunk == 0 then
 						sourceClosed = true
 						break
 					end
@@ -475,7 +475,7 @@ local function executeStreamingRequest(
 				if #pending == 0 then
 					closed = true
 					decoder:close()
-					return nil
+					return ""
 				end
 
 				local take = math.min(limit, #pending)
@@ -487,7 +487,7 @@ local function executeStreamingRequest(
 				local parts = {}
 				while true do
 					local chunk = self:read()
-					if chunk == nil then
+					if #chunk == 0 then
 						break
 					end
 					table.insert(parts, chunk)

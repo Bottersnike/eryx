@@ -66,7 +66,7 @@ local response = http.stream("GET", "https://example.com/large.bin")
 
 while true do
     local chunk = response:read(64 * 1024)
-    if chunk == nil then
+    if chunk == "" then
         break
     end
     file:write(chunk)
@@ -87,11 +87,7 @@ local size = file:size()
 local response = http.request("PUT", "https://example.com/video", {
     bodyStream = {
         read = function(self, n)
-            local chunk = file:read(n)
-            if chunk == "" then
-                return nil
-            end
-            return chunk
+            return file:read(n)
         end,
     },
     bodyLength = size,
@@ -113,7 +109,7 @@ local server = http.HttpServer.new(function(req, res)
 
     while true do
         local chunk = stream:read(64 * 1024)
-        if chunk == nil then
+        if chunk == "" then
             break
         end
         total += #chunk
@@ -158,7 +154,7 @@ local server = http.HttpServer.new(function(req, res)
     res:sendStream({
         read = function(self, size)
             index += 1
-            return chunks[index]
+            return chunks[index] or ""
         end,
     })
 end, {

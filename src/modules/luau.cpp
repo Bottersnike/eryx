@@ -24,7 +24,7 @@
 //
 // Every AST node is a table with at least:
 //   type     : string    -- e.g. "Block", "StatLocal", "ExprCall", ...
-//   location : { start: {line,column}, ["end"]: {line,column} }
+//   location : userdata with beginline/begincolumn/endline/endcolumn
 // plus node-specific fields described below.
 // ---------------------------------------------------------------------------
 
@@ -35,6 +35,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../LuaLocation.hpp"
 #include "../LuaUtil.hpp"
 #include "../runtime/lconfig.hpp"
 #include "../runtime/lresolve.hpp"
@@ -76,13 +77,7 @@ static void push_position(lua_State* L, const Position& pos) {
     lua_setfield(L, -2, "column");
 }
 
-static void push_location(lua_State* L, const Location& loc) {
-    lua_createtable(L, 0, 2);
-    push_position(L, loc.begin);
-    lua_setfield(L, -2, "start");
-    push_position(L, loc.end);
-    lua_setfield(L, -2, "end");
-}
+static void push_location(lua_State* L, const Location& loc) { eryx_lua_push_location(L, loc); }
 
 // Start a new node table with `type` and `location` pre-filled.
 static void begin_node(lua_State* L, const char* type, const Location& loc) {
@@ -1596,7 +1591,7 @@ static int l_config(lua_State* L) {
 // ---------------------------------------------------------------------------
 // Module entry point
 //
-// check / typeAt / autocomplete are implemented in LuauShared (_wrapper_lib)
+// check / typeAt / autocomplete / typeofModule are implemented in LuauShared (_wrapper_lib)
 // because they depend on Luau.Analysis which requires the VM.
 // ---------------------------------------------------------------------------
 static const luaL_Reg funcs[] = {
@@ -1608,6 +1603,7 @@ static const luaL_Reg funcs[] = {
     { "check", eryx_luau_check },
     { "typeAt", eryx_luau_typeAt },
     { "autocomplete", eryx_luau_autocomplete },
+    { "typeofModule", eryx_luau_typeofModule },
     { "resolve", l_resolve },
     { "getconfig", l_config },
     { nullptr, nullptr },

@@ -43,7 +43,7 @@ end
 -- For function-typed props, builds full signature data.
 -- For non-function props, builds a property record (params=nil).
 local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) -> string?, ownerName: string?): FuncDoc?
-	local rawDoc: string? = if prop.location then findDocComment(prop.location.start.line) else nil
+	local rawDoc: string? = if prop.location then findDocComment(prop.location.beginline) else nil
 	local parsed: ParsedDoc? = nil
 	local memberDoc: string? = rawDoc
 

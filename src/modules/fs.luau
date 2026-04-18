@@ -10,9 +10,9 @@
 ]=]
 
 local stream = require("@eryx/stream")
-local pathmod = require("@eryx/path")
+local pathlib = require("@eryx/path")
 
-type PathLike = pathmod.PathLike
+type PathLike = pathlib.PathLike
 
 export type BaseFile = {
 	--- The file path passed to `open`.
@@ -113,22 +113,24 @@ export type FileStat = {
 }
 
 type Open =
-	((path: PathLike, mode: "r") -> ReadableFile)
+	((path: PathLike, mode: nil) -> ReadableFile)
+	& ((path: PathLike, mode: "r") -> ReadableFile)
 	& ((path: PathLike, mode: "w") -> WritableFile)
 	& ((path: PathLike, mode: "a") -> WritableFile)
 	& ((path: PathLike, mode: "r+") -> ReadWriteFile)
 	& ((path: PathLike, mode: "w+") -> ReadWriteFile)
 	& ((path: PathLike, mode: "a+") -> ReadWriteFile)
-	& ((path: PathLike, mode: string?) -> File)
+	& ((path: PathLike, mode: string) -> File)
 
 type OpenSync =
 	((path: PathLike, mode: "r") -> ReadableFile)
+	& ((path: PathLike, mode: nil) -> ReadableFile)
 	& ((path: PathLike, mode: "w") -> WritableFile)
 	& ((path: PathLike, mode: "a") -> WritableFile)
 	& ((path: PathLike, mode: "r+") -> ReadWriteFile)
 	& ((path: PathLike, mode: "w+") -> ReadWriteFile)
 	& ((path: PathLike, mode: "a+") -> ReadWriteFile)
-	& ((path: PathLike, mode: string?) -> File)
+	& ((path: PathLike, mode: string) -> File)
 
 local fs = {}
 
@@ -184,9 +186,7 @@ fs.path = table.freeze({
 	@return Open file handle.
 	@yields
 ]=]
-fs.open = function(path: PathLike, mode: string?): File
-	return nil :: any
-end :: Open
+fs.open = (nil :: any) :: Open
 
 --[=[
 	Opens a file synchronously and returns a `File` handle.
@@ -196,9 +196,7 @@ end :: Open
 	@param mode File mode string.
 	@return Open file handle.
 ]=]
-fs.openSync = function(path: PathLike, mode: string?): File
-	return nil :: any
-end :: OpenSync
+fs.openSync = (nil :: any) :: OpenSync
 
 --- @param path Path to check.
 --- @return `true` when the path exists.

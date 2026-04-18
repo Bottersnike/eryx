@@ -22,19 +22,6 @@
 
 local _socket = {}
 
---[=[
-	Sentinel userdata returned by stream-style socket methods (`read`, `write`,
-	and their aliases) when non-blocking I/O would block.
-
-	Compare by identity:
-	```luau
-	if sock:read(4096) == _socket.WOULD_BLOCK then
-		-- retry later
-	end
-	```
-]=]
-_socket.WOULD_BLOCK = (nil :: any) :: WouldBlock
-
 export type Socket = {
 	--- Stream capability tag.
 	read readable: true,
@@ -257,12 +244,12 @@ export type Socket = {
 	fileNo: (self: Socket) -> number,
 
 	-- Stream-compatible aliases
-	read: (self: Socket, size: number) -> string | WouldBlock,
-	readSync: (self: Socket, size: number) -> string | WouldBlock,
-	readBuffer: (self: Socket, size: number) -> buffer | WouldBlock,
-	readBufferSync: (self: Socket, size: number) -> buffer | WouldBlock,
-	write: (self: Socket, data: string | buffer) -> number | WouldBlock,
-	writeSync: (self: Socket, data: string | buffer) -> number | WouldBlock,
+	read: (self: Socket, size: number) -> string?,
+	readSync: (self: Socket, size: number) -> string?,
+	readBuffer: (self: Socket, size: number) -> buffer?,
+	readBufferSync: (self: Socket, size: number) -> buffer?,
+	write: (self: Socket, data: string | buffer) -> number?,
+	writeSync: (self: Socket, data: string | buffer) -> number?,
 	closeSync: (self: Socket) -> (),
 }
 

@@ -38,6 +38,10 @@ struct RequireContext {
 
 RequireContext eryx_get_require_context(lua_State* L);
 
+std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, RequireContext& ctx,
+                                                const std::string path);
 std::vector<LocatedModule> eryx_resolve_modules(RequireContext& ctx, const std::string path);
 std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string path);
+std::optional<LocatedModule> eryx_resolve_module(lua_State* L, RequireContext& ctx,
+                                                 const std::string path);
 std::optional<LocatedModule> eryx_resolve_module(lua_State* L, const std::string path);

@@ -6,6 +6,7 @@
 #include <unordered_set>
 
 #include "../vfs.hpp"
+#include "_wrapper_lib.hpp"
 #include "embedded_modules.h"
 #include "lconfig.hpp"
 #include "lexception.hpp"
@@ -327,9 +328,12 @@ RequireContext eryx_get_require_context(lua_State* L) {
 }
 
 std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string path) {
-    // Figure out our current context
     RequireContext ctx = eryx_get_require_context(L);
+    return eryx_resolve_modules(L, ctx, path);
+}
 
+std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, RequireContext& ctx,
+                                                const std::string path) {
     std::vector<LocatedModule> locatedModules;
 
     fs::path resolvedPath;
@@ -480,8 +484,16 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, const std::string 
     // return LocatedModule{ .path = resolvedPath.string(), .type = LocatedModule::TYPE_FILE };
 }
 
-std::optional<LocatedModule> eryx_resolve_module(lua_State* L, const std::string path) {
-    auto modules = eryx_resolve_modules(L, path);
+std::vector<LocatedModule> eryx_resolve_modules(RequireContext& ctx, const std::string path) {
+    lua_State* L = eryx_initialise_environment(nullptr);
+    auto modules = eryx_resolve_modules(L, ctx, path);
+    lua_close(L);
+    return modules;
+}
+
+std::optional<LocatedModule> eryx_resolve_module(lua_State* L, RequireContext& ctx,
+                                                 const std::string path) {
+    auto modules = eryx_resolve_modules(L, ctx, path);
     if (modules.size() > 1) {
         std::string err = "Multiple candidates for require found:\n";
         for (const auto& i : modules) {
@@ -495,4 +507,9 @@ std::optional<LocatedModule> eryx_resolve_module(lua_State* L, const std::string
         return modules[0];
     }
     return std::nullopt;
+}
+
+std::optional<LocatedModule> eryx_resolve_module(lua_State* L, const std::string path) {
+    RequireContext ctx = eryx_get_require_context(L);
+    return eryx_resolve_module(L, ctx, path);
 }

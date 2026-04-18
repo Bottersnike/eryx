@@ -93,7 +93,7 @@ local response = http.stream("GET", "https://example.com/large-file")
 
 while true do
     local chunk = response:read(64 * 1024)
-    if chunk == nil then
+    if chunk == "" then
         break
     end
 
@@ -118,7 +118,7 @@ A streamed response owns the underlying connection until it is fully consumed or
 
 That means you should always do one of these:
 
-1. Read until `:read()` returns `nil`.
+1. Read until `:read()` returns `""`.
 2. Call `:readAll()`.
 3. Call `:close()` when you are done early.
 
@@ -133,7 +133,7 @@ local response = http.stream("GET", "https://example.com/logs.gz")
 
 while true do
     local chunk = response:read(4096)
-    if chunk == nil then
+    if chunk == "" then
         break
     end
 
@@ -155,7 +155,7 @@ local response = http.request("POST", "https://example.com/upload", {
     bodyStream = {
         read = function(self, size)
             index += 1
-            return chunks[index]
+            return chunks[index] or ""
         end,
     },
     bodyLength = 20,
@@ -175,7 +175,7 @@ local response = http.request("POST", "https://example.com/upload", {
 The reader only needs a `read(size?)` method that returns:
 
 - a string chunk when more bytes are available
-- `nil` when the stream has ended
+- `""` when the stream has ended
 
 ## Expect: 100-continue
 

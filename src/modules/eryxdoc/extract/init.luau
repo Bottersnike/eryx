@@ -154,11 +154,11 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		#commentBlocks > 0
 		and result.comments
 		and #result.comments > 0
-		and result.comments[1].location.start.line == 1
+		and result.comments[1].location.beginline == 1
 	then
 		local first = commentBlocks[1]
 		local firstStat = if result.root.body and #result.root.body > 0 then result.root.body[1] else nil
-		local firstStatLine = if firstStat then firstStat.location.start.line else nil
+		local firstStatLine = if firstStat then firstStat.location.beginline else nil
 
 		if firstStatLine == nil or firstStatLine > first.endLine + 1 then
 			moduleDescription = first.text
@@ -656,7 +656,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			continue
 		end
 
-		local doc = findDocComment(stat.location.start.line)
+		local doc = findDocComment(stat.location.beginline)
 		if not doc then
 			continue
 		end
@@ -683,7 +683,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	local function processTypeAlias(stat: luau.StatTypeAlias, doc: string?)
-		local line = stat.location.start.line
+		local line = stat.location.beginline
 		local typeMembers: { FuncDoc }? = nil
 		local metamethods: { FuncDoc }? = nil
 		local aliasedType = stat.aliasedType
@@ -840,7 +840,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 	-- ── Walk top-level statements ────────────────────────────────────────
 	for _, stat in result.root.body do
-		local line = stat.location.start.line
+		local line = stat.location.beginline
 		local doc = findDocComment(line)
 
 		if stat.type == "StatTypeAlias" then
@@ -946,7 +946,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 									continue
 								end
 
-								local itemDoc = findDocComment(item.value.location.start.line)
+								local itemDoc = findDocComment(item.value.location.beginline)
 
 								local itemFnExpr = extractFunctionExpr(item.value)
 								if itemFnExpr then
@@ -966,7 +966,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 												name = keyName :: string,
 												value = litVal,
 												groupTitle = nil,
-												doc = inlineComments[item.value.location.start.line],
+												doc = inlineComments[item.value.location.beginline],
 												owner = ownerPath,
 											} :: ConstDoc
 										)

@@ -193,7 +193,11 @@ static void async_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* bu
             lua_pushlstring(TL, buf->base, (size_t)nread);
         }
     } else if (nread == UV_EOF) {
-        lua_pushnil(TL);
+        if (data->returnBuffer) {
+            lua_newbuffer(TL, 0);
+        } else {
+            lua_pushliteral(TL, "");
+        }
     } else {
         lua_pushstring(TL, uv_strerror((int)nread));
         inError = true;
@@ -317,7 +321,7 @@ static int stdio_readSync(lua_State* L) {
         lua_pushlstring(L, buf.data(), n);
     } else {
         if (ferror(stdin)) luaL_error(L, "stdin read failed");
-        lua_pushnil(L);
+        lua_pushliteral(L, "");
     }
 
     return 1;
@@ -341,7 +345,7 @@ static int stdio_readBufferSync(lua_State* L) {
         memcpy(out, buf.data(), n);
     } else {
         if (ferror(stdin)) luaL_error(L, "stdin read failed");
-        lua_pushnil(L);
+        lua_newbuffer(L, 0);
     }
 
     return 1;
@@ -390,7 +394,7 @@ static int stdio_readline(lua_State* L) {
     }
 
     if (c == EOF && line.empty()) {
-        lua_pushnil(L);
+        lua_pushliteral(L, "");
     } else {
         if (matched && !keepTerminator) {
             line.resize(line.size() - terminator.size());

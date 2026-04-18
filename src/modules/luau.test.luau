@@ -13,7 +13,7 @@ local function walk(node, out)
 	if type(node) ~= "table" then
 		return
 	end
-	if type(node.type) == "string" and type(node.location) == "table" then
+	if type(node.type) == "string" and node.location ~= nil then
 		table.insert(out, node)
 	end
 	for _, v in node do
@@ -24,6 +24,14 @@ local function walk(node, out)
 			walk(v, out)
 		end
 	end
+end
+
+local function expectLocation(loc)
+	test.expect(loc):toNotBeNil()
+	test.expect(type(loc.beginline)):toBe("number")
+	test.expect(type(loc.begincolumn)):toBe("number")
+	test.expect(type(loc.endline)):toBe("number")
+	test.expect(type(loc.endcolumn)):toBe("number")
 end
 
 local function findNode(root, typeName)
@@ -46,7 +54,7 @@ suite:test("parse: result shape", function()
 	local result = parseOk("local x = 1")
 	test.expect(result.root.type):toBe("Block")
 	test.expect(result.lines):toBeGreaterThan(0)
-	test.expect(type(result.root.location.start.line)):toBe("number")
+	expectLocation(result.root.location)
 end)
 
 suite:test("parse: captureComments includes comments", function()
@@ -85,7 +93,7 @@ end)
 suite:test("ExprCall exposes argLocation", function()
 	local result = parseOk("print(1,2,3)")
 	local node = findNode(result.root, "ExprCall")
-	test.expect(node.argLocation):toBeType("table")
+	expectLocation(node.argLocation)
 	test.expect(#node.args):toBe(3)
 end)
 
@@ -97,7 +105,7 @@ end)
 suite:test("ExprIndexName exposes index metadata", function()
 	local result = parseOk("local x = a:b()")
 	local node = findNode(result.root, "ExprIndexName")
-	test.expect(node.indexLocation):toBeType("table")
+	expectLocation(node.indexLocation)
 	test.expect(node.opPosition):toBeType("table")
 end)
 
@@ -105,7 +113,7 @@ suite:test("ExprFunction exposes extended metadata", function()
 	local result = parseOk("local function f(...) return ... end")
 	local node = findNode(result.root, "ExprFunction")
 	test.expect(node.vararg):toBeTrue()
-	test.expect(node.varargLocation):toBeType("table")
+	expectLocation(node.varargLocation)
 	test.expect(node.functionDepth):toBeType("number")
 end)
 
@@ -144,17 +152,17 @@ suite:test("loop stats expose keyword locations", function()
 	local w = parseOk("while true do break end")
 	local ws = findNode(w.root, "StatWhile")
 	test.expect(ws.hasDo):toBeType("boolean")
-	test.expect(ws.doLocation):toBeType("table")
+	expectLocation(ws.doLocation)
 
 	local f = parseOk("for i=1,3 do end")
 	local fs = findNode(f.root, "StatFor")
 	test.expect(fs.hasDo):toBeType("boolean")
-	test.expect(fs.doLocation):toBeType("table")
+	expectLocation(fs.doLocation)
 
 	local fi = parseOk("for k,v in {} do end")
 	local fis = findNode(fi.root, "StatForIn")
 	test.expect(fis.hasIn):toBeType("boolean")
-	test.expect(fis.inLocation):toBeType("table")
+	expectLocation(fis.inLocation)
 end)
 
 suite:test("basic statement nodes", function()
@@ -187,7 +195,7 @@ end)
 suite:test("StatLocal exposes equalsSignLocation", function()
 	local result = parseOk("local x = 1")
 	local stat = findNode(result.root, "StatLocal")
-	test.expect(stat.equalsSignLocation):toBeType("table")
+	expectLocation(stat.equalsSignLocation)
 end)
 
 suite:test("type statement nodes", function()
@@ -215,7 +223,7 @@ end)
 suite:test("StatTypeAlias exposes name/generic locations", function()
 	local result = parseOk("export type X<T = number> = T")
 	local stat = findNode(result.root, "StatTypeAlias")
-	test.expect(stat.nameLocation):toBeType("table")
+	expectLocation(stat.nameLocation)
 	test.expect(stat.exported):toBeTrue()
 	test.expect(type(stat.generics)):toBe("table")
 end)
@@ -224,7 +232,7 @@ suite:test("StatDeclareFunction exposes parameters", function()
 	local result = luau.parse("declare function f(x: number): number")
 	test.skipIf(#result.errors > 0, "declare function syntax not enabled in this Luau build")
 	local stat = findNode(result.root, "StatDeclareFunction")
-	test.expect(stat.nameLocation):toBeType("table")
+	expectLocation(stat.nameLocation)
 	test.expect(stat.params):toBeType("table")
 	test.expect(stat.paramNames):toBeType("table")
 	test.expect(stat.returnTypes):toBeType("table")
@@ -256,8 +264,8 @@ suite:test("TypeReference exposes prefix/name/parameter metadata", function()
 	local result = parseOk("type A = Mod.B<number>")
 	local t = findNode(result.root, "TypeReference")
 	test.expect(t.hasParameterList):toBeType("boolean")
-	test.expect(t.nameLocation):toBeType("table")
-	test.expect(t.prefixLocation):toBeType("table")
+	expectLocation(t.nameLocation)
+	expectLocation(t.prefixLocation)
 	test.expect(type(t.parameters)):toBe("table")
 end)
 
@@ -268,7 +276,7 @@ suite:test("TypeTable exposes access/indexer metadata", function()
 	test.expect(t.props[1].access):toBeType("string")
 	if t.indexer then
 		test.expect(t.indexer.access):toBeType("string")
-		test.expect(t.indexer.location):toBeType("table")
+		expectLocation(t.indexer.location)
 	end
 end)
 
@@ -346,7 +354,7 @@ suite:test("check: exposes lint diagnostics", function()
 		test.expect(first.code):toBeType("number")
 		test.expect(first.name):toBeType("string")
 		test.expect(first.message):toBeType("string")
-		test.expect(type(first.location)):toBe("table")
+		expectLocation(first.location)
 	end
 end)
 
@@ -365,6 +373,24 @@ suite:test("typeAt: detailed mode", function()
 	test.expect(out.source):toBeType("string")
 	test.expect(out.type):toBeType("table")
 	test.expect(out.type.kind):toBeType("string")
+end)
+
+suite:test("typeofModule: classic string mode", function()
+	local source = "return { answer = 42 }"
+	local out = luau.typeofModule(source)
+	test.expect(out):toBeType("string")
+end)
+
+suite:test("typeofModule: detailed mode", function()
+	local source = "return { answer = 42 }, 'ok'"
+	local out = luau.typeofModule(source, { detailed = true })
+	test.expect(out):toBeType("table")
+	assert(typeof(out) == "table") -- for types
+	test.expect(out.display):toBeType("string")
+	test.expect(out.source):toBe("Module")
+	test.expect(out.typePack):toBeType("table")
+	assert(typeof(out.typePack) == "table") -- for types
+	test.expect(out.typePack.kind):toBeType("string")
 end)
 
 suite:test("autocomplete: detailed type payload", function()
