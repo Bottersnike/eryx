@@ -368,12 +368,12 @@ local function parseRequestCookies(headerValue: string?): { [string]: string | {
 end
 
 local function sendFileResponse(response: ServerResponse.ServerResponse, path: string, options: SendFileOptions?)
-	local opts = options or {}
+	local opts = options or {} :: SendFileOptions
 	local canonicalPath = fs.path.canonicalize(path)
 	assert(fs.isFile(canonicalPath), `File not found: {canonicalPath}`)
 
 	local stat = fs.stat(canonicalPath)
-	local headers = if opts.headers ~= nil then table.clone(opts.headers) else {}
+	local headers = if opts.headers then table.clone(opts.headers) else {}
 	local function headerExists(name: string): boolean
 		local wanted = string.lower(name)
 		for key in headers do

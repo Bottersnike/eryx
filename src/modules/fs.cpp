@@ -22,6 +22,7 @@
 #include <unistd.h>
 #endif
 
+#include "../LuaUtil.hpp"
 #include "module_api.h"
 
 static const LuauModuleInfo INFO = {
@@ -879,7 +880,7 @@ static void init_file_ud(lua_State* L, uv_file fd, bool readable, bool writable,
 }
 
 static int fs_openSync(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     const char* mode = luaL_optstring(L, 2, "r");
 
     bool readable, writable;
@@ -887,20 +888,20 @@ static int fs_openSync(lua_State* L) {
     if (flags < 0) luaL_argerror(L, 2, "invalid mode string");
 
     uv_fs_t req;
-    int result = uv_fs_open(eryx_get_runtime(L)->loop, &req, path, flags, 0644, nullptr);
+    int result = uv_fs_open(eryx_get_runtime(L)->loop, &req, path.c_str(), flags, 0644, nullptr);
     uv_fs_req_cleanup(&req);
 
     if (result < 0) {
-        luaL_error(L, "failed to open '%s': %s", path, uv_strerror(result));
+        luaL_error(L, "failed to open '%s': %s", path.c_str(), uv_strerror(result));
         return 0;
     }
 
-    init_file_ud(L, (uv_file)result, readable, writable, path);
+    init_file_ud(L, (uv_file)result, readable, writable, path.c_str());
     return 1;
 }
 
 static int fs_open(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     const char* mode = luaL_optstring(L, 2, "r");
 
     bool readable, writable;
@@ -910,12 +911,12 @@ static int fs_open(lua_State* L) {
     FsAsyncOp* op = begin_async(L);
     op->openReadable = readable;
     op->openWritable = writable;
-    strncpy(op->openPath, path, sizeof(op->openPath) - 1);
+    strncpy(op->openPath, path.c_str(), sizeof(op->openPath) - 1);
     op->openPath[sizeof(op->openPath) - 1] = '\0';
 
     uv_fs_t* req = new uv_fs_t;
     req->data = op;
-    uv_fs_open(op->rt->loop, req, path, flags, 0644, open_async_cb);
+    uv_fs_open(op->rt->loop, req, path.c_str(), flags, 0644, open_async_cb);
     return lua_yield(L, 0);
 }
 
@@ -925,7 +926,7 @@ static int fs_open(lua_State* L) {
 
 // fs.exists(path) -> bool
 static int fs_exists(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     bool exists = fs::exists(path, ec);
     lua_pushboolean(L, exists && !ec);
@@ -934,7 +935,7 @@ static int fs_exists(lua_State* L) {
 
 // fs.isFile(path) -> bool
 static int fs_isFile(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     bool is_file = fs::is_regular_file(path, ec);
     lua_pushboolean(L, is_file && !ec);
@@ -943,7 +944,7 @@ static int fs_isFile(lua_State* L) {
 
 // fs.isDirectory(path) -> bool
 static int fs_isDirectory(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     bool is_dir = fs::is_directory(path, ec);
     lua_pushboolean(L, is_dir && !ec);
@@ -952,7 +953,7 @@ static int fs_isDirectory(lua_State* L) {
 
 // fs.mkdir(path) -> bool
 static int fs_mkdir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     bool success = fs::create_directories(path, ec);
     lua_pushboolean(L, success);
@@ -961,7 +962,7 @@ static int fs_mkdir(lua_State* L) {
 
 // fs.remove(path) -> bool
 static int fs_remove(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     // remove_all implements "rm -rf", remove is for empty dirs or files
     uintmax_t count = fs::remove_all(path, ec);
@@ -971,7 +972,7 @@ static int fs_remove(lua_State* L) {
 
 // fs.listDir(path) -> {string}
 static int fs_listDir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 
     lua_newtable(L);
     int index = 1;
@@ -994,7 +995,7 @@ static int fs_listDir(lua_State* L) {
 
 // fs.dirname(path) -> string
 static int fs_dirname(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::string parent = fs::path(path).parent_path().string();
     lua_pushstring(L, parent.c_str());
     return 1;
@@ -1002,7 +1003,7 @@ static int fs_dirname(lua_State* L) {
 
 // fs.basename(path) -> string
 static int fs_basename(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::string name = fs::path(path).filename().string();
     lua_pushstring(L, name.c_str());
     return 1;
@@ -1010,7 +1011,7 @@ static int fs_basename(lua_State* L) {
 
 // fs.stem(path) -> string (filename without extension)
 static int fs_stem(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::string stem = fs::path(path).stem().string();
     lua_pushstring(L, stem.c_str());
     return 1;
@@ -1018,7 +1019,7 @@ static int fs_stem(lua_State* L) {
 
 // fs.extension(path) -> string (includes the leading dot)
 static int fs_extension(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::string ext = fs::path(path).extension().string();
     lua_pushstring(L, ext.c_str());
     return 1;
@@ -1026,11 +1027,11 @@ static int fs_extension(lua_State* L) {
 
 // fs.canonicalize(path) -> string
 static int fs_canonicalize(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     fs::path canon = fs::weakly_canonical(path, ec);
     if (ec) {
-        luaL_error(L, "Failed to canonicalize path: %s (%s)", path, ec.message().c_str());
+        luaL_error(L, "Failed to canonicalize path: %s (%s)", path.c_str(), ec.message().c_str());
         return 0;
     }
     std::string result = canon.string();
@@ -1045,9 +1046,9 @@ static int fs_join(lua_State* L) {
         luaL_error(L, "fs.join requires at least one argument");
         return 0;
     }
-    fs::path result(luaL_checkstring(L, 1));
+    fs::path result(luaL_checkpathlike(L, 1));
     for (int i = 2; i <= n; i++) {
-        result /= luaL_checkstring(L, i);
+        result /= luaL_checkpathlike(L, i);
     }
     std::string str = result.string();
     lua_pushstring(L, str.c_str());
@@ -1056,12 +1057,13 @@ static int fs_join(lua_State* L) {
 
 // fs.rename(oldPath, newPath)
 static int fs_rename(lua_State* L) {
-    const char* oldPath = luaL_checkstring(L, 1);
-    const char* newPath = luaL_checkstring(L, 2);
+    std::string oldPath = luaL_checkpathlike(L, 1);
+    std::string newPath = luaL_checkpathlike(L, 2);
     std::error_code ec;
     fs::rename(oldPath, newPath, ec);
     if (ec) {
-        luaL_error(L, "rename failed: %s -> %s (%s)", oldPath, newPath, ec.message().c_str());
+        luaL_error(L, "rename failed: %s -> %s (%s)", oldPath.c_str(), newPath.c_str(),
+                   ec.message().c_str());
         return 0;
     }
     return 0;
@@ -1069,12 +1071,12 @@ static int fs_rename(lua_State* L) {
 
 // fs.copy(src, dst)
 static int fs_copy(lua_State* L) {
-    const char* src = luaL_checkstring(L, 1);
-    const char* dst = luaL_checkstring(L, 2);
+    std::string src = luaL_checkpathlike(L, 1);
+    std::string dst = luaL_checkpathlike(L, 2);
     std::error_code ec;
     fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
     if (ec) {
-        luaL_error(L, "copy failed: %s -> %s (%s)", src, dst, ec.message().c_str());
+        luaL_error(L, "copy failed: %s -> %s (%s)", src.c_str(), dst.c_str(), ec.message().c_str());
         return 0;
     }
     return 0;
@@ -1084,8 +1086,8 @@ static int fs_copy(lua_State* L) {
 // type: "file" (default) or "directory"
 // On Windows, the correct symlink type must be used; on Unix this is ignored.
 static int fs_symlink(lua_State* L) {
-    const char* target = luaL_checkstring(L, 1);
-    const char* link = luaL_checkstring(L, 2);
+    std::string target = luaL_checkpathlike(L, 1);
+    std::string link = luaL_checkpathlike(L, 2);
     const char* typeStr = luaL_optstring(L, 3, nullptr);
 
     // Auto-detect type from target if not specified
@@ -1110,7 +1112,8 @@ static int fs_symlink(lua_State* L) {
         fs::create_symlink(target, link, ec);
     }
     if (ec) {
-        luaL_error(L, "symlink failed: %s -> %s (%s)", target, link, ec.message().c_str());
+        luaL_error(L, "symlink failed: %s -> %s (%s)", target.c_str(), link.c_str(),
+                   ec.message().c_str());
         return 0;
     }
     return 0;
@@ -1118,11 +1121,11 @@ static int fs_symlink(lua_State* L) {
 
 // fs.readlink(path) -> string
 static int fs_readlink(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     fs::path target = fs::read_symlink(path, ec);
     if (ec) {
-        luaL_error(L, "readlink failed: %s (%s)", path, ec.message().c_str());
+        luaL_error(L, "readlink failed: %s (%s)", path.c_str(), ec.message().c_str());
         return 0;
     }
     std::string result = target.string();
@@ -1132,7 +1135,7 @@ static int fs_readlink(lua_State* L) {
 
 // fs.isSymlink(path) -> bool
 static int fs_isSymlink(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
     // symlink_status does NOT follow symlinks, so is_symlink works correctly
     auto status = fs::symlink_status(path, ec);
@@ -1143,7 +1146,7 @@ static int fs_isSymlink(lua_State* L) {
 // fs.stat(path, followSymlinks?) -> { size, mtime, isFile, isDirectory, isSymlink }
 // followSymlinks defaults to true
 static int fs_stat(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     bool followSymlinks = lua_isnoneornil(L, 2) ? true : lua_toboolean(L, 2);
 
     std::error_code ec;
@@ -1195,12 +1198,12 @@ static int fs_stat(lua_State* L) {
     // readonly (cross-platform)
     lua_pushstring(L, "readonly");
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     lua_pushboolean(L,
                     attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_READONLY) != 0));
 #else
     struct stat st;
-    if (::stat(path, &st) == 0) {
+    if (::stat(path.c_str(), &st) == 0) {
         lua_pushboolean(L, (st.st_mode & S_IWUSR) == 0);
     } else {
         lua_pushnil(L);
@@ -1212,7 +1215,7 @@ static int fs_stat(lua_State* L) {
 }
 
 static int fs_hasPermission(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     const char* permission = luaL_checkstring(L, 2);
     uint32_t requested = 0;
     if (!parse_permission_token(permission, &requested)) {
@@ -1235,8 +1238,9 @@ static int fs_hasPermission(lua_State* L) {
 
     PSECURITY_DESCRIPTOR sd = nullptr;
     PACL dacl = nullptr;
-    DWORD secErr = GetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                         nullptr, nullptr, &dacl, nullptr, &sd);
+    DWORD secErr =
+        GetNamedSecurityInfoA((LPSTR)path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                              nullptr, nullptr, &dacl, nullptr, &sd);
     if (secErr != ERROR_SUCCESS) {
         lua_pushboolean(L, false);
         return 1;
@@ -1300,7 +1304,7 @@ static int fs_hasPermission(lua_State* L) {
     }
 
     struct stat st;
-    if (::stat(path, &st) != 0) {
+    if (::stat(path.c_str(), &st) != 0) {
         lua_pushboolean(L, false);
         return 1;
     }
@@ -1372,14 +1376,14 @@ static int fs_hasPermission(lua_State* L) {
 }
 
 static int fs_getReadonly(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     lua_pushboolean(L,
                     attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_READONLY) != 0));
 #else
     struct stat st;
-    if (::stat(path, &st) == 0)
+    if (::stat(path.c_str(), &st) == 0)
         lua_pushboolean(L, (st.st_mode & S_IWUSR) == 0);
     else
         lua_pushboolean(L, false);
@@ -1388,33 +1392,33 @@ static int fs_getReadonly(lua_State* L) {
 }
 
 static int fs_setReadonly(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     bool readonly = lua_toboolean(L, 2);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
     if (readonly)
         attrs |= FILE_ATTRIBUTE_READONLY;
     else
         attrs &= ~FILE_ATTRIBUTE_READONLY;
-    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set readonly attribute");
+    if (!SetFileAttributesA(path.c_str(), attrs)) luaL_error(L, "failed to set readonly attribute");
 #else
     struct stat st;
-    if (::stat(path, &st) != 0) luaL_error(L, "path does not exist");
+    if (::stat(path.c_str(), &st) != 0) luaL_error(L, "path does not exist");
     mode_t mode = st.st_mode;
     if (readonly)
         mode &= ~(S_IWUSR | S_IWGRP | S_IWOTH);
     else
         mode |= S_IWUSR;
-    if (::chmod(path, mode) != 0) luaL_error(L, "failed to set readonly state");
+    if (::chmod(path.c_str(), mode) != 0) luaL_error(L, "failed to set readonly state");
 #endif
     return 0;
 }
 
 static int fs_getHidden(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     lua_pushboolean(L, attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_HIDDEN) != 0));
 #else
     luaL_error(L, "hidden attribute is only supported on Windows");
@@ -1423,16 +1427,16 @@ static int fs_getHidden(lua_State* L) {
 }
 
 static int fs_setHidden(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     bool hidden = lua_toboolean(L, 2);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
     if (hidden)
         attrs |= FILE_ATTRIBUTE_HIDDEN;
     else
         attrs &= ~FILE_ATTRIBUTE_HIDDEN;
-    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set hidden attribute");
+    if (!SetFileAttributesA(path.c_str(), attrs)) luaL_error(L, "failed to set hidden attribute");
 #else
     luaL_error(L, "hidden attribute is only supported on Windows");
 #endif
@@ -1440,9 +1444,9 @@ static int fs_setHidden(lua_State* L) {
 }
 
 static int fs_getSystem(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     lua_pushboolean(L, attrs != INVALID_FILE_ATTRIBUTES && ((attrs & FILE_ATTRIBUTE_SYSTEM) != 0));
 #else
     luaL_error(L, "system attribute is only supported on Windows");
@@ -1451,16 +1455,16 @@ static int fs_getSystem(lua_State* L) {
 }
 
 static int fs_setSystem(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     bool systemBit = lua_toboolean(L, 2);
 #ifdef _WIN32
-    DWORD attrs = GetFileAttributesA(path);
+    DWORD attrs = GetFileAttributesA(path.c_str());
     if (attrs == INVALID_FILE_ATTRIBUTES) luaL_error(L, "path does not exist");
     if (systemBit)
         attrs |= FILE_ATTRIBUTE_SYSTEM;
     else
         attrs &= ~FILE_ATTRIBUTE_SYSTEM;
-    if (!SetFileAttributesA(path, attrs)) luaL_error(L, "failed to set system attribute");
+    if (!SetFileAttributesA(path.c_str(), attrs)) luaL_error(L, "failed to set system attribute");
 #else
     luaL_error(L, "system attribute is only supported on Windows");
 #endif
@@ -1468,63 +1472,64 @@ static int fs_setSystem(lua_State* L) {
 }
 
 static int fs_chmod(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
     (void)path;
     luaL_error(L, "fs.chmod is not supported on Windows; use fs.setReadonly/fs.setAcl");
 #else
     lua_Integer mode = luaL_checkinteger(L, 2);
-    if (::chmod(path, (mode_t)mode) != 0) {
-        luaL_error(L, "failed to chmod '%s'", path);
+    if (::chmod(path.c_str(), (mode_t)mode) != 0) {
+        luaL_error(L, "failed to chmod '%s'", path.c_str());
     }
 #endif
     return 0;
 }
 
 static int fs_chown(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
     const char* sidString = luaL_checkstring(L, 2);
     PSID sid = nullptr;
     if (!win_parse_sid_string(sidString, &sid)) {
         luaL_error(L, "owner must be a SID string on Windows");
     }
-    DWORD err = SetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, sid,
-                                      nullptr, nullptr, nullptr);
+    DWORD err = SetNamedSecurityInfoA((LPSTR)path.c_str(), SE_FILE_OBJECT,
+                                      OWNER_SECURITY_INFORMATION, sid, nullptr, nullptr, nullptr);
     LocalFree(sid);
     if (err != ERROR_SUCCESS) {
         luaL_error(L, "failed to set owner SID");
     }
 #else
     uid_t uid = (uid_t)luaL_checkinteger(L, 2);
-    if (::chown(path, uid, (gid_t)-1) != 0) {
-        luaL_error(L, "failed to chown '%s'", path);
+    if (::chown(path.c_str(), uid, (gid_t)-1) != 0) {
+        luaL_error(L, "failed to chown '%s'", path.c_str());
     }
 #endif
     return 0;
 }
 
 static int fs_chgrp(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
     (void)path;
     luaL_error(L, "fs.chgrp is not supported on Windows");
 #else
     gid_t gid = (gid_t)luaL_checkinteger(L, 2);
-    if (::chown(path, (uid_t)-1, gid) != 0) {
-        luaL_error(L, "failed to chgrp '%s'", path);
+    if (::chown(path.c_str(), (uid_t)-1, gid) != 0) {
+        luaL_error(L, "failed to chgrp '%s'", path.c_str());
     }
 #endif
     return 0;
 }
 
 static int fs_getAcl(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 #ifdef _WIN32
     PSECURITY_DESCRIPTOR sd = nullptr;
     PACL dacl = nullptr;
-    DWORD err = GetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
-                                      nullptr, nullptr, &dacl, nullptr, &sd);
+    DWORD err =
+        GetNamedSecurityInfoA((LPSTR)path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                              nullptr, nullptr, &dacl, nullptr, &sd);
     if (err != ERROR_SUCCESS || dacl == nullptr) {
         if (sd) LocalFree(sd);
         lua_newtable(L);
@@ -1595,7 +1600,7 @@ static int fs_getAcl(lua_State* L) {
 }
 
 static int fs_setAcl(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
 #ifdef _WIN32
     std::vector<EXPLICIT_ACCESSA> entries;
@@ -1652,8 +1657,8 @@ static int fs_setAcl(lua_State* L) {
         }
         luaL_error(L, "failed to build ACL");
     }
-    err = SetNamedSecurityInfoA((LPSTR)path, SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
-                                nullptr, acl, nullptr);
+    err = SetNamedSecurityInfoA((LPSTR)path.c_str(), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION,
+                                nullptr, nullptr, acl, nullptr);
     LocalFree(acl);
     for (PSID sid : sidPointers) {
         if (sid) LocalFree(sid);

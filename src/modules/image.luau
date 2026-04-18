@@ -3,6 +3,9 @@ Basic operations for reading and writing images.
 ]=]
 
 local image = {}
+local path = require("@eryx/path")
+
+type PathLike = path.PathLike
 
 export type Image = {
 	--- The width of the image, in pixels
@@ -34,7 +37,7 @@ export type Image = {
 	--- - JPEG: `.jpg`/`.jpeg`
 	--- - BMP: `.bmp`
 	--- - TGA: `.tga`
-	save: (self: Image, path: string, quality: number?) -> (),
+	save: (self: Image, path: PathLike, quality: number?) -> (),
 
 	--- Resize an image.
 	---
@@ -45,7 +48,7 @@ export type Image = {
 --- Open an image from the filesystem. The format is inferred from the filename.
 ---
 --- Supported formats: JPEG, PNG, TGA, BMP, PSD, GIF, HDR, PIC, PNM
-function image.open(path: string): Image
+function image.open(path: PathLike): Image
 	return nil :: any
 end
 

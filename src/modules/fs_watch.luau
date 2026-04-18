@@ -27,8 +27,10 @@
 local Signal = require("@eryx/signal")
 local task = require("@eryx/task")
 local _fs_watch = require("@eryx/_fs_watch")
+local path = require("@eryx/path")
 
 type Signal<T...> = Signal.Signal<T...>
+type PathLike = path.PathLike
 
 local fs_watch = {}
 
@@ -69,7 +71,7 @@ export type DirWatcher = {
 
 --- Watches a single file for changes.
 --- Returns a `FileWatcher` whose `changed` signal fires with `(eventType)`.
-function fs_watch.watchFile(path: string, options: WatchOptions?): FileWatcher
+function fs_watch.watchFile(path: PathLike, options: WatchOptions?): FileWatcher
 	local changed: Signal<string> = Signal.new()
 	local debounce = if options then options.debounce else nil
 	local pendingTimer: thread? = nil
@@ -115,7 +117,7 @@ end
 
 --- Watches a directory for changes.
 --- Returns a `DirWatcher` whose `changed` signal fires with `(filename, eventType)`.
-function fs_watch.watchDir(path: string, options: WatchOptions?): DirWatcher
+function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
 	local changed: Signal<string, string> = Signal.new()
 	local recursive = if options then options.recursive else false
 	local debounce = if options then options.debounce else nil

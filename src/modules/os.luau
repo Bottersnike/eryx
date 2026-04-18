@@ -1,9 +1,15 @@
+local path = require("@eryx/path")
+local stream = require("@eryx/stream")
+
+type Path = path.Path
+type PathLike = path.PathLike
+
 --[=[
 	Options controlling how a child process is spawned.
 ]=]
 export type SpawnOptions = {
 	--- Specify the directory for the child process
-	cwd: string?,
+	cwd: PathLike?,
 	--- Specify additional environment variables for the child process
 	env: { [string]: string }?,
 	--[=[
@@ -26,8 +32,6 @@ export type ExecResult = {
 	--- Process exit status code.
 	code: number,
 }
-
-local stream = require("@eryx/stream")
 
 --[=[
 	Handle to a running child process returned by [[os.spawn]].
@@ -288,7 +292,7 @@ end
 	Get the current working directory.
 	@return Absolute path to the current working directory.
 ]=]
-function os.cwd(): string
+function os.cwd(): Path
 	return nil :: any
 end
 
@@ -296,7 +300,7 @@ end
 	Change the current working directory
 	@param path New working directory path.
 ]=]
-function os.chdir(path: string) end
+function os.chdir(path: PathLike) end
 
 --[=[
 	Get the command line arguments for this script.

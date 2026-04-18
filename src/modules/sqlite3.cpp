@@ -7,6 +7,7 @@
 #include <cstring>
 #include <string>
 
+#include "../LuaUtil.hpp"
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
@@ -148,12 +149,12 @@ static void push_row(lua_State* L, sqlite3_stmt* stmt) {
 // ── Module functions ──────────────────────────────────────────────────────────
 
 static int sql_open(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 
     LuaDatabase* ud = (LuaDatabase*)lua_newuserdatadtor(L, sizeof(LuaDatabase), db_dtor);
     ud->db = nullptr;
 
-    int rc = sqlite3_open(path, &ud->db);
+    int rc = sqlite3_open(path.c_str(), &ud->db);
     if (rc != SQLITE_OK) {
         std::string err = "Failed to open database: ";
         if (ud->db) {

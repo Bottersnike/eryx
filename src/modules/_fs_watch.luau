@@ -1,4 +1,7 @@
 local _fs_watch = {}
+local path = require("@eryx/path")
+
+type PathLike = path.PathLike
 
 export type WatchHandle = {
 	--- Stops the filesystem watcher and releases its resources.
@@ -16,7 +19,7 @@ export type WatchHandle = {
 --- Set `recursive` to `true` to watch subdirectories (supported on Windows
 --- and macOS; on Linux each subdirectory needs its own watcher).
 function _fs_watch.create(
-	path: string,
+	path: PathLike,
 	recursive: boolean,
 	callback: (eventType: string, filename: string?) -> ()
 ): WatchHandle

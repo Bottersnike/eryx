@@ -13,6 +13,7 @@
 ]=]
 
 local fs = require("@eryx/fs")
+local path = require("@eryx/path")
 
 local glob = {}
 
@@ -567,7 +568,7 @@ function glob.glob(pattern: string, options: GlobOptions?): { string }
 		local entries = fs.listDir(absDir)
 		table.sort(entries)
 		for _, entry in entries do
-			local abs = fs.path.join(absDir, entry)
+			local abs = path.join(absDir, entry)
 			local rel = if relDir == "" then entry else relDir .. "/" .. entry
 			local relNormalized = normalize(rel)
 			local dir = fs.isDirectory(abs)

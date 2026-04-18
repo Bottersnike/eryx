@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include "../../LuaUtil.hpp"
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
@@ -139,12 +140,12 @@ static int xml_parse(lua_State* L) {
 // ── xml.load(path) -> XmlDocument ─────────────────────────────────────────────
 
 static int xml_load(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 
     LuaXmlDocument* ud = (LuaXmlDocument*)lua_newuserdata(L, sizeof(LuaXmlDocument));
     ud->ref = docref_new();
 
-    pugi::xml_parse_result result = ud->ref->doc->load_file(path);
+    pugi::xml_parse_result result = ud->ref->doc->load_file(path.c_str());
     if (!result) {
         std::string err = std::string("XML load error: ") + result.description() + " at offset " +
                           std::to_string(result.offset);
@@ -216,7 +217,7 @@ static int doc_save(lua_State* L) {
 // doc:savefile(path, indent?, flags?)
 static int doc_savefile(lua_State* L) {
     LuaXmlDocument* ud = check_doc(L, 1);
-    const char* path = luaL_checkstring(L, 2);
+    std::string path = luaL_checkpathlike(L, 2);
     const char* indent = luaL_optstring(L, 3, "\t");
     unsigned int flags = pugi::format_default;
     if (lua_isstring(L, 4)) {
@@ -226,8 +227,8 @@ static int doc_savefile(lua_State* L) {
         else if (strcmp(f, "no_declaration") == 0)
             flags = pugi::format_no_declaration;
     }
-    bool ok = ud->ref->doc->save_file(path, indent, flags);
-    if (!ok) luaL_error(L, "Failed to save XML file: %s", path);
+    bool ok = ud->ref->doc->save_file(path.c_str(), indent, flags);
+    if (!ok) luaL_error(L, "Failed to save XML file: %s", path.c_str());
     return 0;
 }
 

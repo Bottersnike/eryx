@@ -1,3 +1,4 @@
+#include "../LuaUtil.hpp"
 #include "lualib.h"
 #include "module_api.h"
 
@@ -39,19 +40,20 @@ static void image_dtor(void* ud) {
     }
 }
 static int image_open(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
 
     int forceChannels = 4;  // RGBA
 
     int w, h, channels;
-    stbi_uc* data = stbi_load(path, &w, &h, &channels, forceChannels);
+    stbi_uc* data = stbi_load(path.c_str(), &w, &h, &channels, forceChannels);
     if (!data) {
-        luaL_errorL(L, "Failed to load %s: %s", path, stbi_failure_reason());
+        luaL_errorL(L, "Failed to load %s: %s", path.c_str(), stbi_failure_reason());
         return 0;
     }
     if (w * h * forceChannels > MAX_BUFFER_SIZE) {
         stbi_image_free(data);
-        luaL_error(L, "Failed to load: %s: %dx%d is too large for a Luau buffer!", path, w, h);
+        luaL_error(L, "Failed to load: %s: %dx%d is too large for a Luau buffer!", path.c_str(), w,
+                   h);
         return 0;
     }
 
@@ -218,7 +220,7 @@ static int image_SetPixel(lua_State* L) {
 }
 static int image_Save(lua_State* L) {
     LuaImage* i = (LuaImage*)luaL_checkudata(L, 1, IMAGE_METATABLE);
-    std::string path = luaL_checkstring(L, 2);
+    std::string path = luaL_checkpathlike(L, 2);
 
     int success = 0;
     int stride = i->width * i->channels;

@@ -60,7 +60,7 @@ export type SslContext = {
 
 		@param cafile Path to a PEM file containing one or more CA certificates.
 	]=]
-	loadVerifyLocations: (self: SslContext, cafile: string) -> (),
+	loadVerifyLocations: (self: SslContext, cafile: PathLike) -> (),
 
 	--[=[
 		Sets the certificate verification mode.
@@ -172,7 +172,10 @@ export type CertificateInfo = {
 }
 
 local capability = require("@eryx/capability")
+local path = require("@eryx/path")
 local _ssl = {}
+
+type PathLike = path.PathLike
 
 --[=[
 	Creates a new [[SslContext]] with sensible defaults for **client** mode.
@@ -200,7 +203,7 @@ end
 	@param password Passphrase for encrypted private keys.
 	@return SslContext -- A server-mode TLS context.
 ]=]
-function _ssl.createServerContext(certfile: string, keyfile: string, password: string?): SslContext
+function _ssl.createServerContext(certfile: PathLike, keyfile: PathLike, password: string?): SslContext
 	return nil :: any
 end
 

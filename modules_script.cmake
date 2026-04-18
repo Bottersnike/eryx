@@ -68,6 +68,7 @@ add_luau_script_module(markdown/rules/
 add_luau_script_module(pprint src/modules/pprint.luau)
 add_luau_script_module(argparse src/modules/argparse.luau)
 add_luau_script_module(mime src/modules/mime.luau)
+add_luau_script_module(path src/modules/path.luau)
 add_luau_script_module(signal src/modules/signal.luau)
 add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)

@@ -5,10 +5,14 @@
 	truncate, and other operations. Most `File` methods yield by default; use
 	the `Sync` suffix for non-yielding variants (e.g. `readSync`, `writeSync`).
 
-	Pure path manipulation lives under `fs.path.*`.
+	Pure path manipulation lives under `@eryx/path`.
+	`fs.path.*` remains as a legacy compatibility surface.
 ]=]
 
 local stream = require("@eryx/stream")
+local pathmod = require("@eryx/path")
+
+type PathLike = pathmod.PathLike
 
 export type BaseFile = {
 	--- The file path passed to `open`.
@@ -38,11 +42,6 @@ export type BaseFile = {
 	flush: (self: BaseFile) -> (),
 	--- Flushes buffered writes to disk.
 	flushSync: (self: BaseFile) -> (),
-	--- Closes the file. Yield is due to the implicit file flush.
-	--- @yields
-	close: (self: BaseFile) -> (),
-	--- Closes the file.
-	closeSync: (self: BaseFile) -> (),
 }
 
 export type ReadableFile = BaseFile & stream.ReadableStream
@@ -114,22 +113,22 @@ export type FileStat = {
 }
 
 type Open =
-	((path: string, mode: "r") -> ReadableFile)
-	& ((path: string, mode: "w") -> WritableFile)
-	& ((path: string, mode: "a") -> WritableFile)
-	& ((path: string, mode: "r+") -> ReadWriteFile)
-	& ((path: string, mode: "w+") -> ReadWriteFile)
-	& ((path: string, mode: "a+") -> ReadWriteFile)
-	& ((path: string, mode: string?) -> File)
+	((path: PathLike, mode: "r") -> ReadableFile)
+	& ((path: PathLike, mode: "w") -> WritableFile)
+	& ((path: PathLike, mode: "a") -> WritableFile)
+	& ((path: PathLike, mode: "r+") -> ReadWriteFile)
+	& ((path: PathLike, mode: "w+") -> ReadWriteFile)
+	& ((path: PathLike, mode: "a+") -> ReadWriteFile)
+	& ((path: PathLike, mode: string?) -> File)
 
 type OpenSync =
-	((path: string, mode: "r") -> ReadableFile)
-	& ((path: string, mode: "w") -> WritableFile)
-	& ((path: string, mode: "a") -> WritableFile)
-	& ((path: string, mode: "r+") -> ReadWriteFile)
-	& ((path: string, mode: "w+") -> ReadWriteFile)
-	& ((path: string, mode: "a+") -> ReadWriteFile)
-	& ((path: string, mode: string?) -> File)
+	((path: PathLike, mode: "r") -> ReadableFile)
+	& ((path: PathLike, mode: "w") -> WritableFile)
+	& ((path: PathLike, mode: "a") -> WritableFile)
+	& ((path: PathLike, mode: "r+") -> ReadWriteFile)
+	& ((path: PathLike, mode: "w+") -> ReadWriteFile)
+	& ((path: PathLike, mode: "a+") -> ReadWriteFile)
+	& ((path: PathLike, mode: string?) -> File)
 
 local fs = {}
 
@@ -140,38 +139,38 @@ fs.path = table.freeze({
 	--- Returns the parent directory of the path (`"a/b/c.txt"` -> `"a/b"`).
 	--- @param path Input path.
 	--- @return Parent directory path.
-	dirname = function(path: string): string
+	dirname = function(path: PathLike): string
 		return nil :: any
 	end,
 	--- Returns the filename component of the path (`"a/b/c.txt"` -> `"c.txt"`).
 	--- @param path Input path.
 	--- @return Basename component.
-	basename = function(path: string): string
+	basename = function(path: PathLike): string
 		return nil :: any
 	end,
 	--- Returns the filename without its extension (`"a/b/c.txt"` -> `"c"`).
 	--- @param path Input path.
 	--- @return Stem component.
-	stem = function(path: string): string
+	stem = function(path: PathLike): string
 		return nil :: any
 	end,
 	--- Returns the file extension including the dot (`"a/b/c.txt"` -> `".txt"`).
 	--- @param path Input path.
 	--- @return Extension including leading dot, or empty string.
-	extension = function(path: string): string
+	extension = function(path: PathLike): string
 		return nil :: any
 	end,
 	--- Resolves a path to an absolute, canonical form.
 	--- @param path Input path.
 	--- @return Canonical absolute path.
-	canonicalize = function(path: string): string
+	canonicalize = function(path: PathLike): string
 		return nil :: any
 	end,
 	--- Joins path segments with the platform separator.
 	--- @param path First path segment.
 	--- @param ... Additional path segments.
 	--- @return Joined path.
-	join = function(path: string, ...: string): string
+	join = function(path: PathLike, ...: PathLike): string
 		return nil :: any
 	end,
 })
@@ -185,7 +184,7 @@ fs.path = table.freeze({
 	@return Open file handle.
 	@yields
 ]=]
-fs.open = function(path: string, mode: string?): File
+fs.open = function(path: PathLike, mode: string?): File
 	return nil :: any
 end :: Open
 
@@ -197,50 +196,50 @@ end :: Open
 	@param mode File mode string.
 	@return Open file handle.
 ]=]
-fs.openSync = function(path: string, mode: string?): File
+fs.openSync = function(path: PathLike, mode: string?): File
 	return nil :: any
 end :: OpenSync
 
 --- @param path Path to check.
 --- @return `true` when the path exists.
-function fs.exists(path: string): boolean
+function fs.exists(path: PathLike): boolean
 	return nil :: any
 end
 --- @param path Path to check.
 --- @return `true` when the path is a regular file.
-function fs.isFile(path: string): boolean
+function fs.isFile(path: PathLike): boolean
 	return nil :: any
 end
 --- @param path Path to check.
 --- @return `true` when the path is a directory.
-function fs.isDirectory(path: string): boolean
+function fs.isDirectory(path: PathLike): boolean
 	return nil :: any
 end
 --- @param path Directory path to create.
 --- @return `true` when directory creation succeeds.
-function fs.mkdir(path: string): boolean
+function fs.mkdir(path: PathLike): boolean
 	return nil :: any
 end
 --- @param path File or directory path to remove recursively.
 --- @return `true` when removal succeeds.
-function fs.remove(path: string): boolean
+function fs.remove(path: PathLike): boolean
 	return nil :: any
 end
 --- @param oldPath Existing path.
 --- @param newPath Destination path.
 --- @return Nothing.
-function fs.rename(oldPath: string, newPath: string): ()
+function fs.rename(oldPath: PathLike, newPath: PathLike): ()
 	return nil :: any
 end
 --- @param src Source path.
 --- @param dst Destination path.
 --- @return Nothing.
-function fs.copy(src: string, dst: string): ()
+function fs.copy(src: PathLike, dst: PathLike): ()
 	return nil :: any
 end
 --- @param path Directory path.
 --- @return Entry names from the directory.
-function fs.listDir(path: string): { string }
+function fs.listDir(path: PathLike): { string }
 	return nil :: any
 end
 --[=[
@@ -253,17 +252,17 @@ end
 	@param type Optional symlink type hint.
 	@return Nothing.
 ]=]
-function fs.symlink(target: string, link: string, type: ("file" | "directory")?): ()
+function fs.symlink(target: PathLike, link: PathLike, type: ("file" | "directory")?): ()
 	return nil :: any
 end
 --- @param path Symlink path.
 --- @return Symlink target path.
-function fs.readlink(path: string): string
+function fs.readlink(path: PathLike): string
 	return nil :: any
 end
 --- @param path Path to inspect.
 --- @return `true` when the path itself is a symbolic link.
-function fs.isSymlink(path: string): boolean
+function fs.isSymlink(path: PathLike): boolean
 	return nil :: any
 end
 --[=[
@@ -275,7 +274,7 @@ end
 	@param followSymlinks Whether symlinks should be followed. Defaults to `true`.
 	@return Metadata for the path, or an empty-like table when missing.
 ]=]
-function fs.stat(path: string, followSymlinks: boolean?): FileStat
+function fs.stat(path: PathLike, followSymlinks: boolean?): FileStat
 	return nil :: any
 end
 
@@ -288,7 +287,7 @@ end
 	@param options Optional principal/group override.
 	@return `true` when permission is granted.
 ]=]
-function fs.hasPermission(path: string, permission: PermissionToken, options: PermissionCheckOptions?): boolean
+function fs.hasPermission(path: PathLike, permission: PermissionToken, options: PermissionCheckOptions?): boolean
 	return nil :: any
 end
 
@@ -303,7 +302,7 @@ end
 	@param mode POSIX mode bits (for example `0o644`).
 	@return Nothing.
 ]=]
-function fs.chmod(path: string, mode: number): ()
+function fs.chmod(path: PathLike, mode: number): ()
 	return nil :: any
 end
 
@@ -313,7 +312,7 @@ end
 	@param owner Owner uid (POSIX) or SID string (Windows).
 	@return Nothing.
 ]=]
-function fs.chown(path: string, owner: number | string): ()
+function fs.chown(path: PathLike, owner: number | string): ()
 	return nil :: any
 end
 
@@ -328,7 +327,7 @@ end
 	@param group Group id.
 	@return Nothing.
 ]=]
-function fs.chgrp(path: string, group: number): ()
+function fs.chgrp(path: PathLike, group: number): ()
 	return nil :: any
 end
 
@@ -337,7 +336,7 @@ end
 	@param path Target path.
 	@return `true` when readonly is enabled.
 ]=]
-function fs.getReadonly(path: string): boolean
+function fs.getReadonly(path: PathLike): boolean
 	return nil :: any
 end
 
@@ -347,7 +346,7 @@ end
 	@param value Desired readonly state.
 	@return Nothing.
 ]=]
-function fs.setReadonly(path: string, value: boolean): ()
+function fs.setReadonly(path: PathLike, value: boolean): ()
 	return nil :: any
 end
 
@@ -361,7 +360,7 @@ end
 	@param path Target path.
 	@return `true` when hidden is enabled.
 ]=]
-function fs.getHidden(path: string): boolean
+function fs.getHidden(path: PathLike): boolean
 	return nil :: any
 end
 
@@ -376,7 +375,7 @@ end
 	@param value Desired hidden state.
 	@return Nothing.
 ]=]
-function fs.setHidden(path: string, value: boolean): ()
+function fs.setHidden(path: PathLike, value: boolean): ()
 	return nil :: any
 end
 
@@ -390,7 +389,7 @@ end
 	@param path Target path.
 	@return `true` when the system attribute is enabled.
 ]=]
-function fs.getSystem(path: string): boolean
+function fs.getSystem(path: PathLike): boolean
 	return nil :: any
 end
 
@@ -405,7 +404,7 @@ end
 	@param value Desired system-attribute state.
 	@return Nothing.
 ]=]
-function fs.setSystem(path: string, value: boolean): ()
+function fs.setSystem(path: PathLike, value: boolean): ()
 	return nil :: any
 end
 
@@ -419,7 +418,7 @@ end
 	@param path Target path.
 	@return Ordered ACL entries.
 ]=]
-function fs.getAcl(path: string): { AclEntry }
+function fs.getAcl(path: PathLike): { AclEntry }
 	return nil :: any
 end
 
@@ -434,7 +433,7 @@ end
 	@param entries ACL entries applied in order.
 	@return Nothing.
 ]=]
-function fs.setAcl(path: string, entries: { AclEntry }): ()
+function fs.setAcl(path: PathLike, entries: { AclEntry }): ()
 	return nil :: any
 end
 

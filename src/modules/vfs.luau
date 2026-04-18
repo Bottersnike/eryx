@@ -1,17 +1,20 @@
 local vfs = {}
+local path = require("@eryx/path")
+
+type PathLike = path.PathLike
 
 export type BuildOptions = {
 	--- Path to the output executable.
-	outputExe: string,
+	outputExe: PathLike,
 	--- Project root directory. All file paths in the bundle are relative to this.
-	root: string,
+	root: PathLike,
 	--- Entrypoint script path (relative to root).
 	entrypoint: string,
 	--- Array of file or directory paths to include in the bundle.
 	--- Directories are expanded recursively.
-	files: { string },
+	files: { PathLike },
 	--- Source executable to clone. Defaults to the currently running executable.
-	sourceExe: string?,
+	sourceExe: PathLike?,
 }
 
 --- Returns `true` if a VFS bundle is currently loaded.

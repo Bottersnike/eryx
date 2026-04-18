@@ -35,10 +35,29 @@ Sometimes we don't know where the file we want is located exactly, or we wish to
 
 ## Interacting with paths
 
-Filesystem paths can be complex, especially when there is a desire to support multiple operating systems. [[fs#fn-group-path|fs.path]] provides a collection of utilities for operating on paths. The most common of these utilities is `fs.path.join` which should **always** be used to combine sections of a path together.
+Filesystem paths can be complex, especially when there is a desire to support multiple operating systems. [[@eryx/path]] is the high-level module for lexical path parsing and manipulation, and filesystem APIs across Eryx generally accept either a raw string or a `Path` object.
+
+```luau
+local fs = require("@eryx/fs")
+local os = require("@eryx/os")
+local path = require("@eryx/path")
+
+local root = path.new(os.tmpdir())
+local file = root:join("example.txt")
+
+local handle = fs.open(file, "w")
+handle:write("hello")
+handle:close()
+```
+
+:::warning
+`path.new(...)` uses the host platform grammar. If you need deterministic parsing regardless of where the code is running, prefer `path.newNt(...)` or `path.newUnix(...)`.
+:::
+
+[[fs#fn-group-path|fs.path]] still exists as a legacy compatibility surface, with helpers such as `fs.path.join`, but new code should prefer `@eryx/path`.
 
 :::caution
 While tempting, avoid using `directory .. "/" .. fileName`. While this will work in the majority of cases, it can be fragile, especially if `directory` or `fileName` are not well-formed, or a mix of forward and back slashes are present.
 :::
 
-[[fs#fn-group-path|The API reference]] contains a list of all available path utilities.
+[[The `@eryx/path` API reference|@eryx/path]] contains the full high-level path API, and [[fs#fn-group-path|the `fs.path` reference]] documents the compatibility helpers.

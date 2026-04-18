@@ -27,7 +27,10 @@ end
 ]=]
 
 local capability = require("@eryx/capability")
+local path = require("@eryx/path")
 local xml = {}
+
+type PathLike = path.PathLike
 
 --- Node type string
 export type NodeType = "element" | "pcdata" | "cdata" | "comment" | "pi" | "declaration" | "doctype" | "document" | "null"
@@ -137,7 +140,7 @@ export type XmlDocument = setmetatable<
 		--[=[
 			Writes the document to a file on disk.
 		]=]
-		saveFile: (self: XmlDocument, path: string, indent: string?, flags: string?) -> (),
+		saveFile: (self: XmlDocument, path: PathLike, indent: string?, flags: string?) -> (),
 
 		--- Evaluates an XPath expression on the whole document and returns all matching nodes.
 		xpath: (self: XmlDocument, query: string) -> { XmlNode },
@@ -165,7 +168,7 @@ end
 	Loads and parses an XML file from disk.
 	@error Throws if the file cannot be read or the XML is malformed.
 ]=]
-function xml.load(path: string): XmlDocument
+function xml.load(path: PathLike): XmlDocument
 	return nil :: any
 end
 

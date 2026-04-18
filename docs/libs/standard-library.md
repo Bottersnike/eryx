@@ -64,6 +64,7 @@ The remainder of this page lists out every available library. Each available lib
 | ------------------- | --------------------- | ------------------------------------------------------ |
 | [[@eryx/os]]        | Mostly complete[^os]  | OS interactions                                        |
 | [[@eryx/fs]]        | Mostly complete[^fs]  | Filesystem operations                                  |
+| [[@eryx/path]]      | Mostly complete       | High level lexical filesystem path parsing and helpers |
 | [[@eryx/vfs]]       | Mostly complete[^vfs] | Virtual filesystem operations                          |
 | [[@eryx/fs_watch]]  | Complete              | High level filesystem water bindings                   |
 | [[@eryx/_fs_watch]] | Complete              | Low level interface consumed by `fs_watch`             |

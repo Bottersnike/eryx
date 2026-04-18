@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "../LuaUtil.hpp"
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
@@ -152,7 +153,7 @@ static void watchhandle_dtor(void* ud) {
 // _fs_watch.create(path, recursive, callback) -> WatchHandle
 // ---------------------------------------------------------------------------
 static int fswatch_create(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     bool recursive = lua_toboolean(L, 2) != 0;
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
@@ -193,7 +194,7 @@ static int fswatch_create(lua_State* L) {
 
     // Start watching
     unsigned int flags = recursive ? UV_FS_EVENT_RECURSIVE : 0;
-    r = uv_fs_event_start(&wh->fsEvent, fs_event_cb, path, flags);
+    r = uv_fs_event_start(&wh->fsEvent, fs_event_cb, path.c_str(), flags);
     if (r < 0) {
         // Clean up refs on failure
         lua_unref(L, wh->callbackRef);

@@ -61,6 +61,7 @@
 #include <string>
 #include <vector>
 
+#include "../LuaUtil.hpp"
 #include "../runtime/lexception.hpp"
 
 static const LuauModuleInfo INFO = {
@@ -777,7 +778,7 @@ static int os_cwd(lua_State* L) {
     char buf[4096];
     size_t size = sizeof(buf);
     if (uv_cwd(buf, &size) == 0) {
-        lua_pushlstring(L, buf, size);
+        lua_pushpath(L, std::string(buf, size));
     } else {
         luaL_error(L, "failed to get current working directory");
     }
@@ -785,10 +786,10 @@ static int os_cwd(lua_State* L) {
 }
 
 static int os_chdir(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
-    int r = uv_chdir(path);
+    std::string path = luaL_checkpathlike(L, 1);
+    int r = uv_chdir(path.c_str());
     if (r != 0) {
-        luaL_error(L, "failed to change directory to '%s': %s", path, uv_strerror(r));
+        luaL_error(L, "failed to change directory to '%s': %s", path.c_str(), uv_strerror(r));
     }
     return 0;
 }
@@ -1057,8 +1058,8 @@ static SpawnOpts parse_spawn_opts(lua_State* L, int optsIdx) {
     if (optsIdx > 0 && lua_istable(L, optsIdx)) {
         // cwd
         lua_getfield(L, optsIdx, "cwd");
-        if (lua_isstring(L, -1)) {
-            opts.cwd = lua_tostring(L, -1);
+        if (!lua_isnil(L, -1)) {
+            opts.cwd = luaL_checkpathlike(L, -1);
         }
         lua_pop(L, 1);
 

@@ -14,6 +14,7 @@ local http = require("@eryx/http")
 local logging = require("@eryx/logging")
 local fsWatch = require("@eryx/fs_watch")
 local task = require("@eryx/task")
+local pathlib = require("@eryx/path")
 local websocket = require("@eryx/websocket")
 local yaml = require("@eryx/encoding/yaml")
 local modulesApi = require("./content/modules")
@@ -205,7 +206,7 @@ local function collectArticles(path: string, prefix: string?): { { name: string,
 		if not entry:match("%.md$") and not entry:match("%.txt$") then
 			continue
 		end
-		local stem = fs.path.stem(fullPath)
+		local stem = pathlib.stem(fullPath)
 		local name: string
 		if stem == "index" and prefix then
 			name = prefix
@@ -260,7 +261,7 @@ local function buildState(cfg: Config): DevState
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local THEME_DIR = cfg.theme or (fs.path.join(_DIR, "/theme"))
+	local THEME_DIR = cfg.theme or tostring(pathlib.join(_DIR, "/theme"))
 	local STATIC_DIR = cfg.static
 	local NO_MODULES = cfg.noModules or false
 
@@ -386,7 +387,7 @@ local function tryServeStatic(state: DevState, safePath: string): (number?, stri
 	if state.cfg.favicon and fs.isFile(state.cfg.favicon) then
 		local faviconName = state.cfg.favicon:match("[^/\\]+$") or "favicon.ico"
 		if safePath == faviconName then
-			local ext = string.lower(fs.path.extension(state.cfg.favicon))
+			local ext = string.lower(pathlib.extension(state.cfg.favicon) or "")
 			local mime = MIME[ext] or "application/octet-stream"
 			return 200, fs.openSync(state.cfg.favicon):readSync(), mime
 		end
@@ -396,7 +397,7 @@ local function tryServeStatic(state: DevState, safePath: string): (number?, stri
 	if state.staticDir and safePath:sub(1, 7) == "static/" then
 		local assetPath = state.staticDir .. "/" .. safePath:sub(8)
 		if fs.isFile(assetPath) then
-			local ext = string.lower(fs.path.extension(assetPath))
+			local ext = string.lower(pathlib.extension(assetPath) or "")
 			local mime = MIME[ext] or "application/octet-stream"
 			return 200, fs.openSync(assetPath):readSync(), mime
 		end

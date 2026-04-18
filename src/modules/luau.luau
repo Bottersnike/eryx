@@ -1,3 +1,7 @@
+local path = require("@eryx/path")
+
+type PathLike = path.PathLike
+
 --[=[
 	Luau source code parser, compiler, and type checker.
 
@@ -1151,7 +1155,7 @@ end
 	@param folderPath Optional folder path to start config discovery from.
 	@return LuauConfig -- Current merged config state.
 ]=]
-function luau.getconfig(folderPath: string?): LuauConfig
+function luau.getconfig(folderPath: PathLike?): LuauConfig
 	return nil :: any
 end
 
@@ -1177,7 +1181,7 @@ end
 	@param requirePath The require string to resolve.
 	@return string? -- Absolute path to the resolved file, or nil.
 ]=]
-function luau.resolve(filePath: string, requirePath: string): string?
+function luau.resolve(filePath: PathLike, requirePath: string): string?
 	return nil :: any
 end
 

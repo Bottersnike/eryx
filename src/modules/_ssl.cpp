@@ -22,6 +22,8 @@
 // ---------------------------------------------------------------------------
 #include <sys/stat.h>
 
+#include "../LuaUtil.hpp"
+
 // ---------------------------------------------------------------------------
 // Platform socket compatibility (mirrors _socket.hpp)
 // ---------------------------------------------------------------------------
@@ -406,22 +408,22 @@ static int ssl_create_default_context(lua_State* L) {
 // `keyfile` is a PEM file containing the server private key.
 // Optional `password` for encrypted private keys.
 static int ssl_create_server_context(lua_State* L) {
-    const char* certfile = luaL_checkstring(L, 1);
-    const char* keyfile = luaL_checkstring(L, 2);
+    std::string certfile = luaL_checkpathlike(L, 1);
+    std::string keyfile = luaL_checkpathlike(L, 2);
     const char* password = luaL_optstring(L, 3, nullptr);
 
     // Check files exist before calling mbedTLS (which gives cryptic errors)
     {
-        FILE* f = fopen(certfile, "rb");
+        FILE* f = fopen(certfile.c_str(), "rb");
         if (!f)
-            luaL_error(L, "ssl: certificate file not found: %s", certfile);
+            luaL_error(L, "ssl: certificate file not found: %s", certfile.c_str());
         else
             fclose(f);
     }
     {
-        FILE* f = fopen(keyfile, "rb");
+        FILE* f = fopen(keyfile.c_str(), "rb");
         if (!f)
-            luaL_error(L, "ssl: private key file not found: %s", keyfile);
+            luaL_error(L, "ssl: private key file not found: %s", keyfile.c_str());
         else
             fclose(f);
     }
@@ -447,11 +449,11 @@ static int ssl_create_server_context(lua_State* L) {
     mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
 
     // Load server certificate chain
-    ret = mbedtls_x509_crt_parse_file(&ctx->own_cert, certfile);
+    ret = mbedtls_x509_crt_parse_file(&ctx->own_cert, certfile.c_str());
     if (ret < 0) return mbedtls_lua_error(L, "load server certificate", ret);
 
     // Load server private key
-    ret = mbedtls_pk_parse_keyfile(&ctx->pk_key, keyfile, password);
+    ret = mbedtls_pk_parse_keyfile(&ctx->pk_key, keyfile.c_str(), password);
     if (ret != 0) return mbedtls_lua_error(L, "load server private key", ret);
 
     // Attach certificate + key to the config
@@ -469,13 +471,13 @@ static int ssl_create_server_context(lua_State* L) {
 // verification using the supplied CA file.
 static int sslctx_load_verify_locations(lua_State* L) {
     LuaSSLContext* ctx = check_sslctx(L, 1);
-    const char* cafile = luaL_checkstring(L, 2);
+    std::string cafile = luaL_checkpathlike(L, 2);
 
-    int ret = mbedtls_x509_crt_parse_file(&ctx->cacert, cafile);
+    int ret = mbedtls_x509_crt_parse_file(&ctx->cacert, cafile.c_str());
     if (ret < 0) {
-        FILE* f = fopen(cafile, "rb");
+        FILE* f = fopen(cafile.c_str(), "rb");
         if (!f)
-            luaL_error(L, "ssl: CA file not found: %s", cafile);
+            luaL_error(L, "ssl: CA file not found: %s", cafile.c_str());
         else
             fclose(f);
         return mbedtls_lua_error(L, "load_verify_locations", ret);

@@ -35,6 +35,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../LuaUtil.hpp"
 #include "../runtime/lconfig.hpp"
 #include "../runtime/lresolve.hpp"
 #include "Luau/Allocator.h"
@@ -1473,7 +1474,7 @@ static int l_disassemble(lua_State* L) {
 }
 
 static int l_resolve(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
+    std::string path = luaL_checkpathlike(L, 1);
     auto resolved = eryx_resolve_module(L, path);
 
     if (resolved) {
@@ -1516,7 +1517,7 @@ static int l_config(lua_State* L) {
     std::string vfsConfigDir;
 
     if (!lua_isnoneornil(L, 1)) {
-        const char* folderPath = luaL_checkstring(L, 1);
+        std::string folderPath = luaL_checkpathlike(L, 1);
         std::error_code ec;
         std::filesystem::path inputPath(folderPath);
         std::filesystem::path resolvedPath = std::filesystem::weakly_canonical(inputPath, ec);

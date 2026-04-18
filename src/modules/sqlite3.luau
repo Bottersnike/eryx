@@ -36,7 +36,10 @@ db:close()
 ]=]
 
 local capability = require("@eryx/capability")
+local path = require("@eryx/path")
 local sqlite3 = {}
+
+type PathLike = path.PathLike
 
 --- A row returned from a query. Keys are column names, values are the
 --- corresponding column values (number, string, buffer, or nil).
@@ -141,7 +144,7 @@ export type Database = setmetatable<
 	Use `":memory:"` for an in-memory database.
 	@error Throws if the database cannot be opened.
 ]=]
-function sqlite3.open(path: string): Database
+function sqlite3.open(path: PathLike): Database
 	return nil :: any
 end
 

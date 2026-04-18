@@ -4,6 +4,7 @@
 #include <set>
 #include <vector>
 
+#include "../LuaUtil.hpp"
 #include "module_api.h"
 
 static const LuauModuleInfo INFO = {
@@ -148,14 +149,14 @@ static int vfs_lua_build(lua_State* L) {
 
     // outputExe (required)
     lua_getfield(L, 1, "outputExe");
-    if (!lua_isstring(L, -1)) luaL_error(L, "vfs.build: 'outputExe' is required (string)");
-    fs::path outputExe = lua_tostring(L, -1);
+    if (lua_isnil(L, -1)) luaL_error(L, "vfs.build: 'outputExe' is required (PathLike)");
+    fs::path outputExe = luaL_checkpathlike(L, -1);
     lua_pop(L, 1);
 
     // root (required)
     lua_getfield(L, 1, "root");
-    if (!lua_isstring(L, -1)) luaL_error(L, "vfs.build: 'root' is required (string)");
-    fs::path root = lua_tostring(L, -1);
+    if (lua_isnil(L, -1)) luaL_error(L, "vfs.build: 'root' is required (PathLike)");
+    fs::path root = luaL_checkpathlike(L, -1);
     lua_pop(L, 1);
 
     // entrypoint (required)
@@ -167,8 +168,8 @@ static int vfs_lua_build(lua_State* L) {
     // sourceExe (optional - defaults to current executable)
     fs::path sourceExe;
     lua_getfield(L, 1, "sourceExe");
-    if (lua_isstring(L, -1)) {
-        sourceExe = lua_tostring(L, -1);
+    if (!lua_isnil(L, -1)) {
+        sourceExe = luaL_checkpathlike(L, -1);
     } else {
 #if defined(_WIN32)
         wchar_t exebuf[MAX_PATH];
@@ -185,16 +186,16 @@ static int vfs_lua_build(lua_State* L) {
     }
     lua_pop(L, 1);
 
-    // files (required - array of strings, or array of strings/directories to expand)
+    // files (required - array of pathlikes, or array of files/directories to expand)
     lua_getfield(L, 1, "files");
-    if (!lua_istable(L, -1)) luaL_error(L, "vfs.build: 'files' is required (array of strings)");
+    if (!lua_istable(L, -1)) luaL_error(L, "vfs.build: 'files' is required (array of PathLike)");
 
     std::vector<fs::path> inputs;
     int len = lua_objlen(L, -1);
     for (int i = 1; i <= len; i++) {
         lua_rawgeti(L, -1, i);
-        if (!lua_isstring(L, -1)) luaL_error(L, "vfs.build: files[%d] must be a string", i);
-        fs::path p = lua_tostring(L, -1);
+        if (lua_isnil(L, -1)) luaL_error(L, "vfs.build: files[%d] must be a PathLike", i);
+        fs::path p = luaL_checkpathlike(L, -1);
         lua_pop(L, 1);
 
         if (fs::is_regular_file(p)) {
