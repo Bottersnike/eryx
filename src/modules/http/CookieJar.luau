@@ -22,7 +22,7 @@ type CookieJarFields = {
 	_cookies: { cookies.Cookie },
 }
 
-export type CookieJar = typeof(setmetatable({} :: CookieJarFields, CookieJar))
+export type CookieJar = setmetatable<CookieJarFields, typeof(CookieJar)>
 
 --[=[
 	Creates a new, empty cookie jar.

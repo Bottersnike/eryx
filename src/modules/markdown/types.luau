@@ -30,6 +30,7 @@ export type StartResult = {
 	breakAfterOpen: boolean, -- leaf nodes: stop trying more starts
 }
 
+export type MagicRules = { __magic_rules: "Recursive types workaround" }
 export type BlockRule<Name, T> = {
 	-- read name: Name,
 	read name: string, -- ! To make the types work, we have to throw away Name
@@ -62,7 +63,7 @@ export type BlockRule<Name, T> = {
 	-- Fired when block is removed from open stack.
 	read onClose: ((block: BlockNode<Name, T>) -> ())?,
 	-- Fired for arbitrary post-processing step
-	read postProcessDocument: ((doc: DocumentBlockNode) -> ())?,
+	read postProcessDocument: ((doc: DocumentBlockNode) -> { AnyBlockNode }?)?,
 
 	-- Phase 2: If true, blank lines at this block's level set the blankSinceLast flag.
 	read setsBlankFlag: boolean?,
@@ -99,11 +100,9 @@ export type BlockRule<Name, T> = {
 	read canContainParagraph: boolean?,
 
 	-- Convert this block to HTML
-	read toHtml: (block: BlockNode<Name, T>, rules: { BlockRule<string, any> }, config: MarkdownConfig) -> string?,
-	read toHtmlPrepend: (
-		(doc: DocumentBlockNode, rules: { BlockRule<string, any> }, config: MarkdownConfig) -> string
-	)?,
-	read toHtmlAppend: ((doc: DocumentBlockNode, rules: { BlockRule<string, any> }, config: MarkdownConfig) -> string)?,
+	read toHtml: (block: BlockNode<Name, T>, rules: MagicRules, config: RenderConfig) -> string?,
+	read toHtmlPrepend: ((doc: DocumentBlockNode, rules: MagicRules, config: RenderConfig) -> string)?,
+	read toHtmlAppend: ((doc: DocumentBlockNode, rules: MagicRules, config: RenderConfig) -> string)?,
 }
 export type AnyBlockRule = BlockRule<string, {}>
 
@@ -121,7 +120,7 @@ export type InlineRule = {
 	name: string,
 	matchOpen: string,
 	tryParse: (ctx: InlineRuleContext, pos: number) -> (boolean, number),
-	toHtml: (node: { [string]: any }, rules: { AnyBlockRule }, config: MarkdownConfig) -> string,
+	toHtml: (node: { [string]: any }, rules: MagicRules, config: RenderConfig) -> string,
 }
 
 export type LLNode = {
@@ -142,7 +141,7 @@ export type InlineEmphasisRule = {
 	name: string,
 	character: number | string,
 	resolve: (opener: DelimInfo, closer: DelimInfo) -> (number, string),
-	toHtml: (node: { [string]: any }, rules: { AnyBlockRule }, config: MarkdownConfig) -> string,
+	toHtml: (node: { [string]: any }, rules: MagicRules, config: RenderConfig) -> string,
 }
 
 -- --------------- Inline Nodes ---------------
@@ -183,16 +182,18 @@ export type InlineNode =
 	| InlineSoftBreak
 	| InlineFootnoteRef
 
-export type MarkdownConfig = {
+export type RenderConfig = {
 	useCrlf: boolean?,
 	annotateHtml: boolean?,
-	extensions: { AnyBlockRule }?,
-	extraExtensions: { AnyBlockRule }?,
+	codeLanguages: { [string]: (string) -> string }?,
 	inlineExtensions: { InlineRule }?,
 	extraInlineExtensions: { InlineRule }?,
 	inlineEmphasisExtensions: { InlineEmphasisRule }?,
 	extraInlineEmphasisExtensions: { InlineEmphasisRule }?,
-	codeLanguages: { [string]: (string) -> string }?,
+}
+export type MarkdownConfig = RenderConfig & {
+	extensions: { AnyBlockRule }?,
+	extraExtensions: { AnyBlockRule }?,
 }
 
 return table.freeze({})

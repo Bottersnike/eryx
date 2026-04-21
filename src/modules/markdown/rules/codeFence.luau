@@ -161,7 +161,7 @@ local CodeFenceRule: types.BlockRule<
 			return false
 		end,
 
-		toHtml = function(block, rules, config: types.MarkdownConfig): string
+		toHtml = function(block, rules, config: types.RenderConfig): string
 			local content: string
 			if config.useCrlf then
 				content = table.concat(block.lines, "\r\n")
@@ -182,7 +182,7 @@ local CodeFenceRule: types.BlockRule<
 					classStr = ` class="language-{html.renderLiteral(lang)}"`
 				end
 
-				if config.codeLanguages then
+				if config.codeLanguages and lang then
 					local formatter = config.codeLanguages[lang]
 					if formatter then
 						content = formatter(content)

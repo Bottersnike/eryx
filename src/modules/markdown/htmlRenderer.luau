@@ -94,7 +94,7 @@ function html.renderURL(url: string): string
 	return table.concat(buf)
 end
 --- Extract plain text from inline nodes (for image alt text per CommonMark spec).
-function html.extractPlainText(nodes: { types.InlineNode }, config: types.MarkdownConfig): string
+function html.extractPlainText(nodes: { types.InlineNode }, config: types.RenderConfig): string
 	return util.getPlainText(nodes)
 
 	-- local chunks = {}
@@ -119,11 +119,7 @@ function html.extractPlainText(nodes: { types.InlineNode }, config: types.Markdo
 	-- return table.concat(chunks)
 end
 
-function html.renderInline(
-	node: { types.InlineNode },
-	rules: { types.AnyBlockRule },
-	config: types.MarkdownConfig
-): string
+function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, config: types.RenderConfig): string
 	local chunks = {}
 	for _, i in node do
 		if i.type == "text" then
@@ -160,7 +156,7 @@ function html.renderInline(
 			if config.inlineExtensions then
 				for _, j in config.inlineExtensions do
 					if j.name == i.type then
-						table.insert(chunks, j.toHtml(i, rules, config))
+						table.insert(chunks, j.toHtml(i :: any, rules, config))
 						matched = true
 						break
 					end
@@ -170,7 +166,7 @@ function html.renderInline(
 				if config.inlineEmphasisExtensions then
 					for _, j in config.inlineEmphasisExtensions do
 						if j.name == i.type then
-							table.insert(chunks, j.toHtml(i, rules, config))
+							table.insert(chunks, j.toHtml(i :: any, rules, config))
 							matched = true
 							break
 						end
@@ -186,14 +182,15 @@ function html.renderInline(
 	return table.concat(chunks)
 end
 
-function html.renderBlock(
-	block: types.AnyBlockNode,
-	rules: { types.BlockRule<string, any> },
-	config: types.MarkdownConfig
-): string
-	for _, rule in rules do
+function html.renderBlock(block: types.AnyBlockNode, rules: types.MagicRules, config: types.RenderConfig): string
+	local rulesReal = rules :: { types.BlockRule<string, any> }
+
+	for _, rule in rulesReal do
 		if block.type == rule.name then
-			return rule.toHtml(block, rules, config)
+			local rendered = rule.toHtml(block :: any, rules, config)
+			if rendered then
+				return rendered
+			end
 		end
 	end
 

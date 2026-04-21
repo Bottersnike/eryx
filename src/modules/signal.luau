@@ -74,10 +74,15 @@ end
 local Signal = {}
 Signal.__index = Signal
 
-export type Signal<T...> = setmetatable<{
-	_head: Connection<T...>?,
-	_errorSignal: Signal<any, Connection<T...>>?,
-}, typeof(Signal)>
+export type Signal<T...> = setmetatable<
+	{
+		_head: Connection<T...>?,
+
+		-- ! We can't include this here because of recursive types!
+		-- _errorSignal: Signal<any, Connection<T...>>?,
+	},
+	typeof(Signal)
+>
 
 --[=[
 	Creates a new Signal.
@@ -128,7 +133,10 @@ function Signal.fire<T...>(self: Signal<T...>, ...: T...): boolean
 		return false
 	end
 
-	local args = table.pack(...)
+	-- ! Luau can't represent tuple types, so packing T... doesn't work
+	-- We cast to `any` to avoid type errors, at the expense of losing
+	-- type checking
+	local args = (table.pack :: any)(...)
 	for _, handler in handlers do
 		if handler.connected then
 			task.spawn(function()
@@ -140,7 +148,7 @@ function Signal.fire<T...>(self: Signal<T...>, ...: T...): boolean
 					return
 				end
 
-				local errorSignal = self._errorSignal
+				local errorSignal = (self :: any)._errorSignal
 				if errorSignal then
 					errorSignal:fire(err, handler)
 				else
@@ -204,10 +212,11 @@ end
 	```
 ]=]
 function Signal.errorSignal<T...>(self: Signal<T...>): Signal<any, Connection<T...>>
-	if not self._errorSignal then
-		self._errorSignal = Signal.new()
+	if not (self :: any)._errorSignal then
+		(self :: any)._errorSignal = Signal.new()
 	end
-	return self._errorSignal
+	-- ! Unfortunate cast required to avoid *CYCLE*
+	return (self :: any)._errorSignal
 end
 
 --[=[
@@ -219,7 +228,8 @@ function Signal.connectError<T...>(
 	self: Signal<T...>,
 	callback: (err: any, connection: Connection<T...>) -> ()
 ): Connection<any, Connection<T...>>
-	return self:errorSignal():connect(callback)
+	-- ! Unfortunate cast required to avoid *CYCLE*
+	return (self :: any):errorSignal():connect(callback)
 end
 
 --[=[

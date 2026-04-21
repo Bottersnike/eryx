@@ -81,13 +81,16 @@ suite:test("glob can walk filesystem and apply ignore patterns", function()
 		write("src/crypto/password.luau")
 		write("src/crypto/password.test.luau")
 
-		local all = glob.glob("**/*.luau", { root = dir })
+		local all = glob.glob("**/*.luau", { root = dir } :: any)
 		test.expect(joinSorted(all)):toBe("src/crypto/password.luau|src/crypto/password.test.luau|src/glob.luau")
 
-		local ignored = glob.glob("**/*", {
-			root = dir,
-			ignore = { "docs/**", "**/*.test.luau" },
-		})
+		local ignored = glob.glob(
+			"**/*",
+			{
+				root = dir,
+				ignore = { "docs/**", "**/*.test.luau" },
+			} :: any
+		)
 
 		test.expect(joinSorted(ignored)):toBe("src|src/crypto|src/crypto/password.luau|src/glob.luau")
 	end)

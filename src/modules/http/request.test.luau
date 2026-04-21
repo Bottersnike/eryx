@@ -1,6 +1,7 @@
 local _socket = require("@eryx/_socket")
 local HttpConnection = require("./HttpConnection")
 local HttpServer = require("./HttpServer")
+local ServerResponse = require("./ServerResponse")
 local Session = require("./Session")
 local gzip = require("@eryx/compression/gzip")
 local json = require("@eryx/encoding/json")
@@ -20,17 +21,21 @@ local function reservePort(): number
 end
 
 local function withServer(
-	handler: (server: any, req: any, res: any) -> (),
+	handler: (
+		server: HttpServer.HttpServer,
+		req: HttpServer.ServerRequest,
+		res: ServerResponse.ServerResponse
+	) -> (),
 	run: (url: string) -> (),
 	options: { [string]: any }?
 )
 	local port = reservePort()
 	local server: HttpServer.HttpServer
-	local serverOptions = options and table.clone(options) or {}
+	local serverOptions = options and table.clone(options) or ({} :: { [string]: any })
 	serverOptions.host = "127.0.0.1"
 	serverOptions.port = port
 	serverOptions.clientTimeout = 1
-	server = HttpServer.new(function(req, res)
+	server = HttpServer.new(function(req: HttpServer.ServerRequest, res: ServerResponse.ServerResponse)
 		handler(server, req, res)
 	end, serverOptions)
 
@@ -48,7 +53,7 @@ local function withServer(
 end
 
 suite:test("request: json option sends JSON bodies and decodes JSON responses", function()
-	local receivedBody = nil
+	local receivedBody: string? = nil
 	local receivedContentType = nil
 
 	withServer(function(server, req, res)
@@ -70,6 +75,8 @@ suite:test("request: json option sends JSON bodies and decodes JSON responses", 
 		local decoded = request.decodeJsonBody(request.raiseForStatus(response))
 		test.expect(decoded.ok):toBeTrue()
 	end)
+
+	assert(receivedBody)
 
 	test.expect(receivedContentType):toBe("application/json")
 	test.expect(json.decode(receivedBody).name):toBe("Alice")
@@ -104,6 +111,7 @@ suite:test("request: multipart option sends multipart bodies and decodes multipa
 		test.expect(decoded[2].filename):toBe("report.txt")
 	end)
 
+	assert(receivedMultipart)
 	test.expect(#(receivedMultipart :: { any })):toBe(2)
 	test.expect((receivedMultipart :: { any })[1].name):toBe("username")
 	test.expect((receivedMultipart :: { any })[2].filename):toBe("pic.png")
@@ -197,6 +205,7 @@ suite:test("request: expectContinue waits for 100 Continue before sending body",
 		test.expect(response.body):toBe("ok")
 	end)
 
+	assert(receivedBody)
 	test.expect(receivedExpect):toBe("100-continue")
 	test.expect(json.decode(receivedBody).message):toBe("hello")
 end)
@@ -317,13 +326,13 @@ suite:test("HttpServer: handlers can read request bodies incrementally", functio
 			server:close()
 		end)
 	end, function(url)
+		local _chunks = { "hello ", "world" }
+		local _index = 0
 		local response = request.request("POST", url .. "/stream-in", {
 			bodyStream = {
-				_chunks = { "hello ", "world" },
-				_index = 0,
 				read = function(self, _size)
-					self._index += 1
-					return self._chunks[self._index] or ""
+					_index += 1
+					return _chunks[_index] or ""
 				end,
 			} :: any,
 			bodyLength = 11,

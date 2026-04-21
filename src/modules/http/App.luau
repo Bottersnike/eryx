@@ -145,7 +145,7 @@ type AppFields = {
 	state: { [string]: any },
 }
 
-export type App = typeof(setmetatable({} :: AppFields, App))
+export type App = setmetatable<AppFields, typeof(App)>
 
 local AppContextMethods = {}
 local AppContextMetatable = {
@@ -231,19 +231,19 @@ local function compilePath(path: string): { Segment }
 			local name = string.sub(part, 2)
 			assert(name ~= "", "Named parameters cannot be empty")
 			table.insert(segments, {
-				kind = "param",
+				kind = "param" :: "param",
 				value = name,
 			})
 		elseif string.sub(part, 1, 1) == "*" then
 			assert(index == #parts, "Splat parameters must be the final segment")
 			local name = string.sub(part, 2)
 			table.insert(segments, {
-				kind = "splat",
+				kind = "splat" :: "splat",
 				value = if name ~= "" then name else "splat",
 			})
 		else
 			table.insert(segments, {
-				kind = "static",
+				kind = "static" :: "static",
 				value = part,
 			})
 		end
@@ -314,7 +314,7 @@ end
 
 local function serializeCookie(name: string, value: string, options: CookieOptions?): string
 	local parts = { `{name}={value}` }
-	local opts = options or {}
+	local opts = options or ({} :: CookieOptions)
 	if opts.path ~= nil then
 		table.insert(parts, "Path=" .. opts.path)
 	end
@@ -503,14 +503,14 @@ local function hasResponseHeader(response: ServerResponse.ServerResponse, name: 
 end
 
 function AppContextMethods.json(self: AppContext): any
-	if rawget(self, "_jsonLoaded") then
-		return rawget(self, "_json")
+	if rawget(self :: any, "_jsonLoaded") then
+		return rawget(self :: any, "_json")
 	end
 
 	local body = self.request.body
 	local decoded = if body == "" then nil else json.decode(body)
-	rawset(self, "_json", decoded)
-	rawset(self, "_jsonLoaded", true)
+	rawset(self :: any, "_json", decoded)
+	rawset(self :: any, "_jsonLoaded", true)
 	return decoded
 end
 
@@ -761,7 +761,7 @@ end
 	request-handler callback for every endpoint.
 ]=]
 function App.new(options: HttpServer.HttpServerOptions?): App
-	return setmetatable({
+	local fields: AppFields = {
 		_routes = {},
 		_mounts = {},
 		_middleware = {},
@@ -770,7 +770,8 @@ function App.new(options: HttpServer.HttpServerOptions?): App
 		_serverOptions = if options ~= nil then table.clone(options :: any) else nil,
 		_server = nil :: HttpServer.HttpServer?,
 		state = {},
-	}, App)
+	}
+	return setmetatable(fields, App)
 end
 
 --[=[
@@ -899,7 +900,7 @@ end
 	@return App
 ]=]
 function App.static(self: App, prefix: string, directory: string, options: StaticOptions?): App
-	local opts = options or {}
+	local opts = options or ({} :: StaticOptions)
 	local root = fs.path.canonicalize(directory)
 	local indexFile = opts.indexFile
 	local fallthrough = if opts.fallthrough == true then true else false
@@ -958,6 +959,7 @@ function App.static(self: App, prefix: string, directory: string, options: Stati
 		ctx:sendFile(canonicalTarget, {
 			headers = extraHeaders,
 		})
+		return nil
 	end, {
 		name = if prefix ~= "/" then prefix .. ".__static__" else "__static__",
 	})
@@ -1161,7 +1163,9 @@ function App._execute(
 		for _, mount in self._mounts do
 			local childPath = splitMountedPath(mount.prefix, pathname)
 			if childPath ~= nil then
-				local nextMountPath = if mountPath ~= nil then joinPaths(mountPath, mount.prefix) else mount.prefix
+				local nextMountPath = if mountPath ~= nil
+					then joinPaths(mountPath :: string, mount.prefix)
+					else mount.prefix
 				local _, childResults = mount.app:_execute(request, response, childPath, sharedState, nextMountPath)
 				return table.unpack(childResults, 1, childResults.n)
 			end
@@ -1192,7 +1196,9 @@ function App._execute(
 		end)
 	end
 
-	local ok, resultOrErr, extra1, extra2, extra3, extra4 = pcall(dispatch, 1)
+	local ok, resultOrErr, extra1, extra2, extra3, extra4 = pcall(function(...)
+		return (dispatch :: any)(...)
+	end, 1)
 	if ok then
 		return ctx, table.pack(resultOrErr, extra1, extra2, extra3, extra4)
 	end

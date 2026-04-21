@@ -156,21 +156,21 @@ end
 	Process stdin exposed as a stream object.
 	Use `stdio.stdin:read(...)` style calls.
 ]=]
-local stdinStream: stream.ReadableStream = nil :: any
+local stdinStream: stream.ReadOnlyStream = nil :: any
 stdio.stdin = stdinStream
 
 --[=[
 	Process stdout exposed as a stream object.
 	Use `stdio.stdout:write(...)` style calls.
 ]=]
-local stdoutStream: stream.WritableStream = nil :: any
+local stdoutStream: stream.WriteOnlyStream = nil :: any
 stdio.stdout = stdoutStream
 
 --[=[
 	Process stderr exposed as a stream object.
 	Use `stdio.stderr:write(...)` style calls.
 ]=]
-local stderrStream: stream.WritableStream = nil :: any
+local stderrStream: stream.WriteOnlyStream = nil :: any
 stdio.stderr = stderrStream
 
 return table.freeze(stdio)

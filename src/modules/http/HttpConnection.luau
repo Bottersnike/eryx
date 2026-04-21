@@ -66,7 +66,7 @@ type HttpConnectionFields = {
 	_appliedTimeout: number?,
 }
 
-export type HttpConnection = typeof(setmetatable({} :: HttpConnectionFields, HttpConnection))
+export type HttpConnection = setmetatable<HttpConnectionFields, typeof(HttpConnection)>
 
 type HttpResponseStreamFields = {
 	status: number,
@@ -85,7 +85,7 @@ type HttpResponseStreamFields = {
 	_bufferOffset: number,
 }
 
-export type HttpResponseStream = typeof(setmetatable({} :: HttpResponseStreamFields, HttpResponseStream))
+export type HttpResponseStream = setmetatable<HttpResponseStreamFields, typeof(HttpResponseStream)>
 
 export type UploadBodyStream = {
 	read: (self: UploadBodyStream, size: number?) -> string,
@@ -161,7 +161,7 @@ function HttpConnection._applyTimeout(self: HttpConnection, phase: "connect" | "
 		return
 	end
 
-	local timeout = self._timeouts[phase]
+	local timeout = (self :: any)._timeouts[phase]
 	if self._appliedTimeout == timeout then
 		return
 	end
@@ -588,11 +588,11 @@ local function createBufferedResponseStream(
 	},
 	body: string
 ): HttpResponseStream
-	return setmetatable({
+	local fields: HttpResponseStreamFields = {
 		status = response.status,
 		reason = response.reason,
 		headers = response.headers,
-		trailers = response.trailers,
+		trailers = (response :: any).trailers,
 		httpVersion = response.httpVersion,
 		_connection = nil,
 		_closed = false,
@@ -603,7 +603,8 @@ local function createBufferedResponseStream(
 		_chunkRemaining = 0,
 		_buffer = body,
 		_bufferOffset = 1,
-	}, HttpResponseStream)
+	}
+	return setmetatable(fields, HttpResponseStream)
 end
 
 --- @private
@@ -851,10 +852,11 @@ function HttpConnection._openResponse(self: HttpConnection, skipInformational: b
 			error("Unsupported Transfer-Encoding in HTTP response")
 		end
 		local keepAlive = responseKeepsConnectionAlive(httpVersion, headers["connection"], false)
-		local stream = setmetatable({
+		local fields: HttpResponseStreamFields = {
 			status = status_code,
 			reason = reason,
 			headers = headers,
+			trailers = {},
 			httpVersion = httpVersion,
 			_connection = self,
 			_closed = false,
@@ -865,13 +867,14 @@ function HttpConnection._openResponse(self: HttpConnection, skipInformational: b
 			_chunkRemaining = 0,
 			_buffer = "",
 			_bufferOffset = 1,
-		}, HttpResponseStream)
+		}
+		local stream: HttpResponseStream = setmetatable(fields, HttpResponseStream)
 		self._activeResponseStream = stream
 		return stream
 	elseif content_length ~= nil then
 		if content_length > 0 then
 			local keepAlive = responseKeepsConnectionAlive(httpVersion, headers["connection"], false)
-			local stream = setmetatable({
+			local fields: HttpResponseStreamFields = {
 				status = status_code,
 				reason = reason,
 				headers = headers,
@@ -886,7 +889,8 @@ function HttpConnection._openResponse(self: HttpConnection, skipInformational: b
 				_chunkRemaining = 0,
 				_buffer = "",
 				_bufferOffset = 1,
-			}, HttpResponseStream)
+			}
+			local stream = setmetatable(fields, HttpResponseStream)
 			self._activeResponseStream = stream
 			return stream
 		end
@@ -911,10 +915,11 @@ function HttpConnection._openResponse(self: HttpConnection, skipInformational: b
 	end
 
 	local keepAlive = responseKeepsConnectionAlive(httpVersion, headers["connection"], bodyDelimitedByClose)
-	local stream = setmetatable({
+	local fields: HttpResponseStreamFields = {
 		status = status_code,
 		reason = reason,
 		headers = headers,
+		trailers = {},
 		httpVersion = httpVersion,
 		_connection = self,
 		_closed = false,
@@ -925,7 +930,8 @@ function HttpConnection._openResponse(self: HttpConnection, skipInformational: b
 		_chunkRemaining = 0,
 		_buffer = "",
 		_bufferOffset = 1,
-	}, HttpResponseStream)
+	}
+	local stream = setmetatable(fields, HttpResponseStream)
 	self._activeResponseStream = stream
 	return stream
 end

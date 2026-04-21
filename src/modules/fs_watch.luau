@@ -72,7 +72,7 @@ export type DirWatcher = {
 --- Watches a single file for changes.
 --- Returns a `FileWatcher` whose `changed` signal fires with `(eventType)`.
 function fs_watch.watchFile(path: PathLike, options: WatchOptions?): FileWatcher
-	local changed: Signal<string> = Signal.new()
+	local changed: Signal<string> = Signal.new() :: Signal<string>
 	local debounce = if options then options.debounce else nil
 	local pendingTimer: thread? = nil
 	local pendingEvent: string? = nil
@@ -118,7 +118,7 @@ end
 --- Watches a directory for changes.
 --- Returns a `DirWatcher` whose `changed` signal fires with `(filename, eventType)`.
 function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
-	local changed: Signal<string, string> = Signal.new()
+	local changed: Signal<string, string> = Signal.new() :: Signal<string, string>
 	local recursive = if options then options.recursive else false
 	local debounce = if options then options.debounce else nil
 

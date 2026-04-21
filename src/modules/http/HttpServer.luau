@@ -33,7 +33,7 @@ type RequestBodyStreamFields = {
 	_onFinish: ((string, { [string]: string }?) -> ())?,
 }
 
-export type RequestBodyStream = typeof(setmetatable({} :: RequestBodyStreamFields, RequestBodyStream))
+export type RequestBodyStream = setmetatable<RequestBodyStreamFields, typeof(RequestBodyStream)>
 
 --[=[
 	An incoming HTTP request received by an [[HttpServer]].
@@ -118,7 +118,7 @@ type HttpServerFields = {
 	_sslCtx: SslContext?,
 }
 
-export type HttpServer = typeof(setmetatable({} :: HttpServerFields, HttpServer))
+export type HttpServer = setmetatable<HttpServerFields, typeof(HttpServer)>
 
 --[=[
 	Options for creating an [[HttpServer]].
@@ -189,7 +189,7 @@ function RequestBodyStream._finish(self: RequestBodyStream)
 		return
 	end
 	self._closed = true
-	local onFinish = self._onFinish
+	local onFinish: ((string, { [string]: string }?) -> ())? = self._onFinish
 	self._onFinish = nil
 	if onFinish ~= nil then
 		onFinish(self._buffer, self._trailers)
@@ -247,6 +247,7 @@ function RequestBodyStream._recvExact(self: RequestBodyStream, n: number): strin
 		self._buffer ..= self:_recvChunk()
 		if (self._totalRead + #self._buffer) > self._maxBodyBytes then
 			requestError(413, "Request body too large")
+			assert(false)
 		end
 	end
 	local result = string.sub(self._buffer, 1, n)
@@ -260,10 +261,12 @@ function RequestBodyStream._readChunkHeader(self: RequestBodyStream)
 	local sizeText = string.match(sizeLine, "^([0-9a-fA-F]+)")
 	if sizeText == nil then
 		requestError(400, "Malformed chunk size")
+		assert(false)
 	end
 	local chunkSize = tonumber(sizeText, 16)
 	if chunkSize == nil then
 		requestError(400, "Malformed chunk size")
+		assert(false)
 	end
 	if chunkSize == 0 then
 		local trailerLines = {}
@@ -407,14 +410,14 @@ end
 	@return string -- The full request body.
 ]=]
 function ServerRequestMethods.readBody(self: ServerRequest): string
-	local cached = rawget(self, "_body")
+	local cached = rawget(self :: any, "_body")
 	if cached ~= nil then
 		return cached
 	end
 
-	local stream = rawget(self, "_bodyStream")
+	local stream = rawget(self :: any, "_bodyStream")
 	local body = if stream ~= nil then (stream :: RequestBodyStream):readAll() else ""
-	rawset(self, "_body", body)
+	rawset(self :: any, "_body", body)
 	return body
 end
 
@@ -427,7 +430,7 @@ end
 	request is not URL-encoded.
 ]=]
 function ServerRequestMethods.readForm(self: ServerRequest): QueryTable?
-	local cached = rawget(self, "_form")
+	local cached = rawget(self :: any, "_form")
 	if cached ~= nil then
 		return cached
 	end
@@ -436,7 +439,7 @@ function ServerRequestMethods.readForm(self: ServerRequest): QueryTable?
 	end
 
 	local form = util.decodeForm(self:readBody())
-	rawset(self, "_form", form)
+	rawset(self :: any, "_form", form)
 	return form
 end
 
@@ -449,7 +452,7 @@ end
 	when the request is not multipart form-data.
 ]=]
 function ServerRequestMethods.readMultipart(self: ServerRequest): { ParsedMultipartField }?
-	local cached = rawget(self, "_multipart")
+	local cached = rawget(self :: any, "_multipart")
 	if cached ~= nil then
 		return cached
 	end
@@ -457,13 +460,13 @@ function ServerRequestMethods.readMultipart(self: ServerRequest): { ParsedMultip
 		return nil
 	end
 
-	local boundary = rawget(self, "_multipartBoundary")
+	local boundary = rawget(self :: any, "_multipartBoundary")
 	if boundary == nil or boundary == "" then
 		return nil
 	end
 
 	local parsed = multipart.parse(self:readBody(), boundary)
-	rawset(self, "_multipart", parsed)
+	rawset(self :: any, "_multipart", parsed)
 	return parsed
 end
 
@@ -640,7 +643,7 @@ function HttpServer._readRequest(
 
 	local method, path, httpVersion = string.match(request_line, "^(%S+)%s+(%S+)%s+(HTTP/%d+%.%d+)")
 	if not method then
-		return nil
+		return nil, ""
 	end
 
 	local req_headers = util.parseHeaders(headers_raw)
@@ -658,9 +661,12 @@ function HttpServer._readRequest(
 	local transferEncodings = util.parseTransferEncoding(transferEncoding)
 	local content_length: number? = nil
 	if contentLengthHeader then
-		local ok, parsedOrErr = pcall(util.parseContentLength, contentLengthHeader)
+		local ok, parsedOrErr = pcall(function(...)
+			return util.parseContentLength(...)
+		end, contentLengthHeader)
 		if not ok then
-			requestError(400, parsedOrErr)
+			requestError(400, parsedOrErr :: any)
+			assert(false)
 		end
 		content_length = parsedOrErr :: number?
 	end
@@ -682,7 +688,7 @@ function HttpServer._readRequest(
 	local parsedContentType = util.parseContentType(req_headers["content-type"])
 	local nextBuffered = body_start_data
 	local bodyStream: RequestBodyStream?
-	local request
+	local request: ServerRequest
 
 	if not self._streamRequestBodies then
 		local buffered = body_start_data
@@ -739,11 +745,13 @@ function HttpServer._readRequest(
 				local size_str = string.match(size_line, "^([0-9a-fA-F]+)")
 				if not size_str then
 					requestError(400, "Malformed chunk size")
+					assert(false)
 				end
 
 				local chunk_size = tonumber(size_str, 16)
 				if chunk_size == nil then
 					requestError(400, "Malformed chunk size")
+					assert(false)
 				end
 				if chunk_size == 0 then
 					local trailerLines = {}
@@ -855,7 +863,7 @@ function HttpServer._readRequest(
 	end
 
 	if #transferEncodings > 0 then
-		bodyStream = setmetatable({
+		local fields: RequestBodyStreamFields = {
 			_closed = false,
 			_sock = sock,
 			_buffer = body_start_data,
@@ -869,13 +877,14 @@ function HttpServer._readRequest(
 				nextBuffered = remaining
 				request.trailers = trailers or {}
 			end,
-		}, RequestBodyStream)
+		}
+		bodyStream = setmetatable(fields, RequestBodyStream)
 		nextBuffered = ""
 	elseif content_length ~= nil and content_length > 0 then
 		if content_length > self._maxBodyBytes then
 			requestError(413, "Request body too large")
 		end
-		bodyStream = setmetatable({
+		local fields: RequestBodyStreamFields = {
 			_closed = false,
 			_sock = sock,
 			_buffer = body_start_data,
@@ -889,7 +898,8 @@ function HttpServer._readRequest(
 				nextBuffered = remaining
 				request.trailers = trailers or {}
 			end,
-		}, RequestBodyStream)
+		}
+		bodyStream = setmetatable(fields, RequestBodyStream)
 		nextBuffered = ""
 	elseif content_length ~= nil or #body_start_data == 0 then
 		bodyStream = nil
@@ -897,7 +907,7 @@ function HttpServer._readRequest(
 		nextBuffered = body_start_data
 	end
 
-	request = setmetatable({
+	local fields: ServerRequest = {
 		method = method :: string,
 		path = path :: string,
 		pathname = target.path,
@@ -917,7 +927,8 @@ function HttpServer._readRequest(
 		_multipart = nil,
 		_bodyStream = bodyStream,
 		_multipartBoundary = parsedContentType.params.boundary,
-	}, ServerRequestMetatable)
+	} :: any
+	request = setmetatable(fields, ServerRequestMetatable)
 
 	return request :: any, nextBuffered
 end
@@ -951,7 +962,7 @@ function HttpServer._handleConnection(
 		end
 
 		local ok, requestOrErr, nextBuffered = pcall(function()
-			return self:_readRequest(client_sock, remoteAddr, remotePort, buffered)
+			return self:_readRequest(client_sock, remoteAddr, remotePort, buffered :: string)
 		end)
 		if not ok then
 			local status, message = decodeRequestError(requestOrErr)

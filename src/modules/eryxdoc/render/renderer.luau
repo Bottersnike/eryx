@@ -9,7 +9,6 @@ local highlight = require("../parse/highlight")
 local modules = require("../content/modules")
 local Article = require("../content/article")
 local links = require("./links")
-local jsonExport = require("./jsonExport")
 
 type TOCItem = {
 	label: string,
@@ -1112,10 +1111,6 @@ function Renderer.getJSONLink(self: Renderer, item: modules.ModuleInfo): string
 	else
 		return self.siteRoot .. (path:gsub("/", "_"):gsub("\\", "_") .. ".json")
 	end
-end
-
-function Renderer.moduleToJSON(_self: Renderer, mod: modules.ModuleInfo): string
-	return jsonExport.moduleToJSON(mod)
 end
 
 -- Strips markdown/HTML to plain text for search indexing.

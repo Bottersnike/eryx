@@ -291,7 +291,7 @@ local function processEmphasis(
 		local resolverList = resolvers and resolvers[closerChar]
 		if resolverList then
 			if type(resolverList) == "function" then
-				local ud, et = resolverList(opener, closer)
+				local ud, et = (resolverList :: any)(opener, closer)
 				if ud and ud > 0 then
 					useDelims, emphType = ud, et
 					resolved = true
@@ -1193,7 +1193,7 @@ function parse.parse(
 		table.remove(queue, 1)
 
 		if node.type == "paragraph" or node.type == "heading" then
-			local raw = table.concat(node.raw, if config.useCrlf then "\r\n" else "\n")
+			local raw = table.concat((node :: any).raw, if config.useCrlf then "\r\n" else "\n")
 
 			-- Strip a trailing \r\n or \n left over from the block parser
 			if #raw >= 2 and raw:sub(#raw - 1, #raw) == "\r\n" then

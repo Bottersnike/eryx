@@ -350,3 +350,12 @@ if(ERYX_MODULE_GFX)
         add_dependencies(eryx mod_gfx__gfx)
     endif()
 endif()
+
+if(WIN32)
+    set(_PLAT_SERIAL_LIBS "setupapi")  # uses Win32 API directly
+else()
+    set(_PLAT_SERIAL_LIBS "")  # uses POSIX termios directly
+endif()
+add_luau_module(serial src/modules/serial.cpp src/modules/serial.luau
+    EXTRA_LIBS ${_PLAT_SERIAL_LIBS}
+)

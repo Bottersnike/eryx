@@ -212,7 +212,7 @@ function util.parseContentType(value: string?): { mediaType: string?, params: { 
 	for i = 2, #parts do
 		local part = parts[i]
 		local name, paramValue = string.match(part, "^%s*([^=]+)%s*=%s*(.-)%s*$")
-		if name then
+		if name and paramValue then
 			local cleaned = paramValue
 			if string.sub(cleaned, 1, 1) == '"' and string.sub(cleaned, -1) == '"' then
 				cleaned = string.sub(cleaned, 2, -2)

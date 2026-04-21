@@ -9,6 +9,17 @@ parser:addPositional("path", "string", nil, true, "File or directory to test")
 parser:addOption("defs", "d", "string", nil, false, "Definition file (.d.luau); can be passed multiple times", {
 	multiple = true,
 })
+parser:addOption(
+	"exclude",
+	"e",
+	"string",
+	nil,
+	false,
+	"Directory or file name to exclude; can be passed multiple times",
+	{
+		multiple = true,
+	}
+)
 
 local args = parser:parse()
 local path = fs.path.canonicalize(args.path)
@@ -323,6 +334,7 @@ local function collectDiagnostics(result: luau.CheckResult): { Diagnostic }
 end
 
 local definitions = loadDefinitions(args.defs)
+local excludedPatterns: { string } = args.exclude or {}
 
 local function checkFile(filePath: string)
 	local source = readFile(filePath)
@@ -381,10 +393,23 @@ local function shouldCheckFile(name: string): boolean
 	return name:match("%.luau$") ~= nil or name:match("%.lua$") ~= nil
 end
 
+local function isExcludedEntry(name: string): boolean
+	for _, pattern in excludedPatterns do
+		if pattern ~= "" and string.find(name, pattern, 1, true) ~= nil then
+			return true
+		end
+	end
+	return false
+end
+
 local function walkFiles(root, out)
 	local entries = fs.listDir(root)
 	table.sort(entries)
 	for _, entry in entries do
+		if isExcludedEntry(entry) then
+			continue
+		end
+
 		local full = fs.path.join(root, entry)
 		if fs.isDirectory(full) then
 			if entry ~= ".git" then

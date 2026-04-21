@@ -16,7 +16,7 @@ function html.renderDocument(doc: types.DocumentBlockNode, config: types.Markdow
 	local prepend: { string } = {}
 	for _, i in combinedRules do
 		if i.toHtmlPrepend then
-			local pre = i.toHtmlPrepend(doc, combinedRules, renderConfig)
+			local pre = i.toHtmlPrepend(doc, combinedRules :: types.MagicRules, renderConfig)
 			if pre then
 				table.insert(prepend, pre)
 			end
@@ -24,12 +24,12 @@ function html.renderDocument(doc: types.DocumentBlockNode, config: types.Markdow
 	end
 	local body = table.concat(prepend)
 
-	body ..= render.renderBlock(doc, combinedRules, renderConfig)
+	body ..= render.renderBlock(doc, combinedRules :: types.MagicRules, renderConfig)
 
 	local append: { string } = {}
 	for _, i in combinedRules do
 		if i.toHtmlAppend then
-			local post = i.toHtmlAppend(doc, combinedRules, renderConfig)
+			local post = i.toHtmlAppend(doc, combinedRules :: types.MagicRules, renderConfig)
 			if post then
 				table.insert(append, post)
 			end

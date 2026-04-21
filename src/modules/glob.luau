@@ -564,7 +564,7 @@ function glob.glob(pattern: string, options: GlobOptions?): { string }
 	local followSymlinks = opts.followSymlinks == true
 	local results = {}
 
-	local function walk(absDir: string, relDir: string)
+	local function walk(absDir: path.PathLike, relDir: string)
 		local entries = fs.listDir(absDir)
 		table.sort(entries)
 		for _, entry in entries do

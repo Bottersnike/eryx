@@ -71,6 +71,7 @@ suite:test("errorSignal: receives handler failures", function()
 	task.wait()
 
 	test.expect(typeof(seenErr)):toBe("Exception")
+	assert(seenErr)
 	test.expect(seenErr.message):toMatch("boom")
 	test.expect(seenConnection):toNotBeNil()
 end)

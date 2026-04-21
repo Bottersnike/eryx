@@ -487,20 +487,6 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 	if safePath:sub(1, 4) == "api/" then
 		local rest = safePath:sub(5) -- after "api/"
 
-		-- Check for JSON export: api/<name>/api.json
-		local jsonName = rest:match("^(.+)/api%.json$")
-		if jsonName then
-			for _, mod in state.allModules do
-				if mod.qualifiedName == jsonName then
-					local ok, content = pcall(renderer.moduleToJSON, renderer, mod)
-					if ok then
-						return 200, content, "application/json; charset=utf-8"
-					end
-					return 500, `\{"error": "{content}"\}`, "application/json; charset=utf-8"
-				end
-			end
-		end
-
 		-- Module HTML: api/<name>/index.html or api/<name>/ or api/<name>
 		local modName = rest:match("^(.+)/index%.html$") or rest:match("^(.+)/$") or rest
 		if modName and modName ~= "" then

@@ -129,7 +129,7 @@ function multipart.parse(body: string, contentTypeOrBoundary: string): { ParsedM
 
 	while true do
 		local startPos, endPos = string.find(body, delimiter, position, true)
-		if not startPos then
+		if not startPos or not endPos then
 			break
 		end
 

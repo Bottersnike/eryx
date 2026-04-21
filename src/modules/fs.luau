@@ -44,8 +44,8 @@ export type BaseFile = {
 	flushSync: (self: BaseFile) -> (),
 }
 
-export type ReadableFile = BaseFile & stream.ReadableStream
-export type WritableFile = BaseFile & stream.WritableStream
+export type ReadableFile = BaseFile & stream.ReadOnlyStream
+export type WritableFile = BaseFile & stream.WriteOnlyStream
 export type ReadWriteFile = BaseFile & stream.ReadWriteStream
 
 --[=[

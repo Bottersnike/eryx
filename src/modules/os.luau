@@ -42,11 +42,11 @@ export type ProcessHandle = {
 	--- Process return code, if it's exited
 	status: number?,
 	--- Writable stream connected to the child process stdin.
-	stdin: stream.WritableStream,
+	stdin: stream.WriteOnlyStream,
 	--- Readable stream connected to the child process stdout.
-	stdout: stream.ReadableStream,
+	stdout: stream.ReadOnlyStream,
 	--- Readable stream connected to the child process stderr.
-	stderr: stream.ReadableStream,
+	stderr: stream.ReadOnlyStream,
 	--- Wait for the process to complete
 	wait: (self: ProcessHandle) -> ExecResult,
 	--[=[

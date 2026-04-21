@@ -8,8 +8,8 @@ Represents an IPv4 address.
 ]=]
 export type IPv4Address = setmetatable<
 	{
-		--- IP version number (`4`).
-		read version: number,
+		--- IP version number (`4`). This value is a string for type narrowing
+		read version: "4",
 		--- IPv4 octets in network order.
 		read _octets: { number },
 		--- Packed 32-bit integer representation.
@@ -26,8 +26,8 @@ Represents an IPv6 address.
 ]=]
 export type IPv6Address = setmetatable<
 	{
-		--- IP version number (`6`).
-		read version: number,
+		--- IP version number (`6`). This value is a string for type narrowing
+		read version: "6",
 		--- IPv6 hextets in network order.
 		read _hextets: { number },
 	},
@@ -42,8 +42,8 @@ Represents an IPv4 CIDR network.
 ]=]
 export type IPv4Network = setmetatable<
 	{
-		--- IP version number (`4`).
-		read version: number,
+		--- IP version number (`4`). This value is a string for type narrowing
+		read version: "4",
 		--- CIDR prefix length.
 		read _prefix: number,
 		--- Packed network address as 32-bit integer.
@@ -60,8 +60,8 @@ Represents an IPv6 CIDR network.
 ]=]
 export type IPv6Network = setmetatable<
 	{
-		--- IP version number (`6`).
-		read version: number,
+		--- IP version number (`6`). This value is a string for type narrowing
+		read version: "6",
 		--- CIDR prefix length.
 		read _prefix: number,
 		--- Network address as hextets.
@@ -114,8 +114,8 @@ Represents a normalized set of IPv4 segments.
 ]=]
 export type IPv4Range = setmetatable<
 	{
-		--- IP version number (`4`).
-		read version: number,
+		--- IP version number (`4`). This value is a string for type narrowing
+		read version: "4",
 		--- Sorted, non-overlapping inclusive segments.
 		read _segments: { { start: number, finish: number } },
 	},
@@ -130,8 +130,8 @@ Represents a normalized set of IPv6 segments.
 ]=]
 export type IPv6Range = setmetatable<
 	{
-		--- IP version number (`6`).
-		read version: number,
+		--- IP version number (`6`). This value is a string for type narrowing
+		read version: "6",
 		--- Sorted, non-overlapping inclusive segments.
 		read _segments: { { start: { number }, finish: { number } } },
 	},
@@ -836,7 +836,7 @@ Construct and freeze an IPv4Address from octets.
 ]=]
 local function createIPv4AddressFromOctets(octets: { number }): IPv4Address
 	local v = setmetatable({
-		version = 4,
+		version = "4",
 		_octets = { octets[1], octets[2], octets[3], octets[4] },
 		_int = octetsToInt(octets),
 	}, IPv4Address)
@@ -850,7 +850,7 @@ Construct and freeze an IPv4Address from a 32-bit integer.
 ]=]
 local function createIPv4AddressFromInt(value: number): IPv4Address
 	local v = setmetatable({
-		version = 4,
+		version = "4",
 		_octets = intToOctets(value),
 		_int = value,
 	}, IPv4Address)
@@ -864,7 +864,7 @@ Construct and freeze an IPv6Address from hextets.
 ]=]
 local function createIPv6Address(hextets: { number }): IPv6Address
 	local v = setmetatable({
-		version = 6,
+		version = "6",
 		_hextets = cloneArray(hextets),
 	}, IPv6Address)
 	return table.freeze(v)
@@ -878,7 +878,7 @@ Construct and freeze an IPv4Network from address and prefix.
 ]=]
 local function createIPv4Network(value: number, prefix: number): IPv4Network
 	local v = setmetatable({
-		version = 4,
+		version = "4",
 		_prefix = prefix,
 		_network = ipv4NetworkInt(value, prefix),
 	}, IPv4Network)
@@ -893,7 +893,7 @@ Construct and freeze an IPv6Network from address and prefix.
 ]=]
 local function createIPv6Network(hextets: { number }, prefix: number): IPv6Network
 	local v = setmetatable({
-		version = 6,
+		version = "6",
 		_prefix = prefix,
 		_network = ipv6MaskHextets(hextets, prefix),
 	}, IPv6Network)
@@ -975,22 +975,22 @@ local function parseInterfaceInternal(source: string, options: ParseOptions?): (
 			return nil
 		end
 		local iface = setmetatable({
-			address = addr,
+			address = addr :: IPv4Address,
 			network = createIPv4Network((addr :: IPv4Address)._int, prefix),
 			_prefix = prefix,
 		}, IPv4Interface)
-		return table.freeze(iface)
+		return table.freeze(iface :: IPv4Interface)
 	end
 	local prefix = parsePrefixPart(prefixPart, 6)
 	if prefix == nil then
 		return nil
 	end
 	local iface = setmetatable({
-		address = addr,
+		address = addr :: IPv6Address,
 		network = createIPv6Network((addr :: IPv6Address)._hextets, prefix),
 		_prefix = prefix,
 	}, IPv6Interface)
-	return table.freeze(iface)
+	return table.freeze(iface :: IPv6Interface)
 end
 
 --[=[
@@ -1132,7 +1132,7 @@ end
 local function normalizeV4Segments(
 	segments: { { start: number, finish: number } }
 ): { { start: number, finish: number } }
-	table.sort(segments, function(a, b)
+	table.sort(segments, function(a: { start: number, finish: number }, b: { start: number, finish: number })
 		return a.start < b.start
 	end)
 	local out = {}
@@ -1223,7 +1223,7 @@ end
 local function createIPv4Range(segments: { { start: number, finish: number } }): IPv4Range
 	local normalized = normalizeV4Segments(segments)
 	local value = setmetatable({
-		version = 4,
+		version = "4",
 		_segments = normalized,
 	}, IPv4Range)
 	return table.freeze(value)
@@ -1232,7 +1232,7 @@ end
 local function createIPv6Range(segments: { { start: { number }, finish: { number } } }): IPv6Range
 	local normalized = normalizeV6Segments(segments)
 	local value = setmetatable({
-		version = 6,
+		version = "6",
 		_segments = normalized,
 	}, IPv6Range)
 	return table.freeze(value)
@@ -1566,7 +1566,7 @@ Sort a collection of IPv4 address values.
 @return Parsed and sorted IPv4 addresses.
 ]=]
 function IPv4Address.sort(values: { IPv4Address | string }): { IPv4Address }
-	local out = table.create(#values)
+	local out: { IPv4Address } = {}
 	for i = 1, #values do
 		local value = values[i]
 		if type(value) == "string" then
@@ -1579,7 +1579,7 @@ function IPv4Address.sort(values: { IPv4Address | string }): { IPv4Address }
 			out[i] = ensureV4Address(value)
 		end
 	end
-	table.sort(out, function(x, y)
+	table.sort(out, function(x: IPv4Address, y: IPv4Address)
 		return compareIPv4Address(x, y) < 0
 	end)
 	return out
@@ -1591,7 +1591,7 @@ Sort a collection of IPv6 address values.
 @return Parsed and sorted IPv6 addresses.
 ]=]
 function IPv6Address.sort(values: { IPv6Address | string }): { IPv6Address }
-	local out = table.create(#values)
+	local out: { IPv6Address } = {}
 	for i = 1, #values do
 		local value = values[i]
 		if type(value) == "string" then
@@ -1604,7 +1604,7 @@ function IPv6Address.sort(values: { IPv6Address | string }): { IPv6Address }
 			out[i] = ensureV6Address(value)
 		end
 	end
-	table.sort(out, function(x, y)
+	table.sort(out, function(x: IPv6Address, y: IPv6Address)
 		return compareIPv6Address(x, y) < 0
 	end)
 	return out
@@ -1700,7 +1700,7 @@ Merge and collapse overlapping/adjacent IPv4 networks.
 @return Minimal merged set of IPv4 networks.
 ]=]
 function IPv4Network.mergeNetworks(networks: { IPv4Network | string }): { IPv4Network }
-	local parsed = {}
+	local parsed: { IPv4Network } = {}
 	for _, value in networks do
 		local netValue = nil :: IPv4Network?
 		if type(value) == "string" then
@@ -1716,7 +1716,7 @@ function IPv4Network.mergeNetworks(networks: { IPv4Network | string }): { IPv4Ne
 	table.sort(parsed, function(a, b)
 		return compareIPv4NetworkOrder(a, b) < 0
 	end)
-	local reduced = {}
+	local reduced: { IPv4Network } = {}
 	for _, net in parsed do
 		if #reduced == 0 then
 			table.insert(reduced, net)
@@ -1762,7 +1762,7 @@ Merge and collapse overlapping/adjacent IPv6 networks.
 @return Minimal merged set of IPv6 networks.
 ]=]
 function IPv6Network.mergeNetworks(networks: { IPv6Network | string }): { IPv6Network }
-	local parsed = {}
+	local parsed: { IPv6Network } = {}
 	for _, value in networks do
 		local netValue = nil :: IPv6Network?
 		if type(value) == "string" then
@@ -1778,7 +1778,7 @@ function IPv6Network.mergeNetworks(networks: { IPv6Network | string }): { IPv6Ne
 	table.sort(parsed, function(a, b)
 		return compareIPv6NetworkOrder(a, b) < 0
 	end)
-	local reduced = {}
+	local reduced: { IPv6Network } = {}
 	for _, net in parsed do
 		if #reduced == 0 then
 			table.insert(reduced, net)

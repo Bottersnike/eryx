@@ -170,6 +170,7 @@ end
 function SessionMethods.regenerate(self: Session): string
 	local previousId = self.id
 	self.id = generateSessionId()
+	assert(self.id)
 	self.isNew = true
 	(self :: any)._changed = true
 	(self :: any)._previousId = previousId
@@ -237,14 +238,14 @@ function FileStoreMethods._pathFor(self: FileStore, id: string): string
 end
 
 function FileStoreMethods.get(self: FileStore, id: string): SessionRecord?
-	local path = self:_pathFor(id)
+	local path: string = (self :: any):_pathFor(id)
 	if not fs.isFile(path) then
 		return nil
 	end
 
-	local file = fs.openSync(path, "r")
-	local body = file:readSync()
-	file:closeSync()
+	local file = fs.open(path, "r")
+	local body = file:read()
+	file:close()
 	local decoded = json.decode(body)
 	if decoded.expiresAt ~= nil and decoded.expiresAt <= os.time() then
 		pcall(fs.remove, path)
@@ -258,17 +259,17 @@ end
 
 function FileStoreMethods.set(self: FileStore, id: string, data: { [string]: any }, expiresAt: number?)
 	fs.mkdir(self._dir)
-	local path = self:_pathFor(id)
-	local file = fs.openSync(path, "w")
-	file:writeSync(json.encode({
+	local path: string = (self :: any):_pathFor(id)
+	local file = fs.open(path, "w")
+	file:write(json.encode({
 		data = data,
 		expiresAt = expiresAt,
 	}))
-	file:closeSync()
+	file:close()
 end
 
 function FileStoreMethods.delete(self: FileStore, id: string)
-	local path = self:_pathFor(id)
+	local path: string = (self :: any):_pathFor(id)
 	if fs.exists(path) then
 		pcall(fs.remove, path)
 	end
@@ -396,7 +397,7 @@ end
 	@return (ctx: any, next: () -> any) -> any
 ]=]
 function ServerSession.middleware(options: SessionOptions?): (ctx: any, next: () -> any) -> any
-	local opts = options or {}
+	local opts = options or ({} :: SessionOptions)
 	local store = opts.store or ServerSession.memoryStore()
 	local cookieName = opts.cookieName or "session_id"
 	local ttl = if opts.ttl ~= nil then opts.ttl else 7 * 24 * 60 * 60

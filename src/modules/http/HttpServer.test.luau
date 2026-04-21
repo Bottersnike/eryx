@@ -4,7 +4,7 @@ local test = require("@eryx/test")
 
 local suite = test.Suite.new("http server")
 
-local function makeFakeSocket(chunks: { string })
+local function makeFakeSocket(chunks: { string }): any
 	local index = 0
 	return {
 		recv = function(self, _size: number)
@@ -26,11 +26,12 @@ suite:test("readRequest: parses query strings and urlencoded forms", function()
 
 	local request = server:_readRequest(sock, "127.0.0.1", 1234)
 	test.expect(request):toNotBeNil()
+	assert(request)
 	test.expect((request :: HttpServer.ServerRequest).pathname):toBe("/submit")
-	test.expect((request :: HttpServer.ServerRequest).query.tag[1]):toBe("a")
-	test.expect((request :: HttpServer.ServerRequest).query.tag[2]):toBe("b")
-	test.expect((request :: HttpServer.ServerRequest).form.name):toBe("Jane Doe")
-	test.expect((request :: HttpServer.ServerRequest).form.x):toBe("1")
+	test.expect(((request :: HttpServer.ServerRequest).query.tag :: any)[1]):toBe("a")
+	test.expect(((request :: HttpServer.ServerRequest).query.tag :: any)[2]):toBe("b")
+	test.expect(((request :: HttpServer.ServerRequest).form :: any).name):toBe("Jane Doe")
+	test.expect(((request :: HttpServer.ServerRequest).form :: any).x):toBe("1")
 end)
 
 suite:test("readRequest: parses multipart form-data bodies", function()
@@ -225,7 +226,7 @@ suite:test("handleConnection: drains unread request streams before reusing keep-
 		streamRequestBodies = true,
 	})
 
-	local sent = {}
+	local sent: { string } = {}
 	local sock = makeFakeSocket({
 		"POST /one HTTP/1.1\r\nHost: example.com\r\nContent-Length: 6\r\nConnection: keep-alive\r\n\r\nabcdefGET /two HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n",
 	})

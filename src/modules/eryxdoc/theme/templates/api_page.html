@@ -142,9 +142,6 @@
     <div class="container">
         <div class="module-title-row">
             <h1><code>{{ module.qualifiedName | escape }}</code> Module</h1>
-            {% if jsonLink then %}
-            <a class="json-link" href="{{ jsonLink }}" target="_blank" title="View raw JSON (Moonwave-compatible)">JSON</a>
-            {% end %}
         </div>
 
         {% if module.description then %}

@@ -78,6 +78,7 @@ suite:test("context helper methods can send redirects and custom bodies", functi
 	local app = App.new()
 	app:get("/go", function(ctx)
 		ctx:redirect("/target", 307)
+		return nil
 	end)
 	app:get("/created", function(ctx)
 		return {
@@ -215,7 +216,7 @@ suite:test("status handlers can customize 404 and 405 responses", function()
 			status = 405,
 			json = {
 				status = ctx.errorStatus,
-				allowed = ctx.errorData.allowedMethods,
+				allowed = (ctx.errorData :: any).allowedMethods,
 			},
 		}
 	end)
@@ -446,6 +447,7 @@ suite:test("sendFile streams a file response with inferred content type", functi
 	local app = App.new()
 	app:get("/download", function(ctx)
 		ctx:sendFile("src/modules/http/testdata/static/app.js")
+		return nil
 	end)
 
 	withApp(app, function(url)
@@ -464,6 +466,7 @@ suite:test("websocket routes upgrade and handle messages", function()
 			ws:send("echo:" .. msg.data)
 		end
 		ws:close()
+		return nil
 	end)
 
 	withApp(app, function(url)
@@ -472,6 +475,7 @@ suite:test("websocket routes upgrade and handle messages", function()
 		ws:send("hello")
 		local msg = ws:receive()
 		test.expect(msg):toNotBeNil()
+		assert(msg)
 		test.expect(msg.data):toBe("echo:hello")
 		ws:close()
 

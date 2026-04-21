@@ -75,11 +75,19 @@ return function(linkResolver): types.InlineRule
 		): string
 			local href = if type(node.target) == "table" then node.target.href else node.target
 			local extraAttrs = ""
-			if type(node.target) == "table" then
-				if node.target.className and node.target.className ~= "" then
+			if typeof(node.target) == "table" then
+				if
+					node.target.className
+					and typeof(node.target.className) == "string"
+					and node.target.className ~= ""
+				then
 					extraAttrs ..= ` class="md-wikilink {html.renderLiteral(node.target.className)}"`
 				end
-				if node.target.hoverHtml and node.target.hoverHtml ~= "" then
+				if
+					node.target.hoverHtml
+					and typeof(node.target.hoverHtml) == "string"
+					and node.target.hoverHtml ~= ""
+				then
 					extraAttrs ..= ` data-hover-html="{html.renderLiteral(node.target.hoverHtml)}"`
 				end
 			end

@@ -391,7 +391,7 @@ local function resolveTypeLink(
 	end
 
 	-- Dotted cross-module shorthand:
-	-- "stream.ReadableStream" where "stream" is module last segment.
+	-- "stream.ReadOnlyStream" where "stream" is module last segment.
 	local dotPos = typeName:find(".", 1, true)
 	if dotPos then
 		local prefix = typeName:sub(1, dotPos - 1)

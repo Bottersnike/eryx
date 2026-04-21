@@ -22,11 +22,8 @@ export type Dialect = {
 	lineterminator: string?,
 }
 
---[=[
-	Options for `csv.parse`. Inherits all `Dialect` fields as per-call overrides;
-	resolution order is: option field > dialect field > hard default.
-]=]
-export type ParseOptions = Dialect & {
+--- Options for `csv.parse`
+export type ParseOptions = {
 	--- Base dialect -- a registered name or an inline `Dialect` table.
 	dialect: (string | Dialect)?,
 	--- Skip whitespace immediately following the delimiter. Default `false`.
@@ -43,8 +40,8 @@ export type ParseOptions = Dialect & {
 	skipblanklines: boolean?,
 }
 
---- Options for `csv.generate`. Inherits all `Dialect` fields as per-call overrides.
-export type GenerateOptions = Dialect & {
+--- Options for `csv.generate`
+export type GenerateOptions = {
 	--- Base dialect -- a registered name or an inline `Dialect` table.
 	dialect: (string | Dialect)?,
 }
@@ -130,17 +127,6 @@ local dialects: { [string]: Dialect } = {
 }
 
 local DEFAULT_DIALECT: Dialect = dialects.excel
-
---- Resolve a single option with fallback chain: user > base > default.
-local function resolve<T>(user: T?, base: T?, default: T): T
-	if user ~= nil then
-		return user
-	end
-	if base ~= nil then
-		return base
-	end
-	return default
-end
 
 --[=[
 	Resolve a dialect reference to a concrete `Dialect` table.
@@ -242,11 +228,11 @@ function csv.parse(input: string, opts: ParseOptions?): { { string } }
 	end
 
 	local base = resolveDialect(opts and opts.dialect)
-	local delim: string = resolve(opts and opts.delimiter, base.delimiter, ",")
-	local qchar: string? = resolve(opts and opts.quotechar, base.quotechar, '"')
-	local esc: string? = resolve(opts and opts.escapechar, base.escapechar, nil)
-	local dblq: boolean = resolve(opts and opts.doublequote, base.doublequote, true)
-	local quoting: number = resolve(opts and opts.quoting, base.quoting, 0)
+	local delim: string = base.delimiter or ","
+	local qchar: string? = base.quotechar or '"'
+	local esc: string? = base.escapechar or nil
+	local dblq: boolean = base.doublequote or true
+	local quoting: number = base.quoting or 0
 	local skipsp: boolean = if opts and opts.skipinitialspace ~= nil then opts.skipinitialspace else false
 	local strict: boolean = if opts and opts.strict ~= nil then opts.strict else false
 	local comment: string? = if opts then opts.comment else nil
@@ -523,12 +509,12 @@ end
 ]=]
 function csv.generate(rows: { { string } }, opts: GenerateOptions?): string
 	local base = resolveDialect(opts and opts.dialect)
-	local delim: string = resolve(opts and opts.delimiter, base.delimiter, ",")
-	local qchar: string? = resolve(opts and opts.quotechar, base.quotechar, '"')
-	local esc: string? = resolve(opts and opts.escapechar, base.escapechar, nil)
-	local dblq: boolean = resolve(opts and opts.doublequote, base.doublequote, true)
-	local term: string = resolve(opts and opts.lineterminator, base.lineterminator, "\r\n")
-	local quoting: number = resolve(opts and opts.quoting, base.quoting, 0)
+	local delim: string = base.delimiter or ","
+	local qchar: string? = base.quotechar or '"'
+	local esc: string? = base.escapechar or nil
+	local dblq: boolean = base.doublequote or true
+	local term: string = base.lineterminator or "\r\n"
+	local quoting: number = base.quoting or 0
 
 	-- Validate single-byte constraints
 	assertSingleByte("delimiter", delim)

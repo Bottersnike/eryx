@@ -486,7 +486,7 @@ local function executeStreamingRequest(
 			readAll = function(self): string
 				local parts = {}
 				while true do
-					local chunk = self:read()
+					local chunk: string = self:read()
 					if #chunk == 0 then
 						break
 					end

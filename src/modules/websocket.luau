@@ -59,6 +59,8 @@ local capability = require("@eryx/capability")
 local base64 = require("@eryx/encoding/base64")
 -- local http = require("@eryx/http")
 local task = require("@eryx/task")
+local HttpServer = require("@eryx/http/HttpServer")
+local ServerResponse = require("@eryx/http/ServerResponse")
 
 -- ───────────────────────────────────────────────────────────────────────────
 -- Constants
@@ -156,7 +158,9 @@ local function recvExact(sock: any, n: number): string?
 	local parts: { string } = {}
 	local total = 0
 	while total < n do
-		local ok, chunk = pcall(sock.recv, sock, n - total)
+		local ok, chunk = pcall(function(...)
+			return sock.recv(...)
+		end, sock, n - total)
 		if not ok then
 			return nil
 		end
@@ -578,7 +582,7 @@ type WebSocketFields = {
 	_heartbeatThread: thread?,
 }
 
-export type WebSocket = typeof(setmetatable({} :: WebSocketFields, WebSocket))
+export type WebSocket = setmetatable<WebSocketFields, typeof(WebSocket)>
 
 function WebSocket._new(sock: any, isClient: boolean, deflate: DeflateState?, heartbeatInterval: number?): WebSocket
 	local ws = setmetatable(
@@ -602,7 +606,9 @@ function WebSocket._new(sock: any, isClient: boolean, deflate: DeflateState?, he
 				if ws._closed then
 					break
 				end
-				pcall(WebSocket.ping, ws)
+				pcall(function(...)
+					return WebSocket.ping(...)
+				end, ws)
 			end
 		end)
 	end
@@ -1119,7 +1125,11 @@ export type UpgradeOptions = {
 	@param options Optional upgrade settings (e.g. sub-protocol selection).
 	@return WebSocket? -- The upgraded WebSocket, or `nil` if the request is not a WebSocket upgrade.
 ]=]
-local function upgrade(request: http.ServerRequest, response: http.ServerResponse, options: UpgradeOptions?): WebSocket?
+local function upgrade(
+	request: HttpServer.ServerRequest,
+	response: ServerResponse.ServerResponse,
+	options: UpgradeOptions?
+): WebSocket?
 	local opts = options or {} :: UpgradeOptions
 
 	if string.upper(request.method) ~= "GET" then

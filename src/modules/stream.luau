@@ -1,37 +1,100 @@
 --[=[
-	Shared stream contracts for Eryx.
+	Functions that return a stream will return a [[ReadOnlyStream]],
+	a [[WriteOnlyStream]], or a [[ReadWriteStream]].
 
-	This module provides:
+	[[Stream]] represent a generic stream of unknown writability, but
+	`readable` and `writable` allow this to be narrowed down. For
+	example:
 
-	1. Structural stream types (`ReadableStream`, `WritableStream`,
-	   `ReadWriteStream`, and `Stream`) for static typing.
+	```luau
+	if s.readable then
+		s:read()
+	end
+	if s.writable then
+		s:write()
+	end
+	```
 
-	## Design intent
+	When writing a function that expects a generic stream as an
+	argument, the `StreamThatCanX` types should be used instead. If a
+	function is defined as taking a [[ReadOnlyStream]], the type system
+	will not allow a [[ReadWriteStream]] to be passed. On the other
+	hand, that same function can be defined to take a
+	`StreamThatCanRead & StreamThatCanClose` and a read-write stream can
+	be passed.
 
-	- Native objects should "just be streams" by shape, not inheritance.
-	  `fs.File`, `_socket.Socket`, and `_ssl.SslSocket` can satisfy these
-	  contracts directly via structural typing.
-	- Capabilities are represented in types with tags:
-	  `readable: true/false` and `writable: true/false`.
-	- Runtime compatibility is preserved: some concrete objects may still
-	  expose methods that can error when capability is invalid.
+	```luau
+	local function foo(x: ReadOnlyStream)
+		print(x:read())
+		x:close()
+	end
+	foo(y :: ReadWriteStream)  -- Type error
+	```
 
-	## Return conventions
+	```luau
+	local function foo(x: StreamThatCanRead & StreamThatCanClose)
+		print(x:read())
+		x:close()
+	end
+	foo(y :: ReadWriteStream)  -- Ok!
+	```
 
-	- EOF is returned as `""` for string reads and an empty `buffer` for
-	  buffer reads.
-	- `nil` is reserved for non-blocking "would block" style results on
-	  stream-like APIs that support them.
-
-	## Quick examples
-
-	Use `@eryx/stdio` for process-owned stream handles:
-	- `stdio.stdin`
-	- `stdio.stdout`
-	- `stdio.stderr`
+	This way, a function's argument describes the expected capabilities
+	required of the passed stream.
 ]=]
 
 local stream = {}
+
+export type StreamThatCanClose = {
+	--- Closes this stream, setting closed to true
+	--- @yields
+	close: (self: StreamThatCanClose) -> (),
+	--- Non-yielding version of [[close]]
+	closeSync: (self: StreamThatCanClose) -> (),
+	--- A boolean indicating if this stream is already closed
+	closed: boolean?,
+}
+export type StreamThatCanRead = {
+	--- Marks that this stream is readable
+	readable: true,
+	--[=[
+	Read data from the stream.
+
+	The formal [[Stream]] contract defines this as always returning a
+	`string`.
+
+	Some implementations of streams may augment this function to return
+	`string?` in non-blocking contexts.
+
+	@param size The number of bytes to read. If omitted, reads all available data
+	@return The data read, which may be shorter than `size` (including `""`), but never larger.
+	@yields
+	]=]
+	read: (self: StreamThatCanRead, size: number?) -> string,
+	--- Non-yielding version of [[read]]
+	readSync: (self: StreamThatCanRead, size: number?) -> string,
+	--[=[
+	Read data from the stream, returning the data as a `buffer`. See [[read]].
+	@yields
+	]=]
+	readBuffer: (self: StreamThatCanRead, size: number?) -> buffer,
+	--- Non-yielding version of [[readBuffer]]
+	readBufferSync: (self: StreamThatCanRead, size: number?) -> buffer,
+}
+export type StreamThatCanWrite = {
+	--- Marks that this stream is writable
+	writable: true,
+	--[=[
+	Writes data to the stream
+
+	@param data The data to write
+	@return The number of bytes of `data` that was written
+	@yields
+	]=]
+	write: (self: StreamThatCanWrite, data: string | buffer) -> number,
+	--- Non-yielding version of [[write]]
+	writeSync: (self: StreamThatCanWrite, data: string | buffer) -> number,
+}
 
 --[=[
 	Read-only stream contract.
@@ -40,16 +103,9 @@ local stream = {}
 	`string` or `buffer` depending on the concrete stream source.
 	Use `readBuffer` variants when you specifically need `buffer`.
 ]=]
-export type ReadableStream = {
-	readable: true,
+export type ReadOnlyStream = StreamThatCanClose & StreamThatCanRead & {
+	--- Indicates that this stream is read-only
 	writable: false,
-	closed: boolean?,
-	read: (self: ReadableStream, size: number?) -> string,
-	readSync: (self: ReadableStream, size: number?) -> string,
-	readBuffer: (self: ReadableStream, size: number?) -> buffer,
-	readBufferSync: (self: ReadableStream, size: number?) -> buffer,
-	close: (self: ReadableStream) -> (),
-	closeSync: (self: ReadableStream) -> (),
 }
 
 --[=[
@@ -58,36 +114,19 @@ export type ReadableStream = {
 	`write` and `writeSync` accept `string | buffer` to support both text and
 	binary producer code with one surface.
 ]=]
-export type WritableStream = {
+export type WriteOnlyStream = StreamThatCanClose & StreamThatCanWrite & {
+	--- Indicates that this stream is write-only
 	readable: false,
-	writable: true,
-	closed: boolean?,
-	write: (self: WritableStream, data: string | buffer) -> number,
-	writeSync: (self: WritableStream, data: string | buffer) -> number,
-	close: (self: WritableStream) -> (),
-	closeSync: (self: WritableStream) -> (),
 }
 
 --[=[
 	Duplex stream contract.
 
-	This is effectively `ReadableStream & WritableStream` with explicit tags.
+	This is effectively `ReadOnlyStream & WriteOnlyStream` with explicit tags.
 ]=]
-export type ReadWriteStream = {
-	readable: true,
-	writable: true,
-	closed: boolean?,
-	read: (self: ReadWriteStream, size: number?) -> string,
-	readSync: (self: ReadWriteStream, size: number?) -> string,
-	readBuffer: (self: ReadWriteStream, size: number?) -> buffer,
-	readBufferSync: (self: ReadWriteStream, size: number?) -> buffer,
-	write: (self: ReadWriteStream, data: string | buffer) -> number,
-	writeSync: (self: ReadWriteStream, data: string | buffer) -> number,
-	close: (self: ReadWriteStream) -> (),
-	closeSync: (self: ReadWriteStream) -> (),
-}
+export type ReadWriteStream = StreamThatCanClose & StreamThatCanRead & StreamThatCanWrite
 
 --- Union of all stream capability variants.
-export type Stream = ReadableStream | WritableStream | ReadWriteStream
+export type Stream = ReadOnlyStream | WriteOnlyStream | ReadWriteStream
 
 return table.freeze(stream)

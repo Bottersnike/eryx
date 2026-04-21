@@ -117,7 +117,7 @@ local function cleanup(state: TempState)
 
 	if state.file ~= nil and state.file.isOpen then
 		pcall(function()
-			(state.file :: fs.File):closeSync()
+			state.file:closeSync()
 		end)
 	end
 
@@ -130,13 +130,13 @@ end
 
 local TempFile = {}
 TempFile.__index = function(self: TempFile, key): any
-	local self = (self :: any) :: TempFileInternal
+	local self_ = (self :: any) :: TempFileInternal
 
 	if key == "path" then
-		return self.__state.path
+		return self_.__state.path
 	end
 	if key == "file" then
-		return self.__state.file
+		return self_.__state.file
 	end
 
 	local own = TempFile[key]
@@ -144,7 +144,7 @@ TempFile.__index = function(self: TempFile, key): any
 		return own
 	end
 
-	local file = self.__state.file
+	local file = self_.__state.file
 	if file == nil then
 		return nil
 	end
@@ -159,16 +159,14 @@ TempFile.__index = function(self: TempFile, key): any
 end
 
 function TempFile.close(self: TempFile)
-	local self = (self :: any) :: TempFileInternal
-	cleanup(self.__state)
+	cleanup(((self :: any) :: TempFileInternal).__state)
 end
 
 local TempDir = {}
 TempDir.__index = TempDir
 
 function TempDir.close(self: TempDir)
-	local self = (self :: any) :: TempFileInternal
-	cleanup(self.__state)
+	cleanup(((self :: any) :: TempFileInternal).__state)
 end
 
 local function createTempFile(name: string?, mode: string?): TempFile

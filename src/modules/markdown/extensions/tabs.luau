@@ -220,6 +220,7 @@ local TabGroupRule: types.BlockRule<"tab_group", { children: { TabPanelBlock } }
 			end
 		end
 		setDefaultTab(doc)
+		return nil
 	end,
 	toHtml = function(block, rules, config)
 		local chunks: { string } = {}

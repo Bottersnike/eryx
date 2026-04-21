@@ -12,21 +12,21 @@ local InlineHtmlRule = require("@self/rules/inlineHtml")
 export type TocEntry = { level: number, id: string, text: string }
 
 local EXTENSIONS: { types.AnyBlockRule } = {
-	require("@eryx/markdown/extensions/table"),
-	require("@eryx/markdown/extensions/footnote"),
-	require("@eryx/markdown/extensions/admonition"),
-	require("@eryx/markdown/extensions/tabs").TabGroupRule,
-	require("@eryx/markdown/extensions/tabs").TabPanelRule,
+	require("@eryx/markdown/extensions/table") :: types.AnyBlockRule,
+	require("@eryx/markdown/extensions/footnote") :: types.AnyBlockRule,
+	require("@eryx/markdown/extensions/admonition") :: types.AnyBlockRule,
+	require("@eryx/markdown/extensions/tabs").TabGroupRule :: types.AnyBlockRule,
+	require("@eryx/markdown/extensions/tabs").TabPanelRule :: types.AnyBlockRule,
 }
 local INLINE_EXTENSIONS: { types.InlineRule } = {
-	require("@eryx/markdown/extensions/footnoteInline"),
-	require("@eryx/markdown/extensions/colour"),
+	require("@eryx/markdown/extensions/footnoteInline") :: types.InlineRule,
+	require("@eryx/markdown/extensions/colour") :: types.InlineRule,
 
 	-- We can't do wikilinks by default because they need a resolver
 	-- wikilinkRuleBuilder(wikilinkResolver),
 }
 local INLINE_EMPHASIS_EXTENSIONS: { types.InlineEmphasisRule } = {
-	require("@eryx/markdown/extensions/strikethrough"),
+	require("@eryx/markdown/extensions/strikethrough") :: types.InlineEmphasisRule,
 }
 
 local markdown = {}
@@ -104,7 +104,7 @@ function Markdown.new(config: MarkdownConfig): Markdown
 	return setmetatable(this, Markdown)
 end
 function Markdown.parse(self: Markdown, source: string): types.DocumentBlockNode
-	local doc, orphans = block.parse(source, self.config.extensions)
+	local doc, orphans = block.parse(source, self.config.extensions or {})
 	return inline.parse(doc, orphans, self.config)
 end
 function Markdown.renderHtml(self: Markdown, doc: types.DocumentBlockNode): string
@@ -114,16 +114,16 @@ markdown.Markdown = table.freeze(Markdown)
 
 function markdown.parse(source: string, config: MarkdownConfig): types.DocumentBlockNode
 	local realConfig = prepareConfig(config)
-	local doc, orphans = block.parse(source, realConfig.extensions)
+	local doc, orphans = block.parse(source, realConfig.extensions or {})
 	return inline.parse(doc, orphans, realConfig)
 end
 function markdown.toc(doc: types.DocumentBlockNode): { TocEntry }
 	local entries: { TocEntry } = {}
 	for _, block in doc.children do
 		if block.type == "heading" then
-			local text = util.getPlainText(block.inlines)
+			local text = util.getPlainText((block :: any).inlines)
 			table.insert(entries, {
-				level = block.level,
+				level = (block :: any).level,
 				id = util.slugify(text),
 				text = text,
 			})

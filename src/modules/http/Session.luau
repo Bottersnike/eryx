@@ -33,7 +33,7 @@ type SessionFields = {
 	_maxConnectionsPerHost: number,
 }
 
-export type Session = typeof(setmetatable({} :: SessionFields, Session))
+export type Session = setmetatable<SessionFields, typeof(Session)>
 
 --[=[
 	Options for creating a [[Session]].
@@ -79,7 +79,7 @@ end
 	@return Session -- The new session.
 ]=]
 function Session.new(options: SessionOptions?): Session
-	local opts = options or {}
+	local opts = options or ({} :: SessionOptions)
 	return setmetatable({
 		_pool = {},
 		_cookies = opts.cookies or CookieJar.new(),

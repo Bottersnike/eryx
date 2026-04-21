@@ -312,9 +312,12 @@ local BUILTIN_FILTERS: { [string]: (any, { [string]: any }) -> any } = {
 	title = function(val: any): string
 		local s = tostring(val)
 		return (
-			s:gsub("(%a)([%w_']*)", function(first: string, rest: string)
-				return string.upper(first) .. string.lower(rest)
-			end)
+			s:gsub(
+				"(%a)([%w_']*)",
+				function(first: string, rest: string)
+					return string.upper(first) .. string.lower(rest)
+				end :: any
+			)
 		)
 	end,
 

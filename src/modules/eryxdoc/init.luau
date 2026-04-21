@@ -483,9 +483,6 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		local modPath = renderer:getPath(mod)
 		local page = applyPageHook(renderer:renderModule(mod.qualifiedName), "module", mod.qualifiedName, modPath)
 		writeFileMkdir(OUTPUT_DIR .. "/" .. modPath, page)
-
-		local jsonContent = renderer:moduleToJSON(mod)
-		writeFileMkdir(OUTPUT_DIR .. "/" .. renderer:getJSONPath(mod), jsonContent)
 	end
 
 	local hasCustomIndex = false

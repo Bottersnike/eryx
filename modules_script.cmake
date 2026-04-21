@@ -107,7 +107,6 @@ add_luau_script_module(eryxdoc/parse/
     src/modules/eryxdoc/parse/highlight.luau
 )
 add_luau_script_module(eryxdoc/render/
-    src/modules/eryxdoc/render/jsonExport.luau
     src/modules/eryxdoc/render/links.luau
     src/modules/eryxdoc/render/renderer.luau
     src/modules/eryxdoc/render/sidebar.luau
