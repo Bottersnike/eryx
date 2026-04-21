@@ -64,9 +64,15 @@ export type CommentInfo = {
 	location: Location,
 }
 
+export type SurroundingText = {
+	leading: string?,
+	trailing: string?,
+}
+
 --- Options for [[parse]].
 export type ParseOptions = {
 	captureComments: boolean?,
+	collectSurroundingText: boolean?,
 }
 
 export type TableAccess = "Read" | "Write" | "ReadWrite"
@@ -720,6 +726,12 @@ export type AstStat =
 --- Any AST node (statement, expression, or type annotation).
 export type AstNode = AstStat | AstExpr | AstType
 
+export type ExtractCommentsOptions = {
+	unindentMultiLineContent: boolean?,
+	stripLineLeadingWhitespace: boolean?,
+	merge: ("none" | "same" | "all")?,
+}
+
 -- ═══════════════════════════════════════════════════════════════════════════
 -- Parse Result
 -- ═══════════════════════════════════════════════════════════════════════════
@@ -729,6 +741,7 @@ export type ParseResult = {
 	root: Block,
 	errors: { ParseErrorInfo },
 	comments: { CommentInfo }?,
+	surroundingText: { [AstNode]: SurroundingText }?,
 	lines: number,
 }
 
@@ -980,7 +993,8 @@ local luau = {}
 	and a `location` with 1-based line/column positions.
 
 	Pass `{ captureComments = true }` to include a `comments` array in
-	the result.
+	the result. Pass `{ collectSurroundingText = true }` to include a
+	sparse `surroundingText` side table keyed by AST node.
 
 	```luau
 	local result = luau.parse(source, { captureComments = true })
@@ -994,6 +1008,25 @@ local luau = {}
 	@return ParseResult -- The parse result containing the AST root, errors, and optional comments.
 ]=]
 function luau.parse(source: string, options: ParseOptions?): ParseResult
+	return nil :: any
+end
+
+--[=[
+	Extracts comment content from raw surrounding text.
+
+	This is intended for use with strings from
+	`result.surroundingText[node].leading` and `.trailing`. The parse
+	result keeps those strings lossless; this helper turns them into
+	comment payloads on demand.
+
+	When `stripLineLeadingWhitespace` is true, line comments like
+	`-- hello` are returned as `"hello"` instead of `" hello"`.
+
+	@param text Raw surrounding text.
+	@param options Comment extraction options.
+	@return { string } -- Extracted comment strings.
+]=]
+function luau.extractComments(text: string, options: ExtractCommentsOptions?): { string }
 	return nil :: any
 end
 

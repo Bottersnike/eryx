@@ -692,6 +692,17 @@ static void analysis_push_lint_warning(lua_State* L, const Luau::LintWarning& wa
 struct EryxFileResolver : Luau::FileResolver {
     std::string mainSource;
     Luau::ModuleName mainModule;  // absolute path or "=main" fallback
+    EryxAnalysisTimingStats* timingStats = nullptr;
+    mutable lua_State* helperState = nullptr;
+
+    ~EryxFileResolver() {
+        if (helperState) lua_close(helperState);
+    }
+
+    lua_State* getHelperState() const {
+        if (!helperState) helperState = eryx_initialise_environment(nullptr);
+        return helperState;
+    }
 
     static RequireContext requireContextForModuleName(const Luau::ModuleName& name) {
         RequireContext ctx;
@@ -764,14 +775,27 @@ struct EryxFileResolver : Luau::FileResolver {
     }
 
     std::optional<Luau::SourceCode> readSource(const Luau::ModuleName& name) override {
-        if (name == mainModule) return Luau::SourceCode{ mainSource, Luau::SourceCode::Module };
+        const EryxTimingClock::time_point start = EryxTimingClock::now();
+        auto finish = [this, start]() {
+            if (timingStats)
+                timingStats->readSource.add(eryx_timing_elapsed_ms(start, EryxTimingClock::now()));
+        };
+
+        if (name == mainModule) {
+            finish();
+            return Luau::SourceCode{ mainSource, Luau::SourceCode::Module };
+        }
 
         // VFS modules (prefixed with @@vfs/)
         if (name.starts_with(CHUNK_PREFIX_VFS)) {
             std::string vfsPath = name.substr(CHUNK_PREFIX_VFS_LEN);
             auto data = vfs_read_file(vfsPath);
-            if (data.empty()) return std::nullopt;
+            if (data.empty()) {
+                finish();
+                return std::nullopt;
+            }
             std::string src(reinterpret_cast<const char*>(data.data()), data.size());
+            finish();
             return Luau::SourceCode{ std::move(src), Luau::SourceCode::Module };
         }
 
@@ -782,21 +806,31 @@ struct EryxFileResolver : Luau::FileResolver {
             if (scripts) {
                 for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
                     if (key == m->modulePath) {
+                        finish();
                         return Luau::SourceCode{ std::string(m->source), Luau::SourceCode::Module };
                     }
                 }
             }
+            finish();
             return std::nullopt;
         }
 
         // Filesystem modules
         try {
-            if (!fs::exists(name)) return std::nullopt;
+            if (!fs::exists(name)) {
+                finish();
+                return std::nullopt;
+            }
             std::ifstream f(name, std::ios::binary);
-            if (!f) return std::nullopt;
+            if (!f) {
+                finish();
+                return std::nullopt;
+            }
             std::string src((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            finish();
             return Luau::SourceCode{ std::move(src), Luau::SourceCode::Module };
         } catch (...) {
+            finish();
             return std::nullopt;
         }
     }
@@ -804,30 +838,45 @@ struct EryxFileResolver : Luau::FileResolver {
     std::optional<Luau::ModuleInfo> resolveModule(const Luau::ModuleInfo* context,
                                                   Luau::AstExpr* node,
                                                   const Luau::TypeCheckLimits&) override {
+        const EryxTimingClock::time_point start = EryxTimingClock::now();
+        auto finish = [this, start]() {
+            if (timingStats)
+                timingStats->resolveModule.add(
+                    eryx_timing_elapsed_ms(start, EryxTimingClock::now()));
+        };
+
         auto expr = node->as<Luau::AstExprConstantString>();
         if (!expr) {
+            finish();
             return std::nullopt;
         }
         std::string requirePath(expr->value.data, expr->value.size);
 
-        lua_State* CL = eryx_initialise_environment(nullptr);
+        lua_State* CL = getHelperState();
         RequireContext requireContext = context ? requireContextForModuleName(context->name)
                                                 : requireContextForModuleName(mainModule);
         auto resolved = eryx_resolve_module(CL, requireContext, requirePath);
-        lua_close(CL);
 
-        if (!resolved) return std::nullopt;
+        if (!resolved) {
+            finish();
+            return std::nullopt;
+        }
 
         switch (resolved->type) {
             case LocatedModule::TYPE_FILE:
+                finish();
                 return Luau::ModuleInfo{ resolved->path };
             case LocatedModule::TYPE_VFS:
+                finish();
                 return Luau::ModuleInfo{ std::string(CHUNK_PREFIX_VFS) + resolved->path };
             case LocatedModule::TYPE_EMBEDDED_SCRIPT:
+                finish();
                 return Luau::ModuleInfo{ std::string(CHUNK_PREFIX_ERYX) + resolved->path };
             case LocatedModule::TYPE_EMBEDDED_NATIVE:
+                finish();
                 return std::nullopt;  // native modules have no analyzable source
         }
+        finish();
         return std::nullopt;
     }
 };
@@ -836,13 +885,31 @@ struct EryxConfigResolver : Luau::ConfigResolver {
     Luau::Mode defaultMode;
     lua_State* L;
     mutable std::map<std::string, Luau::Config> cache;
+    EryxAnalysisTimingStats* timingStats = nullptr;
+    mutable lua_State* helperState = nullptr;
+
+    ~EryxConfigResolver() {
+        if (helperState) lua_close(helperState);
+    }
+
+    lua_State* getHelperState() const {
+        if (!helperState) helperState = eryx_initialise_environment(nullptr);
+        return helperState;
+    }
 
     const Luau::Config& getConfig(const Luau::ModuleName& name,
                                   const Luau::TypeCheckLimits& limits) const override {
+        const EryxTimingClock::time_point start = EryxTimingClock::now();
+        auto finish = [this, start]() {
+            if (timingStats)
+                timingStats->getConfig.add(eryx_timing_elapsed_ms(start, EryxTimingClock::now()));
+        };
+
         if (name[0] == '=') {
             Luau::Config cfg;
             cfg.mode = defaultMode;
             auto [inserted, ok] = cache.emplace(name, std::move(cfg));
+            finish();
             return inserted->second;
         }
 
@@ -862,15 +929,17 @@ struct EryxConfigResolver : Luau::ConfigResolver {
             Luau::Config cfg;
             cfg.mode = defaultMode;
             auto [inserted, ok] = cache.emplace(name, std::move(cfg));
+            finish();
             return inserted->second;
         }
 
         std::string key = vfsDir.empty() ? dir.string() : ("@@vfs/" + vfsDir);
         if (cache.contains(key)) {
+            finish();
             return cache.at(key);
         }
 
-        lua_State* CL = eryx_initialise_environment(nullptr);
+        lua_State* CL = getHelperState();
 
         auto info = eryx_locate_config(CL, dir, std::nullopt, vfsDir);
 
@@ -887,17 +956,15 @@ struct EryxConfigResolver : Luau::ConfigResolver {
                 cfg.setAlias(aliasKey, aliasValue.path, aliasValue.configPath);
             }
 
-            lua_close(CL);
-
             auto [inserted, ok] = cache.emplace(key, std::move(cfg));
+            finish();
             return inserted->second;
         }
-
-        lua_close(CL);
 
         Luau::Config cfg;
         cfg.mode = defaultMode;
         auto [inserted, ok] = cache.emplace(key, std::move(cfg));
+        finish();
         return inserted->second;
     }
 };
@@ -912,6 +979,7 @@ struct EryxConfigResolver : Luau::ConfigResolver {
 // Returns: { errors: {...}, annotated?: string }
 // ---------------------------------------------------------------------------
 ERYX_API int eryx_luau_check(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -939,15 +1007,19 @@ ERYX_API int eryx_luau_check(lua_State* L) {
     Luau::FrontendOptions frontendOptions;
     frontendOptions.retainFullTypeGraphs = annotate;
     frontendOptions.runLintChecks = true;
+    EryxAnalysisTimingStats timingStats;
 
     EryxFileResolver fileResolver;
     fileResolver.mainSource = src;
     fileResolver.mainModule = mainModule;
+    fileResolver.timingStats = &timingStats;
     EryxConfigResolver configResolver;
     configResolver.L = L;
     configResolver.defaultMode = mode;
+    configResolver.timingStats = &timingStats;
 
     // TODO: Why do we need that cast?
+    const EryxTimingClock::time_point setupStart = EryxTimingClock::now();
     std::unique_ptr<Luau::Frontend> frontendPtr;
     if (solverMode)
         frontendPtr = std::make_unique<Luau::Frontend>(
@@ -959,15 +1031,21 @@ ERYX_API int eryx_luau_check(lua_State* L) {
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
+    const double setupMs = eryx_timing_elapsed_ms(setupStart, EryxTimingClock::now());
 
     // Load optional definition files
+    const EryxTimingClock::time_point definitionsStart = EryxTimingClock::now();
     load_definitions_opt(L, 2, frontend);
+    const double definitionsMs = eryx_timing_elapsed_ms(definitionsStart, EryxTimingClock::now());
 
     // Run a type check
     Luau::CheckResult cr;
     std::string crashMessage;
+    const EryxTimingClock::time_point checkStart = EryxTimingClock::now();
     bool checkOk = analysis_safe_check(frontend, mainModule, cr, crashMessage);
+    const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point serializeStart = EryxTimingClock::now();
     lua_createtable(L, 0, 3);
 
     // errors
@@ -1022,6 +1100,8 @@ ERYX_API int eryx_luau_check(lua_State* L) {
 
     // annotated source
     if (annotate) {
+        const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
+        const EryxTimingClock::time_point annotateStart = EryxTimingClock::now();
         Luau::SourceModule* sm = frontend.getSourceModule(mainModule);
         Luau::ModulePtr m = frontend.moduleResolver.getModule(mainModule);
         if (sm && m) {
@@ -1032,7 +1112,41 @@ ERYX_API int eryx_luau_check(lua_State* L) {
             lua_pushnil(L);
         }
         lua_setfield(L, -2, "annotated");
+        const double annotateMs = eryx_timing_elapsed_ms(annotateStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs - annotateMs;
+        eryx_luau_timing_log(
+            "check module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "serialize=%.3fms annotate=%.3fms luau_check_wall=%.3fms luau_check_internal=%.3fms "
+            "callbacks=%.3fms readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu "
+            "ok=%d errors=%zu lintErrors=%zu warnings=%zu",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, serializeMs, annotateMs,
+            checkWallMs, estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, checkOk ? 1 : 0, checkOk ? cr.errors.size() : 0,
+            checkOk ? cr.lintResult.errors.size() : 0, checkOk ? cr.lintResult.warnings.size() : 0);
+        return 1;
     }
+
+    const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
+    const double callbackMs = timingStats.callbackTotalMs();
+    const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    const double ownMs = totalMs - estimatedLuauCheckMs;
+    eryx_luau_timing_log(
+        "check module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+        "serialize=%.3fms annotate=0.000ms luau_check_wall=%.3fms luau_check_internal=%.3fms "
+        "callbacks=%.3fms readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu "
+        "ok=%d errors=%zu lintErrors=%zu warnings=%zu",
+        mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, serializeMs, checkWallMs,
+        estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+        timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+        timingStats.resolveModule.calls, timingStats.getConfig.totalMs, timingStats.getConfig.calls,
+        checkOk ? 1 : 0, checkOk ? cr.errors.size() : 0, checkOk ? cr.lintResult.errors.size() : 0,
+        checkOk ? cr.lintResult.warnings.size() : 0);
 
     return 1;
 }
@@ -1044,6 +1158,7 @@ ERYX_API int eryx_luau_check(lua_State* L) {
 // Returns: string?
 // ---------------------------------------------------------------------------
 ERYX_API int eryx_luau_typeAt(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
     int line = (int)luaL_checkinteger(L, 2);
@@ -1072,14 +1187,18 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
     Luau::FrontendOptions frontendOptions;
     frontendOptions.retainFullTypeGraphs = true;
     frontendOptions.runLintChecks = true;
+    EryxAnalysisTimingStats timingStats;
 
     EryxFileResolver fileResolver;
     fileResolver.mainSource = src;
     fileResolver.mainModule = mainModule;
+    fileResolver.timingStats = &timingStats;
     EryxConfigResolver configResolver;
     configResolver.defaultMode = mode;
+    configResolver.timingStats = &timingStats;
 
     // TODO: Why do we need that cast?
+    const EryxTimingClock::time_point setupStart = EryxTimingClock::now();
     std::unique_ptr<Luau::Frontend> frontendPtr;
     if (solverMode)
         frontendPtr = std::make_unique<Luau::Frontend>(
@@ -1091,21 +1210,74 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
+    const double setupMs = eryx_timing_elapsed_ms(setupStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point definitionsStart = EryxTimingClock::now();
     load_definitions_opt(L, 4, frontend);
+    const double definitionsMs = eryx_timing_elapsed_ms(definitionsStart, EryxTimingClock::now());
     std::string typeAtCrash;
+    const EryxTimingClock::time_point checkStart = EryxTimingClock::now();
     if (!analysis_safe_check(frontend, mainModule, typeAtCrash)) {
+        const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs;
+        eryx_luau_timing_log(
+            "typeAt module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "query=0.000ms luau_check_wall=%.3fms luau_check_internal=%.3fms callbacks=%.3fms "
+            "readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu hit=0 detailed=%d "
+            "ok=0",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, detailed ? 1 : 0);
         lua_pushnil(L);
         return 1;
     }
+    const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
 
     Luau::SourceModule* sm = frontend.getSourceModule(mainModule);
     Luau::ModulePtr m = frontend.moduleResolver.getModule(mainModule);
 
     if (!sm || !m) {
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs;
+        eryx_luau_timing_log(
+            "typeAt module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "query=0.000ms luau_check_wall=%.3fms luau_check_internal=%.3fms callbacks=%.3fms "
+            "readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu hit=0 detailed=%d "
+            "ok=1",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, detailed ? 1 : 0);
         lua_pushnil(L);
         return 1;
     }
+
+    const EryxTimingClock::time_point queryStart = EryxTimingClock::now();
+    auto logTypeAtResult = [&](bool hit) {
+        const double queryMs = eryx_timing_elapsed_ms(queryStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs - queryMs;
+        eryx_luau_timing_log(
+            "typeAt module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "query=%.3fms luau_check_wall=%.3fms luau_check_internal=%.3fms callbacks=%.3fms "
+            "readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu hit=%d "
+            "detailed=%d ok=1",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, queryMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, hit ? 1 : 0, detailed ? 1 : 0);
+    };
 
     // Try expression type
     if (auto ty = Luau::findTypeAtPosition(*m, *sm, pos)) {
@@ -1123,6 +1295,7 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
         } else {
             lua_pushlstring(L, s.data(), s.size());
         }
+        logTypeAtResult(true);
         return 1;
     }
 
@@ -1142,6 +1315,7 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
         } else {
             lua_pushlstring(L, s.data(), s.size());
         }
+        logTypeAtResult(true);
         return 1;
     }
 
@@ -1167,12 +1341,14 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
                 } else {
                     lua_pushlstring(L, s.data(), s.size());
                 }
+                logTypeAtResult(true);
                 return 1;
             }
         }
     }
 
     lua_pushnil(L);
+    logTypeAtResult(false);
     return 1;
 }
 
@@ -1183,6 +1359,7 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
 // Returns: { context: string, entries: { [name]: {...} } }
 // ---------------------------------------------------------------------------
 ERYX_API int eryx_luau_autocomplete(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
     int line = (int)luaL_checkinteger(L, 2);
@@ -1211,15 +1388,19 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     Luau::FrontendOptions frontendOptions;
     frontendOptions.retainFullTypeGraphs = true;
     frontendOptions.runLintChecks = true;
+    EryxAnalysisTimingStats timingStats;
 
     EryxFileResolver fileResolver;
     fileResolver.mainSource = src;
     fileResolver.mainModule = mainModule;
+    fileResolver.timingStats = &timingStats;
     EryxConfigResolver configResolver;
     configResolver.L = L;
     configResolver.defaultMode = mode;
+    configResolver.timingStats = &timingStats;
 
     // TODO: Why do we need that cast?
+    const EryxTimingClock::time_point setupStart = EryxTimingClock::now();
     std::unique_ptr<Luau::Frontend> frontendPtr;
     if (solverMode)
         frontendPtr = std::make_unique<Luau::Frontend>(
@@ -1232,13 +1413,32 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
     Luau::freeze(frontend.globalsForAutocomplete.globalTypes);
+    const double setupMs = eryx_timing_elapsed_ms(setupStart, EryxTimingClock::now());
 
     // Run autocomplete type check
+    const EryxTimingClock::time_point definitionsStart = EryxTimingClock::now();
     load_definitions_opt(L, 4, frontend);
+    const double definitionsMs = eryx_timing_elapsed_ms(definitionsStart, EryxTimingClock::now());
     Luau::FrontendOptions acOpts = frontendOptions;
     acOpts.forAutocomplete = true;
     std::string acCrash;
+    const EryxTimingClock::time_point checkStart = EryxTimingClock::now();
     if (!analysis_safe_check(frontend, mainModule, acOpts, acCrash)) {
+        const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs;
+        eryx_luau_timing_log(
+            "autocomplete module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "autocomplete=0.000ms serialize=0.000ms luau_check_wall=%.3fms "
+            "luau_check_internal=%.3fms callbacks=%.3fms readSource=%.3fms/%zu "
+            "resolveModule=%.3fms/%zu getConfig=%.3fms/%zu entries=0 detailed=%d ok=0",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, detailed ? 1 : 0);
         lua_createtable(L, 0, 2);
         lua_pushstring(L, "Unknown");
         lua_setfield(L, -2, "context");
@@ -1246,9 +1446,13 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
         lua_setfield(L, -2, "entries");
         return 1;
     }
+    const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point autocompleteStart = EryxTimingClock::now();
     Luau::AutocompleteResult acResult = Luau::autocomplete(frontend, mainModule, pos, nullptr);
+    const double autocompleteMs = eryx_timing_elapsed_ms(autocompleteStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point serializeStart = EryxTimingClock::now();
     lua_createtable(L, 0, 2);
 
     // context
@@ -1357,6 +1561,22 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
     }
     lua_setfield(L, -2, "entries");
 
+    const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
+    const double callbackMs = timingStats.callbackTotalMs();
+    const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    const double ownMs = totalMs - estimatedLuauCheckMs - autocompleteMs;
+    eryx_luau_timing_log(
+        "autocomplete module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+        "autocomplete=%.3fms serialize=%.3fms luau_check_wall=%.3fms luau_check_internal=%.3fms "
+        "callbacks=%.3fms readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu "
+        "entries=%zu detailed=%d ok=1",
+        mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, autocompleteMs, serializeMs,
+        checkWallMs, estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+        timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+        timingStats.resolveModule.calls, timingStats.getConfig.totalMs, timingStats.getConfig.calls,
+        acResult.entryMap.size(), detailed ? 1 : 0);
+
     return 1;
 }
 
@@ -1367,6 +1587,7 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
 // Returns: string? | { display: string, source: "Module", typePack: table, moduleName?: string }
 // ---------------------------------------------------------------------------
 ERYX_API int eryx_luau_typeofModule(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1390,14 +1611,18 @@ ERYX_API int eryx_luau_typeofModule(lua_State* L) {
     Luau::FrontendOptions frontendOptions;
     frontendOptions.retainFullTypeGraphs = detailed;
     frontendOptions.runLintChecks = true;
+    EryxAnalysisTimingStats timingStats;
 
     EryxFileResolver fileResolver;
     fileResolver.mainSource = src;
     fileResolver.mainModule = mainModule;
+    fileResolver.timingStats = &timingStats;
     EryxConfigResolver configResolver;
     configResolver.L = L;
     configResolver.defaultMode = mode;
+    configResolver.timingStats = &timingStats;
 
+    const EryxTimingClock::time_point setupStart = EryxTimingClock::now();
     std::unique_ptr<Luau::Frontend> frontendPtr;
     if (solverMode)
         frontendPtr = std::make_unique<Luau::Frontend>(
@@ -1409,23 +1634,61 @@ ERYX_API int eryx_luau_typeofModule(lua_State* L) {
 
     Luau::registerBuiltinGlobals(frontend, frontend.globals);
     Luau::freeze(frontend.globals.globalTypes);
+    const double setupMs = eryx_timing_elapsed_ms(setupStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point definitionsStart = EryxTimingClock::now();
     load_definitions_opt(L, 2, frontend);
+    const double definitionsMs = eryx_timing_elapsed_ms(definitionsStart, EryxTimingClock::now());
     std::string crashMessage;
+    const EryxTimingClock::time_point checkStart = EryxTimingClock::now();
     if (!analysis_safe_check(frontend, mainModule, crashMessage)) {
+        const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs;
+        eryx_luau_timing_log(
+            "typeofModule module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "moduleType=0.000ms serialize=0.000ms luau_check_wall=%.3fms "
+            "luau_check_internal=%.3fms callbacks=%.3fms readSource=%.3fms/%zu "
+            "resolveModule=%.3fms/%zu getConfig=%.3fms/%zu detailed=%d ok=0",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, detailed ? 1 : 0);
         lua_pushnil(L);
         return 1;
     }
+    const double checkWallMs = eryx_timing_elapsed_ms(checkStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point moduleTypeStart = EryxTimingClock::now();
     Luau::ModulePtr m = frontend.moduleResolver.getModule(mainModule);
     if (!m || !m->returnType) {
+        const double moduleTypeMs = eryx_timing_elapsed_ms(moduleTypeStart, EryxTimingClock::now());
+        const double callbackMs = timingStats.callbackTotalMs();
+        const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+        const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+        const double ownMs = totalMs - estimatedLuauCheckMs - moduleTypeMs;
+        eryx_luau_timing_log(
+            "typeofModule module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+            "moduleType=%.3fms serialize=0.000ms luau_check_wall=%.3fms luau_check_internal=%.3fms "
+            "callbacks=%.3fms readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu "
+            "detailed=%d ok=1 hasType=0",
+            mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, moduleTypeMs, checkWallMs,
+            estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+            timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+            timingStats.resolveModule.calls, timingStats.getConfig.totalMs,
+            timingStats.getConfig.calls, detailed ? 1 : 0);
         lua_pushnil(L);
         return 1;
     }
 
     Luau::ToStringOptions o = analysis_type_to_string_options();
     std::string s = Luau::toString(m->returnType, o);
+    const double moduleTypeMs = eryx_timing_elapsed_ms(moduleTypeStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point serializeStart = EryxTimingClock::now();
     if (detailed) {
         lua_createtable(L, 0, 4);
         lua_pushlstring(L, s.data(), s.size());
@@ -1444,6 +1707,22 @@ ERYX_API int eryx_luau_typeofModule(lua_State* L) {
     } else {
         lua_pushlstring(L, s.data(), s.size());
     }
+
+    const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
+    const double callbackMs = timingStats.callbackTotalMs();
+    const double estimatedLuauCheckMs = std::max(0.0, checkWallMs - callbackMs);
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    const double ownMs = totalMs - estimatedLuauCheckMs - moduleTypeMs;
+    eryx_luau_timing_log(
+        "typeofModule module=%s bytes=%zu total=%.3fms own=%.3fms setup=%.3fms defs=%.3fms "
+        "moduleType=%.3fms serialize=%.3fms luau_check_wall=%.3fms luau_check_internal=%.3fms "
+        "callbacks=%.3fms readSource=%.3fms/%zu resolveModule=%.3fms/%zu getConfig=%.3fms/%zu "
+        "detailed=%d ok=1 hasType=1",
+        mainModule, srcLen, totalMs, ownMs, setupMs, definitionsMs, moduleTypeMs, serializeMs,
+        checkWallMs, estimatedLuauCheckMs, callbackMs, timingStats.readSource.totalMs,
+        timingStats.readSource.calls, timingStats.resolveModule.totalMs,
+        timingStats.resolveModule.calls, timingStats.getConfig.totalMs, timingStats.getConfig.calls,
+        detailed ? 1 : 0);
 
     return 1;
 }

@@ -28,11 +28,14 @@
 // plus node-specific fields described below.
 // ---------------------------------------------------------------------------
 
+#include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <vector>
 
 #include "../LuaLocation.hpp"
@@ -97,6 +100,24 @@ static void push_stat(lua_State* L, AstStat* stat);
 static void push_type(lua_State* L, AstType* type);
 static void push_typepack(lua_State* L, AstTypePack* tp);
 static void push_local(lua_State* L, AstLocal* local);
+
+struct SurroundingTextInfo {
+    std::string leading;
+    std::string trailing;
+};
+
+struct ParseSerializeCtx {
+    const ParseResult* result;
+    std::string_view source;
+    bool captureComments;
+    bool collectSurroundingText;
+};
+
+struct CommentSpan {
+    size_t startOffset;
+    size_t endOffset;
+    Lexeme::Type type;
+};
 
 // Stack safety: ensure room for at least `n` extra Lua-stack slots.
 // Raises a clean Lua error if the stack cannot grow (tree too deep).
@@ -1160,26 +1181,290 @@ static void push_node(lua_State* L, AstNode* node) {
     }
 }
 
+static bool is_ascii_whitespace(char ch) {
+    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
+}
+
+static std::vector<size_t> compute_line_offsets(std::string_view source) {
+    std::vector<size_t> lineOffsets;
+    lineOffsets.push_back(0);
+
+    for (size_t i = 0; i < source.size(); ++i) {
+        if (source[i] == '\n') lineOffsets.push_back(i + 1);
+    }
+
+    return lineOffsets;
+}
+
+static size_t absolute_offset_from_position(const std::vector<size_t>& lineOffsets,
+                                            const Position& pos) {
+    LUAU_ASSERT(pos.line < lineOffsets.size());
+    return lineOffsets[pos.line] + pos.column;
+}
+
+static size_t absolute_offset_from_1based(const std::vector<size_t>& lineOffsets, int line,
+                                          int column) {
+    LUAU_ASSERT(line >= 1);
+    LUAU_ASSERT((size_t)(line - 1) < lineOffsets.size());
+    return lineOffsets[(size_t)(line - 1)] + (size_t)(column - 1);
+}
+
+static std::vector<CommentSpan> compute_comment_spans(const ParseResult& result,
+                                                      std::string_view source) {
+    std::vector<CommentSpan> spans;
+    const std::vector<size_t> lineOffsets = compute_line_offsets(source);
+    spans.reserve(result.commentLocations.size());
+
+    for (const Comment& comment : result.commentLocations) {
+        spans.push_back(CommentSpan{
+            absolute_offset_from_position(lineOffsets, comment.location.begin),
+            absolute_offset_from_position(lineOffsets, comment.location.end),
+            comment.type,
+        });
+    }
+
+    return spans;
+}
+
+static std::unordered_map<size_t, size_t> build_comment_end_map(
+    const std::vector<CommentSpan>& spans) {
+    std::unordered_map<size_t, size_t> map;
+    map.reserve(spans.size());
+
+    for (size_t i = 0; i < spans.size(); ++i) map[spans[i].endOffset] = i;
+
+    return map;
+}
+
+static std::unordered_map<size_t, size_t> build_comment_start_map(
+    const std::vector<CommentSpan>& spans) {
+    std::unordered_map<size_t, size_t> map;
+    map.reserve(spans.size());
+
+    for (size_t i = 0; i < spans.size(); ++i) map[spans[i].startOffset] = i;
+
+    return map;
+}
+
+static size_t scan_leading_boundary(std::string_view source, size_t startOffset,
+                                    const std::unordered_map<size_t, size_t>& commentsByEnd,
+                                    const std::vector<CommentSpan>& commentSpans) {
+    size_t cursor = startOffset;
+
+    while (cursor > 0) {
+        size_t previous = cursor;
+
+        while (cursor > 0 && is_ascii_whitespace(source[cursor - 1])) --cursor;
+
+        auto commentIt = commentsByEnd.find(cursor);
+        if (commentIt != commentsByEnd.end()) {
+            cursor = commentSpans[commentIt->second].startOffset;
+            continue;
+        }
+
+        if (cursor == previous) break;
+    }
+
+    return cursor;
+}
+
+static size_t scan_trailing_boundary(std::string_view source, size_t endOffset,
+                                     const std::unordered_map<size_t, size_t>& commentsByStart,
+                                     const std::vector<CommentSpan>& commentSpans) {
+    size_t cursor = endOffset;
+
+    while (cursor < source.size()) {
+        size_t previous = cursor;
+
+        while (cursor < source.size() && is_ascii_whitespace(source[cursor])) ++cursor;
+
+        auto commentIt = commentsByStart.find(cursor);
+        if (commentIt != commentsByStart.end()) {
+            cursor = commentSpans[commentIt->second].endOffset;
+            continue;
+        }
+
+        if (cursor == previous) break;
+    }
+
+    return cursor;
+}
+
+static bool lua_is_dense_array(lua_State* L, int index) {
+    index = lua_absindex(L, index);
+    size_t length = lua_objlen(L, index);
+    if (length == 0) return false;
+
+    lua_pushnil(L);
+    while (lua_next(L, index) != 0) {
+        if (lua_type(L, -2) != LUA_TNUMBER) {
+            lua_pop(L, 2);
+            return false;
+        }
+
+        lua_Number key = lua_tonumber(L, -2);
+        if (key < 1 || std::floor(key) != key || key > (lua_Number)length) {
+            lua_pop(L, 2);
+            return false;
+        }
+
+        lua_pop(L, 1);
+    }
+
+    return true;
+}
+
+static bool lua_read_serialized_location(lua_State* L, int index, int& beginLine, int& beginColumn,
+                                         int& endLine, int& endColumn) {
+    index = lua_absindex(L, index);
+
+    if (!lua_istable(L, index) && !lua_isuserdata(L, index)) return false;
+
+    lua_getfield(L, index, "beginline");
+    lua_getfield(L, index, "begincolumn");
+    lua_getfield(L, index, "endline");
+    lua_getfield(L, index, "endcolumn");
+
+    const bool ok =
+        lua_isnumber(L, -4) && lua_isnumber(L, -3) && lua_isnumber(L, -2) && lua_isnumber(L, -1);
+    if (ok) {
+        beginLine = (int)lua_tointeger(L, -4);
+        beginColumn = (int)lua_tointeger(L, -3);
+        endLine = (int)lua_tointeger(L, -2);
+        endColumn = (int)lua_tointeger(L, -1);
+    }
+
+    lua_pop(L, 4);
+    return ok;
+}
+
+static void attach_surrounding_text(lua_State* L, int nodeIndex, int surroundingIndex,
+                                    std::string_view source, const std::vector<size_t>& lineOffsets,
+                                    const std::vector<CommentSpan>& commentSpans,
+                                    const std::unordered_map<size_t, size_t>& commentsByStart,
+                                    const std::unordered_map<size_t, size_t>& commentsByEnd);
+
+static void attach_surrounding_text_in_value(
+    lua_State* L, int valueIndex, int surroundingIndex, std::string_view source,
+    const std::vector<size_t>& lineOffsets, const std::vector<CommentSpan>& commentSpans,
+    const std::unordered_map<size_t, size_t>& commentsByStart,
+    const std::unordered_map<size_t, size_t>& commentsByEnd) {
+    valueIndex = lua_absindex(L, valueIndex);
+    if (!lua_istable(L, valueIndex)) return;
+
+    if (lua_is_dense_array(L, valueIndex)) {
+        const size_t length = lua_objlen(L, valueIndex);
+        for (size_t i = 1; i <= length; ++i) {
+            lua_rawgeti(L, valueIndex, (int)i);
+            attach_surrounding_text_in_value(L, -1, surroundingIndex, source, lineOffsets,
+                                             commentSpans, commentsByStart, commentsByEnd);
+            lua_pop(L, 1);
+        }
+        return;
+    }
+
+    attach_surrounding_text(L, valueIndex, surroundingIndex, source, lineOffsets, commentSpans,
+                            commentsByStart, commentsByEnd);
+}
+
+static void attach_surrounding_text(lua_State* L, int nodeIndex, int surroundingIndex,
+                                    std::string_view source, const std::vector<size_t>& lineOffsets,
+                                    const std::vector<CommentSpan>& commentSpans,
+                                    const std::unordered_map<size_t, size_t>& commentsByStart,
+                                    const std::unordered_map<size_t, size_t>& commentsByEnd) {
+    nodeIndex = lua_absindex(L, nodeIndex);
+    surroundingIndex = lua_absindex(L, surroundingIndex);
+
+    lua_getfield(L, nodeIndex, "location");
+    int beginLine = 0;
+    int beginColumn = 0;
+    int endLine = 0;
+    int endColumn = 0;
+    const bool isNode =
+        lua_read_serialized_location(L, -1, beginLine, beginColumn, endLine, endColumn);
+    lua_pop(L, 1);
+
+    if (isNode) {
+        const size_t startOffset = absolute_offset_from_1based(lineOffsets, beginLine, beginColumn);
+        const size_t endOffset = absolute_offset_from_1based(lineOffsets, endLine, endColumn);
+        const size_t leadingStart =
+            scan_leading_boundary(source, startOffset, commentsByEnd, commentSpans);
+        const size_t trailingEnd =
+            scan_trailing_boundary(source, endOffset, commentsByStart, commentSpans);
+
+        const std::string leading(source.substr(leadingStart, startOffset - leadingStart));
+        const std::string trailing(source.substr(endOffset, trailingEnd - endOffset));
+
+        if (!leading.empty() || !trailing.empty()) {
+            lua_pushvalue(L, nodeIndex);
+            lua_createtable(L, 0, 2);
+            if (!leading.empty()) {
+                lua_pushlstring(L, leading.data(), leading.size());
+                lua_setfield(L, -2, "leading");
+            }
+            if (!trailing.empty()) {
+                lua_pushlstring(L, trailing.data(), trailing.size());
+                lua_setfield(L, -2, "trailing");
+            }
+            lua_rawset(L, surroundingIndex);
+        }
+    }
+
+    lua_pushnil(L);
+    while (lua_next(L, nodeIndex) != 0) {
+        if (!(lua_type(L, -2) == LUA_TSTRING &&
+              std::strcmp(lua_tostring(L, -2), "location") == 0)) {
+            attach_surrounding_text_in_value(L, -1, surroundingIndex, source, lineOffsets,
+                                             commentSpans, commentsByStart, commentsByEnd);
+        }
+        lua_pop(L, 1);
+    }
+}
+
+static const char* comment_type_to_string(Lexeme::Type type) {
+    switch (type) {
+        case Lexeme::Comment:
+            return "Comment";
+        case Lexeme::BlockComment:
+            return "BlockComment";
+        case Lexeme::BrokenComment:
+            return "BrokenComment";
+        default:
+            return "Unknown";
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Protected AST serialisation -- runs inside lua_pcall so longjmp from a
 // stack-overflow error won't skip RAII cleanup of Allocator / ParseResult.
 // ---------------------------------------------------------------------------
-struct ParseSerializeCtx {
-    const ParseResult* result;
-    bool captureComments;
-};
-
 static int l_serialize_ast(lua_State* L) {
     auto* ctx = static_cast<ParseSerializeCtx*>(lua_touserdata(L, 1));
     const ParseResult& result = *ctx->result;
     ensure_stack(L, 40);
 
-    // Build result table: { root, errors, comments?, lines }
-    lua_createtable(L, 0, 4);
+    // Build result table: { root, errors, comments?, surroundingText?, lines }
+    lua_createtable(L, 0, 5);
 
     // root
     push_stat(L, result.root);
     lua_setfield(L, -2, "root");
+
+    if (ctx->collectSurroundingText) {
+        const std::vector<size_t> lineOffsets = compute_line_offsets(ctx->source);
+        const std::vector<CommentSpan> commentSpans = compute_comment_spans(result, ctx->source);
+        const std::unordered_map<size_t, size_t> commentsByStart =
+            build_comment_start_map(commentSpans);
+        const std::unordered_map<size_t, size_t> commentsByEnd =
+            build_comment_end_map(commentSpans);
+
+        lua_createtable(L, 0, 0);
+        lua_getfield(L, -2, "root");
+        attach_surrounding_text(L, -1, -2, ctx->source, lineOffsets, commentSpans, commentsByStart,
+                                commentsByEnd);
+        lua_pop(L, 1);
+        lua_setfield(L, -2, "surroundingText");
+    }
 
     // lines
     lua_pushinteger(L, (int)result.lines);
@@ -1202,20 +1487,7 @@ static int l_serialize_ast(lua_State* L) {
         lua_createtable(L, (int)result.commentLocations.size(), 0);
         for (size_t i = 0; i < result.commentLocations.size(); i++) {
             lua_createtable(L, 0, 2);
-            switch (result.commentLocations[i].type) {
-                case Lexeme::Comment:
-                    lua_pushstring(L, "Comment");
-                    break;
-                case Lexeme::BlockComment:
-                    lua_pushstring(L, "BlockComment");
-                    break;
-                case Lexeme::BrokenComment:
-                    lua_pushstring(L, "BrokenComment");
-                    break;
-                default:
-                    lua_pushstring(L, "Unknown");
-                    break;
-            }
+            lua_pushstring(L, comment_type_to_string(result.commentLocations[i].type));
             lua_setfield(L, -2, "type");
             push_location(L, result.commentLocations[i].location);
             lua_setfield(L, -2, "location");
@@ -1231,30 +1503,42 @@ static int l_serialize_ast(lua_State* L) {
 // luau.parse(source [, options]) -> ParseResult
 // ---------------------------------------------------------------------------
 static int l_parse(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
     // Optional options table
     bool captureComments = false;
+    bool collectSurroundingText = false;
     if (lua_istable(L, 2)) {
         lua_getfield(L, 2, "captureComments");
         if (lua_isboolean(L, -1)) captureComments = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
+
+        lua_getfield(L, 2, "collectSurroundingText");
+        if (lua_isboolean(L, -1)) collectSurroundingText = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
     }
 
     int status;
+    double parseMs = 0.0;
+    EryxTimingClock::time_point serializeStart;
     {
         // RAII scope -- Allocator, AstNameTable, and ParseResult are destroyed
         // at the end of this block, even if serialisation raises an error.
         Allocator allocator;
         AstNameTable names(allocator);
         ParseOptions opts;
-        opts.captureComments = captureComments;
+        opts.captureComments = captureComments || collectSurroundingText;
 
+        const EryxTimingClock::time_point parseStart = EryxTimingClock::now();
         ParseResult result = Parser::parse(src, srcLen, names, allocator, opts);
+        parseMs = eryx_timing_elapsed_ms(parseStart, EryxTimingClock::now());
 
         // Serialise inside lua_pcall so a longjmp doesn't skip destructors.
-        ParseSerializeCtx ctx{ &result, captureComments };
+        serializeStart = EryxTimingClock::now();
+        ParseSerializeCtx ctx{ &result, std::string_view(src, srcLen), captureComments,
+                               collectSurroundingText };
         lua_pushcfunction(L, l_serialize_ast, "serialize_ast");
         lua_pushlightuserdata(L, &ctx);
         status = lua_pcall(L, 1, 1, 0);
@@ -1263,6 +1547,262 @@ static int l_parse(lua_State* L) {
 
     if (status != 0) lua_error(L);  // re-raise; safe to longjmp now
 
+    const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    const double ownMs = totalMs - parseMs;
+    eryx_luau_timing_log(
+        "parse bytes=%zu total=%.3fms own=%.3fms parse=%.3fms serialize=%.3fms captureComments=%d "
+        "collectSurroundingText=%d status=%d",
+        srcLen, totalMs, ownMs, parseMs, serializeMs, captureComments ? 1 : 0,
+        collectSurroundingText ? 1 : 0, status);
+
+    return 1;
+}
+
+struct ExtractedComment {
+    std::string content;
+    bool isBlock;
+};
+
+static bool starts_with(std::string_view text, size_t offset, std::string_view prefix) {
+    return offset + prefix.size() <= text.size() && text.substr(offset, prefix.size()) == prefix;
+}
+
+static std::string unindent_multiline_comment_content(std::string_view content) {
+    if (content.empty()) return std::string(content);
+
+    size_t start = 0;
+    size_t end = content.size();
+
+    if (start < end && content[start] == '\n')
+        ++start;
+    else if (start + 1 < end && content[start] == '\r' && content[start + 1] == '\n')
+        start += 2;
+
+    while (end > start) {
+        size_t lineStart = content.rfind('\n', end - 1);
+        lineStart = (lineStart == std::string_view::npos) ? start : lineStart + 1;
+
+        bool blank = true;
+        for (size_t i = lineStart; i < end; ++i) {
+            if (content[i] != ' ' && content[i] != '\t' && content[i] != '\r' &&
+                content[i] != '\n') {
+                blank = false;
+                break;
+            }
+        }
+
+        if (!blank) break;
+
+        end = lineStart > start ? lineStart - 1 : start;
+    }
+
+    std::string_view body = content.substr(start, end - start);
+    size_t minIndent = std::string_view::npos;
+    size_t lineStart = 0;
+
+    while (lineStart <= body.size()) {
+        size_t lineEnd = body.find('\n', lineStart);
+        if (lineEnd == std::string_view::npos) lineEnd = body.size();
+
+        size_t indent = 0;
+        bool blank = true;
+        while (lineStart + indent < lineEnd) {
+            char ch = body[lineStart + indent];
+            if (ch == ' ' || ch == '\t') {
+                ++indent;
+                continue;
+            }
+            if (ch != '\r') blank = false;
+            break;
+        }
+
+        if (!blank)
+            minIndent = minIndent == std::string_view::npos ? indent : std::min(minIndent, indent);
+
+        if (lineEnd == body.size()) break;
+        lineStart = lineEnd + 1;
+    }
+
+    if (minIndent == std::string_view::npos || minIndent == 0) return std::string(body);
+
+    std::string out;
+    out.reserve(body.size());
+
+    lineStart = 0;
+    while (lineStart <= body.size()) {
+        size_t lineEnd = body.find('\n', lineStart);
+        if (lineEnd == std::string_view::npos) lineEnd = body.size();
+
+        size_t indent = 0;
+        while (indent < minIndent && lineStart + indent < lineEnd) {
+            char ch = body[lineStart + indent];
+            if (ch != ' ' && ch != '\t') break;
+            ++indent;
+        }
+
+        out.append(body.substr(lineStart + indent, lineEnd - lineStart - indent));
+        if (lineEnd != body.size())
+            out.push_back('\n');
+        else
+            break;
+
+        lineStart = lineEnd + 1;
+    }
+
+    return out;
+}
+
+static std::string strip_leading_horizontal_whitespace(std::string_view content) {
+    size_t start = 0;
+    while (start < content.size()) {
+        char ch = content[start];
+        if (ch != ' ' && ch != '\t') break;
+        ++start;
+    }
+
+    return std::string(content.substr(start));
+}
+
+static std::string separator_for_comment_merge(std::string_view between) {
+    int newlineCount = 0;
+    for (char ch : between) {
+        if (ch == '\n') ++newlineCount;
+    }
+
+    if (newlineCount >= 2) return "\n\n";
+    if (newlineCount == 1) return "\n";
+    return " ";
+}
+
+static bool is_whitespace_only(std::string_view text) {
+    for (char ch : text) {
+        if (!is_ascii_whitespace(ch)) return false;
+    }
+    return true;
+}
+
+static bool try_extract_comment(std::string_view text, size_t offset, bool unindentBlockContent,
+                                bool stripLineLeadingWhitespace, ExtractedComment& outComment,
+                                size_t& outEnd) {
+    if (!starts_with(text, offset, "--")) return false;
+
+    if (starts_with(text, offset, "--[")) {
+        size_t eqLen = 0;
+        while (offset + 3 + eqLen < text.size() && text[offset + 3 + eqLen] == '=') ++eqLen;
+
+        if (offset + 3 + eqLen < text.size() && text[offset + 3 + eqLen] == '[') {
+            const size_t contentStart = offset + 4 + eqLen;
+            const std::string close = "]" + std::string(eqLen, '=') + "]";
+            size_t cursor = contentStart;
+
+            while (cursor + close.size() <= text.size() &&
+                   text.substr(cursor, close.size()) != close)
+                ++cursor;
+
+            std::string content;
+            if (cursor + close.size() <= text.size()) {
+                content = std::string(text.substr(contentStart, cursor - contentStart));
+                outEnd = cursor + close.size();
+            } else {
+                content = std::string(text.substr(contentStart));
+                outEnd = text.size();
+            }
+
+            if (unindentBlockContent) content = unindent_multiline_comment_content(content);
+
+            outComment = { std::move(content), true };
+            return true;
+        }
+    }
+
+    size_t cursor = offset + 2;
+    while (cursor < text.size() && text[cursor] != '\n' && text[cursor] != '\r') ++cursor;
+
+    std::string content = std::string(text.substr(offset + 2, cursor - (offset + 2)));
+    if (stripLineLeadingWhitespace) content = strip_leading_horizontal_whitespace(content);
+
+    outComment = { std::move(content), false };
+    outEnd = cursor;
+    return true;
+}
+
+static int l_extractComments(lua_State* L) {
+    size_t textLength = 0;
+    const char* textChars = luaL_checklstring(L, 1, &textLength);
+    std::string_view text(textChars, textLength);
+
+    bool unindentBlockContent = false;
+    bool stripLineLeadingWhitespace = false;
+    std::string mergeMode = "none";
+    if (lua_istable(L, 2)) {
+        lua_getfield(L, 2, "unindentMultiLineContent");
+        if (lua_isboolean(L, -1)) unindentBlockContent = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, 2, "stripLineLeadingWhitespace");
+        if (lua_isboolean(L, -1)) stripLineLeadingWhitespace = lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
+
+        lua_getfield(L, 2, "merge");
+        if (lua_isstring(L, -1)) mergeMode = lua_tostring(L, -1);
+        lua_pop(L, 1);
+    }
+
+    if (mergeMode != "none" && mergeMode != "same" && mergeMode != "all")
+        luaL_error(L, "luau.extractComments: merge must be 'none', 'same', or 'all'");
+
+    lua_createtable(L, 0, 0);
+
+    size_t outIndex = 1;
+    size_t cursor = 0;
+    size_t lastCommentEnd = 0;
+    std::optional<ExtractedComment> current;
+
+    auto flushCurrent = [&]() {
+        if (!current) return;
+
+        lua_pushlstring(L, current->content.data(), current->content.size());
+        lua_rawseti(L, -2, (int)outIndex++);
+        current.reset();
+    };
+
+    while (cursor < text.size()) {
+        size_t commentStart = cursor;
+        while (commentStart < text.size() && !starts_with(text, commentStart, "--")) ++commentStart;
+
+        if (commentStart >= text.size()) break;
+
+        ExtractedComment next;
+        size_t commentEnd = commentStart;
+        if (!try_extract_comment(text, commentStart, unindentBlockContent,
+                                 stripLineLeadingWhitespace, next, commentEnd)) {
+            cursor = commentStart + 1;
+            continue;
+        }
+
+        if (!current)
+            current = next;
+        else {
+            const std::string_view gap = text.substr(lastCommentEnd, commentStart - lastCommentEnd);
+            const bool mergeable =
+                mergeMode != "none" && is_whitespace_only(gap) &&
+                (mergeMode == "all" || (mergeMode == "same" && current->isBlock == next.isBlock));
+
+            if (!mergeable) {
+                flushCurrent();
+                current = next;
+            } else {
+                current->content.append(separator_for_comment_merge(gap));
+                current->content.append(next.content);
+            }
+        }
+
+        lastCommentEnd = commentEnd;
+        cursor = commentEnd;
+    }
+
+    flushCurrent();
     return 1;
 }
 
@@ -1270,17 +1810,23 @@ static int l_parse(lua_State* L) {
 // luau.prettyPrint(source) -> string
 // ---------------------------------------------------------------------------
 static int l_prettyPrint(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
     std::string_view sv(src, srcLen);
+    const EryxTimingClock::time_point prettyStart = EryxTimingClock::now();
     PrettyPrintResult ppr = prettyPrint(sv);
+    const double prettyMs = eryx_timing_elapsed_ms(prettyStart, EryxTimingClock::now());
 
     if (!ppr.parseError.empty()) {
         luaL_error(L, "parse error: %s", ppr.parseError.c_str());
     }
 
     lua_pushlstring(L, ppr.code.data(), ppr.code.size());
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    eryx_luau_timing_log("prettyPrint bytes=%zu total=%.3fms own=%.3fms luau=%.3fms", srcLen,
+                         totalMs, totalMs - prettyMs, prettyMs);
     return 1;
 }
 
@@ -1295,6 +1841,7 @@ static int l_prettyPrint(lua_State* L) {
 //   }?
 // ---------------------------------------------------------------------------
 static int l_compile(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1317,8 +1864,14 @@ static int l_compile(lua_State* L) {
         lua_pop(L, 1);
     }
 
+    const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
     std::string bytecode = Luau::compile(std::string(src, srcLen), opts);
+    const double compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
     lua_pushlstring(L, bytecode.data(), bytecode.size());
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    eryx_luau_timing_log(
+        "compile bytes=%zu total=%.3fms own=%.3fms luau_compile=%.3fms outBytes=%zu", srcLen,
+        totalMs, totalMs - compileMs, compileMs, bytecode.size());
     return 1;
 }
 
@@ -1331,6 +1884,7 @@ static int l_compile(lua_State* L) {
 // first character of Luau source.
 // ---------------------------------------------------------------------------
 static int l_load(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t dataLen = 0;
     const char* data = luaL_checklstring(L, 1, &dataLen);
     const char* chunkname = luaL_optstring(L, 2, "=load");
@@ -1339,6 +1893,7 @@ static int l_load(lua_State* L) {
 
     std::string bytecode;
     bool isBytecode = (dataLen > 0 && (unsigned char)data[0] <= LBC_VERSION_MAX);
+    double compileMs = 0.0;
 
     if (isBytecode) {
         bytecode.assign(data, dataLen);
@@ -1347,20 +1902,27 @@ static int l_load(lua_State* L) {
         Luau::CompileOptions opts;
         opts.optimizationLevel = 1;
         opts.debugLevel = 1;
+        const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
         bytecode = Luau::compile(std::string(data, dataLen), opts);
+        compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
     }
 
+    const EryxTimingClock::time_point loadStart = EryxTimingClock::now();
     int status = luau_load(L, chunkname, bytecode.data(), bytecode.size(), 0);
+    const double loadMs = eryx_timing_elapsed_ms(loadStart, EryxTimingClock::now());
     if (status != 0) {
         // luau_load pushed an error string
         lua_error(L);
     }
 
     // Attempt native codegen if we can
+    double codegenMs = 0.0;
     if (lua_codegen_isSupported()) {
         Luau::CodeGen::CompilationStats stats = {};
+        const EryxTimingClock::time_point codegenStart = EryxTimingClock::now();
         Luau::CodeGen::CodeGenCompilationResult res =
             lua_codegen_compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions, &stats);
+        codegenMs = eryx_timing_elapsed_ms(codegenStart, EryxTimingClock::now());
     }
 
     // Populate _DIR and _FILE
@@ -1401,6 +1963,14 @@ static int l_load(lua_State* L) {
         lua_setfenv(L, -2);
     }
 
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    const double luauMs = compileMs + loadMs + codegenMs;
+    eryx_luau_timing_log(
+        "load chunk=%s inputBytes=%zu bytecodeBytes=%zu total=%.3fms own=%.3fms compile=%.3fms "
+        "luau_load=%.3fms codegen=%.3fms bytecodeInput=%d",
+        chunkname, dataLen, bytecode.size(), totalMs, totalMs - luauMs, compileMs, loadMs,
+        codegenMs, isBytecode ? 1 : 0);
+
     return 1;  // the loaded function
 }
 
@@ -1418,6 +1988,7 @@ static int l_load(lua_State* L) {
 //   }?
 // ---------------------------------------------------------------------------
 static int l_disassemble(lua_State* L) {
+    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1457,14 +2028,22 @@ static int l_disassemble(lua_State* L) {
     bcb.setDumpFlags(dumpFlags);
     bcb.setDumpSource(std::string(src, srcLen));
 
+    const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
     try {
         Luau::compileOrThrow(bcb, std::string(src, srcLen), compileOpts);
     } catch (Luau::CompileError& e) {
         luaL_error(L, "compile error: %s", e.what());
     }
+    const double compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
 
+    const EryxTimingClock::time_point dumpStart = EryxTimingClock::now();
     std::string listing = bcb.dumpEverything();
+    const double dumpMs = eryx_timing_elapsed_ms(dumpStart, EryxTimingClock::now());
     lua_pushlstring(L, listing.data(), listing.size());
+    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
+    eryx_luau_timing_log(
+        "disassemble bytes=%zu total=%.3fms own=%.3fms compile=%.3fms dump=%.3fms outBytes=%zu",
+        srcLen, totalMs, totalMs - compileMs - dumpMs, compileMs, dumpMs, listing.size());
     return 1;
 }
 
@@ -1596,6 +2175,7 @@ static int l_config(lua_State* L) {
 // ---------------------------------------------------------------------------
 static const luaL_Reg funcs[] = {
     { "parse", l_parse },
+    { "extractComments", l_extractComments },
     { "prettyPrint", l_prettyPrint },
     { "compile", l_compile },
     { "load", l_load },

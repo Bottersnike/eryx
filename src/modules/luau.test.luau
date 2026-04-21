@@ -64,6 +64,39 @@ suite:test("parse: captureComments includes comments", function()
 	test.expect(#result.comments):toBeGreaterThan(0)
 end)
 
+suite:test("parse: collectSurroundingText attaches raw leading/trailing text", function()
+	local result = parseOk("-- lead\nlocal x = 1 -- tail\n", { collectSurroundingText = true })
+	local stat = findNode(result.root, "StatLocal")
+
+	test.expect(result.surroundingText):toNotBeNil()
+	assert(result.surroundingText)
+	test.expect(result.surroundingText[stat]):toNotBeNil()
+	assert(result.surroundingText[stat])
+	test.expect(result.surroundingText[stat].leading):toBe("-- lead\n")
+	test.expect(result.surroundingText[stat].trailing):toBe(" -- tail\n")
+end)
+
+suite:test("extractComments: supports merge modes and multiline unindent", function()
+	local text = "-- one\n-- two\n--[[\n\tthree\n\tfour\n]]"
+
+	local same = luau.extractComments(text, {
+		merge = "same",
+		unindentMultiLineContent = true,
+		stripLineLeadingWhitespace = true,
+	})
+	test.expect(#same):toBe(2)
+	test.expect(same[1]):toBe("one\ntwo")
+	test.expect(same[2]):toBe("three\nfour")
+
+	local all = luau.extractComments(text, {
+		merge = "all",
+		unindentMultiLineContent = true,
+		stripLineLeadingWhitespace = true,
+	})
+	test.expect(#all):toBe(1)
+	test.expect(all[1]):toBe("one\ntwo\nthree\nfour")
+end)
+
 suite:test("ExprConstant nodes", function()
 	assertNode("local a=nil local b=true local c=1 local d='x'", "ExprConstantNil")
 	assertNode("local a=nil local b=true local c=1 local d='x'", "ExprConstantBool")

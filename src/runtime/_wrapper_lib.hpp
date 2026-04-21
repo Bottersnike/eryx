@@ -1,5 +1,8 @@
 #pragma once
 
+#include <chrono>
+#include <cstdio>
+#include <cstdlib>
 #include <deque>
 #include <unordered_map>
 
@@ -65,6 +68,50 @@ ERYX_API int eryx_get_cliargs_argc();
 ERYX_API const char** eryx_get_cliargs_argv();
 
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename);
+
+using EryxTimingClock = std::chrono::steady_clock;
+
+inline bool eryx_luau_timing_enabled() {
+    static const bool enabled = [] {
+        const char* env = std::getenv("ERYX_LUAU_TIMING");
+        return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    }();
+    return enabled;
+}
+
+inline double eryx_timing_elapsed_ms(EryxTimingClock::time_point start,
+                                     EryxTimingClock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+template <typename... Args>
+inline void eryx_luau_timing_log(const char* fmt, Args... args) {
+    if (!eryx_luau_timing_enabled()) return;
+
+    std::fprintf(stderr, "[eryx-luau-timing] ");
+    std::fprintf(stderr, fmt, args...);
+    std::fprintf(stderr, "\n");
+}
+
+struct EryxTimingStat {
+    double totalMs = 0.0;
+    size_t calls = 0;
+
+    void add(double elapsedMs) {
+        totalMs += elapsedMs;
+        calls += 1;
+    }
+};
+
+struct EryxAnalysisTimingStats {
+    EryxTimingStat readSource;
+    EryxTimingStat resolveModule;
+    EryxTimingStat getConfig;
+
+    double callbackTotalMs() const {
+        return readSource.totalMs + resolveModule.totalMs + getConfig.totalMs;
+    }
+};
 
 // This function isn't going to be imported from our shared DLL, because
 // the compiler runs in individual threads, which each need their own
