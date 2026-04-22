@@ -114,6 +114,7 @@ if(ERYX_USE_ZSTD)
 endif()
 
 add_luau_module(luau/_parse_native src/modules/luau/parse.cpp src/modules/_native/stub.luau
+    ENTRYPOINT luauopen_parse_native
     EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
                    "${LUAU_DIR}/Compiler/include"
                    "${LUAU_DIR}/Common/include"
@@ -125,6 +126,7 @@ add_luau_module(luau/_parse_native src/modules/luau/parse.cpp src/modules/_nativ
 )
 
 add_luau_module(luau/_vm_native src/modules/luau/vm.cpp src/modules/_native/stub.luau
+    ENTRYPOINT luauopen_vm_native
     EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
                    "${LUAU_DIR}/Compiler/include"
                    "${LUAU_DIR}/Common/include"
@@ -136,6 +138,7 @@ add_luau_module(luau/_vm_native src/modules/luau/vm.cpp src/modules/_native/stub
 )
 
 add_luau_module(luau/_analysis_native src/modules/luau/analysis.cpp src/modules/_native/stub.luau
+    ENTRYPOINT luauopen_analysis_native
     EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
                    "${LUAU_DIR}/Compiler/include"
                    "${LUAU_DIR}/Common/include"

@@ -128,6 +128,13 @@ struct PlatformReadResult {
     std::string errMsg;
 };
 
+static void push_str_field(lua_State* L, const char* name, const std::string& s) {
+    if (!s.empty()) {
+        lua_pushlstring(L, s.data(), s.size());
+        lua_setfield(L, -2, name);
+    }
+}
+
 // Platform-native read. timeout_ms: <0=block forever, 0=non-blocking, >0=timed.
 // Safe to call from any thread — no Lua API access.
 #ifdef _WIN32
@@ -251,6 +258,7 @@ static PlatformReadResult platform_read(int fd, int maxBytes, int timeout_ms) {
             r.timedOut = true;
         return r;
     }
+    std::vector<char> buf((size_t)maxBytes);
     ssize_t n = ::read(fd, buf.data(), (size_t)maxBytes);
     if (n < 0) {
         r.hasError = true;
@@ -692,12 +700,6 @@ static std::string reg_get_sz(HKEY hKey, const char* name) {
     return std::string(buf);
 }
 
-static void push_str_field(lua_State* L, const char* name, const std::string& s) {
-    if (!s.empty()) {
-        lua_pushlstring(L, s.data(), s.size());
-        lua_setfield(L, -2, name);
-    }
-}
 #endif  // _WIN32
 
 #ifdef __linux__
