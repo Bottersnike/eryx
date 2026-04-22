@@ -2,7 +2,7 @@
 
 -- Builds FuncDoc records from type table properties (class members and properties).
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 local doctags = require("../parse/doctags")
 local types = require("./types")
 local td = require("./typeDescriber")

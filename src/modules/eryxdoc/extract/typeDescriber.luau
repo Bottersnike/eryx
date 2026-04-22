@@ -5,7 +5,7 @@
 -- `describeTypeParts` is the single source of truth for rendering types.
 -- `describeType` derives the string by concatenating part texts.
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 local types = require("./types")
 type SignaturePart = types.SignaturePart
 

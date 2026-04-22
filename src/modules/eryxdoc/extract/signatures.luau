@@ -3,7 +3,7 @@
 -- Function signature extraction and rendering in multiple formats:
 -- compact one-liner, multi-line with doc comments, structured token array, and metadata.
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 local doctags = require("../parse/doctags")
 local types = require("./types")
 local td = require("./typeDescriber")

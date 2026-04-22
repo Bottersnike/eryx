@@ -4,7 +4,7 @@
 ---
 --- ```luau
 --- local extract = require("eryxdoc/extract")
---- local luau = require("@eryx/luau")
+--- local luau = require("@eryx/luau/ast")
 ---
 --- local source = fs.openSync("mymodule.luau"):readSync()
 --- local result = luau.parse(source, { captureComments = true })
@@ -12,7 +12,8 @@
 --- -- docs.functions, docs.types, docs.constants, docs.moduleDescription
 --- ```
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
+local luauParse = require("@eryx/luau/parse")
 local doctags = require("@self/../parse/doctags")
 local types = require("@self/types")
 local comments = require("@self/comments")

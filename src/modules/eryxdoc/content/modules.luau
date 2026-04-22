@@ -1,6 +1,7 @@
 local fs = require("@eryx/fs")
 local logging = require("@eryx/logging")
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
+local luauParse = require("@eryx/luau/parse")
 local extract = require("../extract")
 
 local log = logging.getLogger("eryxdoc.content.modules")
@@ -376,7 +377,7 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 	log:info(string.format("Processing %s ...", qualifiedName))
 
 	local source = fs.openSync(path):readSync()
-	local result = luau.parse(source, { captureComments = true })
+	local result = luauParse.parse(source, { captureComments = true })
 
 	if #result.errors > 0 then
 		log:error(string.format("  %s: %d parse errors", path, #result.errors))

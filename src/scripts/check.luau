@@ -1,6 +1,6 @@
 local argparse = require("@eryx/argparse")
 local fs = require("@eryx/fs")
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/analyze")
 local os = require("@eryx/os")
 local stdio = require("@eryx/stdio")
 

@@ -1,6 +1,6 @@
 -- Shared type definitions for the documentation extraction pipeline.
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 local doctags = require("../parse/doctags")
 
 type ParsedDoc = doctags.ParsedDoc

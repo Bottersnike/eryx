@@ -75,7 +75,14 @@ add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(stream src/modules/stream.luau)
 add_luau_script_module(test src/modules/test.luau)
 add_luau_script_module(capability src/modules/capability.luau)
-add_luau_script_module(luau_query src/modules/luau_query.luau)
+add_luau_script_module(luau/
+    src/modules/luau/init.luau
+    src/modules/luau/ast.luau
+    src/modules/luau/parse.luau
+    src/modules/luau/vm.luau
+    src/modules/luau/analysis.luau
+    src/modules/luau/query.luau
+)
 add_luau_script_module(_ffi src/modules/_ffi.luau)
 add_luau_script_module(_ssl src/modules/_ssl.luau)
 add_luau_script_module(sqlite3 src/modules/sqlite3.luau)

@@ -2,7 +2,7 @@
 
 -- Comment collection and text processing for documentation extraction.
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 local types = require("./types")
 type CommentBlock = types.CommentBlock
 

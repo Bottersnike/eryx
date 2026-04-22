@@ -113,17 +113,35 @@ if(ERYX_USE_ZSTD)
     )
 endif()
 
-add_luau_module(luau src/modules/luau.cpp src/modules/luau.luau
+add_luau_module(luau/_parse_native src/modules/luau/parse.cpp src/modules/_native/stub.luau
     EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
                    "${LUAU_DIR}/Compiler/include"
                    "${LUAU_DIR}/Common/include"
                    "${LUAU_DIR}/VM/src"
     EXTRA_SOURCES
-                #  src/lresolve.cpp
-                #    src/lrequire.cpp
-                #    src/runtime/lexception.cpp
-                #    src/lconfig.cpp
-                #    src/vfs.cpp  # So lexception can resolve VFS files
+                   src/modules/luau/native.cpp
+                   "${LUAU_DIR}/Config/src/Config.cpp"
+                   "${LUAU_DIR}/Config/src/LinterConfig.cpp"
+)
+
+add_luau_module(luau/_vm_native src/modules/luau/vm.cpp src/modules/_native/stub.luau
+    EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
+                   "${LUAU_DIR}/Compiler/include"
+                   "${LUAU_DIR}/Common/include"
+                   "${LUAU_DIR}/VM/src"
+    EXTRA_SOURCES
+                   src/modules/luau/native.cpp
+                   "${LUAU_DIR}/Config/src/Config.cpp"
+                   "${LUAU_DIR}/Config/src/LinterConfig.cpp"
+)
+
+add_luau_module(luau/_analysis_native src/modules/luau/analysis.cpp src/modules/_native/stub.luau
+    EXTRA_INCLUDES "${LUAU_DIR}/Ast/include"
+                   "${LUAU_DIR}/Compiler/include"
+                   "${LUAU_DIR}/Common/include"
+                   "${LUAU_DIR}/VM/src"
+    EXTRA_SOURCES
+                   src/modules/luau/native.cpp
                    "${LUAU_DIR}/Config/src/Config.cpp"
                    "${LUAU_DIR}/Config/src/LinterConfig.cpp"
 )

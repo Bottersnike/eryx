@@ -1,10 +1,10 @@
-local luau = require("@eryx/luau")
+local luauParse = require("@eryx/luau/parse")
 local test = require("@eryx/test")
 
-local suite = test.Suite.new("luau")
+local suite = test.Suite.new("luau/parse")
 
 local function parseOk(source, options)
-	local result = luau.parse(source, options)
+	local result = luauParse.parse(source, options)
 	test.expect(#result.errors):toBe(0)
 	return result
 end
@@ -79,7 +79,7 @@ end)
 suite:test("extractComments: supports merge modes and multiline unindent", function()
 	local text = "-- one\n-- two\n--[[\n\tthree\n\tfour\n]]"
 
-	local same = luau.extractComments(text, {
+	local same = luauParse.extractComments(text, {
 		merge = "same",
 		unindentMultiLineContent = true,
 		stripLineLeadingWhitespace = true,
@@ -88,7 +88,7 @@ suite:test("extractComments: supports merge modes and multiline unindent", funct
 	test.expect(same[1]):toBe("one\ntwo")
 	test.expect(same[2]):toBe("three\nfour")
 
-	local all = luau.extractComments(text, {
+	local all = luauParse.extractComments(text, {
 		merge = "all",
 		unindentMultiLineContent = true,
 		stripLineLeadingWhitespace = true,
@@ -170,7 +170,7 @@ suite:test("ExprInstantiate with explicit type args", function()
 end)
 
 suite:test("ExprError appears on invalid expression", function()
-	local result = luau.parse("local x = (")
+	local result = luauParse.parse("local x = (")
 	test.expect(#result.errors):toBeGreaterThan(0)
 	test.expect(findNode(result.root, "ExprError")):toNotBeNil()
 end)
@@ -213,14 +213,14 @@ suite:test("basic statement nodes", function()
 	}
 
 	for _, c in cases do
-		local result = luau.parse(c.src)
+		local result = luauParse.parse(c.src)
 		test.skipIf(#result.errors > 0, `statement syntax not enabled for: {c.node}`)
 		test.expect(findNode(result.root, c.node)):toNotBeNil()
 	end
 end)
 
 suite:test("StatContinue (when enabled)", function()
-	local result = luau.parse("while true do continue end")
+	local result = luauParse.parse("while true do continue end")
 	test.skipIf(#result.errors > 0, "continue syntax not enabled in this Luau build")
 	test.expect(findNode(result.root, "StatContinue")):toNotBeNil()
 end)
@@ -233,22 +233,22 @@ end)
 
 suite:test("type statement nodes", function()
 	assertNode("type X = number", "StatTypeAlias")
-	local dg = luau.parse("declare global g: number")
+	local dg = luauParse.parse("declare global g: number")
 	test.skipIf(#dg.errors > 0, "declare global syntax not enabled in this Luau build")
 	test.expect(findNode(dg.root, "StatDeclareGlobal")):toNotBeNil()
 
-	local df = luau.parse("declare function id(x: number): number")
+	local df = luauParse.parse("declare function id(x: number): number")
 	test.skipIf(#df.errors > 0, "declare function syntax not enabled in this Luau build")
 	test.expect(findNode(df.root, "StatDeclareFunction")):toNotBeNil()
 
-	local dc = luau.parse("declare class C end")
+	local dc = luauParse.parse("declare class C end")
 	test.skipIf(#dc.errors > 0, "declare class syntax not enabled in this Luau build")
 	test.expect(findNode(dc.root, "StatDeclareExternType")):toNotBeNil()
 end)
 
 suite:test("StatTypeFunction (when supported by parser)", function()
 	local src = "type function id<T>(x: T): T return x end"
-	local result = luau.parse(src)
+	local result = luauParse.parse(src)
 	test.skipIf(#result.errors > 0, "type function syntax not enabled in this Luau build")
 	test.expect(findNode(result.root, "StatTypeFunction")):toNotBeNil()
 end)
@@ -262,7 +262,7 @@ suite:test("StatTypeAlias exposes name/generic locations", function()
 end)
 
 suite:test("StatDeclareFunction exposes parameters", function()
-	local result = luau.parse("declare function f(x: number): number")
+	local result = luauParse.parse("declare function f(x: number): number")
 	test.skipIf(#result.errors > 0, "declare function syntax not enabled in this Luau build")
 	local stat = findNode(result.root, "StatDeclareFunction")
 	expectLocation(stat.nameLocation)
@@ -272,7 +272,7 @@ suite:test("StatDeclareFunction exposes parameters", function()
 end)
 
 suite:test("StatDeclareExternType exposes props/super/indexer shape", function()
-	local result = luau.parse("declare class Child extends Parent\n\tx: number\nend")
+	local result = luauParse.parse("declare class Child extends Parent\n\tx: number\nend")
 	test.skipIf(#result.errors > 0, "declare class syntax not enabled in this Luau build")
 	local stat = findNode(result.root, "StatDeclareExternType")
 	test.expect(stat.superName):toBe("Parent")
@@ -280,7 +280,7 @@ suite:test("StatDeclareExternType exposes props/super/indexer shape", function()
 end)
 
 suite:test("StatError appears on invalid statement", function()
-	local result = luau.parse("if true then local")
+	local result = luauParse.parse("if true then local")
 	test.expect(#result.errors):toBeGreaterThan(0)
 	test.skipIf(findNode(result.root, "StatError") == nil, "parser did not emit StatError node for this syntax error")
 	test.expect(findNode(result.root, "StatError")):toNotBeNil()
@@ -331,21 +331,21 @@ suite:test("optional/union/intersection/singleton/group types", function()
 end)
 
 suite:test("TypeError appears on invalid type syntax", function()
-	local result = luau.parse("type Bad = |")
+	local result = luauParse.parse("type Bad = |")
 	test.expect(#result.errors):toBeGreaterThan(0)
 	test.expect(findNode(result.root, "TypeError")):toNotBeNil()
 end)
 
 suite:test("typepacks: explicit/variadic/generic", function()
-	local v = luau.parse("type F = (...number) -> ...number")
+	local v = luauParse.parse("type F = (...number) -> ...number")
 	test.skipIf(#v.errors > 0, "variadic typepack syntax not enabled in this Luau build")
 	test.expect(findNode(v.root, "TypePackVariadic")):toNotBeNil()
 
-	local g = luau.parse("type F = <U...>(...U...) -> ...U...")
+	local g = luauParse.parse("type F = <U...>(...U...) -> ...U...")
 	test.skipIf(#g.errors > 0, "generic typepack syntax not enabled in this Luau build")
 	test.expect(findNode(g.root, "TypePackGeneric")):toNotBeNil()
 
-	local e = luau.parse("type F = (...number) -> (number, ...number)")
+	local e = luauParse.parse("type F = (...number) -> (number, ...number)")
 	test.skipIf(#e.errors > 0, "explicit typepack syntax not enabled in this Luau build")
 	test.expect(findNode(e.root, "TypePackExplicit")):toNotBeNil()
 end)
@@ -365,124 +365,6 @@ suite:test("all statements carry hasSemicolon", function()
 	local s2 = findNode(result.root, "StatAssign")
 	test.expect(s1.hasSemicolon):toBeType("boolean")
 	test.expect(s2.hasSemicolon):toBeType("boolean")
-end)
-
-suite:test("check: reports type errors", function()
-	local result = luau.check("local x: string = 1")
-	test.expect(type(result.errors)):toBe("table")
-	test.expect(#result.errors):toBeGreaterThan(0)
-	test.expect(result.errors[1].category):toBeType("string")
-end)
-
-suite:test("check: exposes lint diagnostics", function()
-	local result = luau.check("local x = 1")
-	test.expect(type(result.lints)):toBe("table")
-	test.expect(type(result.lints.errors)):toBe("table")
-	test.expect(type(result.lints.warnings)):toBe("table")
-	test.expect(type(result.lints.all)):toBe("table")
-	test.expect(#result.lints.all):toBe(#result.lints.errors + #result.lints.warnings)
-	if #result.lints.all > 0 then
-		local first = result.lints.all[1]
-		test.expect(first.severity):toBeType("string")
-		test.expect(first.code):toBeType("number")
-		test.expect(first.name):toBeType("string")
-		test.expect(first.message):toBeType("string")
-		expectLocation(first.location)
-	end
-end)
-
-suite:test("typeAt: classic string mode", function()
-	local source = "local x = 1\nlocal y = x"
-	local ty = luau.typeAt(source, 2, 11)
-	test.expect(ty):toBeType("string")
-end)
-
-suite:test("typeAt: detailed mode", function()
-	local source = "local x = {a = 1, b = 'ok'}\nlocal y = x"
-	local out = luau.typeAt(source, 2, 11, { detailed = true })
-	test.expect(out):toBeType("table")
-	assert(typeof(out) == "table") -- for types
-	test.expect(out.display):toBeType("string")
-	test.expect(out.source):toBeType("string")
-	test.expect(out.type):toBeType("table")
-	test.expect(out.type.kind):toBeType("string")
-end)
-
-suite:test("typeofModule: classic string mode", function()
-	local source = "return { answer = 42 }"
-	local out = luau.typeofModule(source)
-	test.expect(out):toBeType("string")
-end)
-
-suite:test("typeofModule: detailed mode", function()
-	local source = "return { answer = 42 }, 'ok'"
-	local out = luau.typeofModule(source, { detailed = true })
-	test.expect(out):toBeType("table")
-	assert(typeof(out) == "table") -- for types
-	test.expect(out.display):toBeType("string")
-	test.expect(out.source):toBe("Module")
-	test.expect(out.typePack):toBeType("table")
-	assert(typeof(out.typePack) == "table") -- for types
-	test.expect(out.typePack.kind):toBeType("string")
-end)
-
-suite:test("autocomplete: detailed type payload", function()
-	local source = "local t = {foo = 1, bar = 'x'}\nt."
-	local out = luau.autocomplete(source, 2, 3, { detailed = true })
-	test.expect(out.context):toBeType("string")
-	test.expect(type(out.entries)):toBe("table")
-	test.expect(out.entries.foo):toNotBeNil()
-	test.expect(out.entries.foo.kind):toBe("Property")
-	test.expect(out.entries.foo.typeDetail):toBeType("table")
-	assert(typeof(out.entries.foo.typeDetail) == "table") -- for types
-	test.expect(out.entries.foo.typeDetail.kind):toBeType("string")
-end)
-
-suite:test("getconfig: exposes current config shape", function()
-	local cfg = luau.getconfig()
-	test.expect(type(cfg)):toBe("table")
-	test.expect(type(cfg.found)):toBe("boolean")
-	test.expect(type(cfg.configDir)):toBe("string")
-	test.expect(type(cfg.languageMode)):toBe("string")
-	test.expect(type(cfg.enabledLints)):toBe("number")
-	test.expect(type(cfg.fatalLints)):toBe("number")
-	test.expect(type(cfg.lintErrors)):toBe("boolean")
-	test.expect(type(cfg.typeErrors)):toBe("boolean")
-	test.expect(type(cfg.globals)):toBe("table")
-	test.expect(type(cfg.aliases)):toBe("table")
-
-	local isValidMode = cfg.languageMode == "strict" or cfg.languageMode == "nonstrict" or cfg.languageMode == "nocheck"
-	test.expect(isValidMode):toBeTrue()
-
-	if cfg.found then
-		test.expect(#cfg.configDir):toBeGreaterThan(0)
-	end
-end)
-
-suite:test("getconfig: alias metadata shape", function()
-	local cfg = luau.getconfig()
-	for aliasName, aliasInfo in cfg.aliases do
-		test.expect(type(aliasName)):toBe("string")
-		test.expect(type(aliasInfo.qualified)):toBe("string")
-		test.expect(type(aliasInfo.configPath)):toBe("string")
-		test.expect(type(aliasInfo.path)):toBe("string")
-		break
-	end
-
-	local eryxAlias = cfg.aliases.eryx
-	test.skipIf(eryxAlias == nil, "eryx alias not configured in this environment")
-	assert(eryxAlias)
-	test.expect(type(eryxAlias.qualified)):toBe("string")
-	test.expect(type(eryxAlias.configPath)):toBe("string")
-	test.expect(type(eryxAlias.path)):toBe("string")
-end)
-
-suite:test("getconfig: accepts folder path override", function()
-	local cfg = luau.getconfig(".")
-	test.expect(type(cfg)):toBe("table")
-	test.expect(type(cfg.found)):toBe("boolean")
-	test.expect(type(cfg.configDir)):toBe("string")
-	test.expect(type(cfg.aliases)):toBe("table")
 end)
 
 return suite

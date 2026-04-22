@@ -28,6 +28,8 @@
 // plus node-specific fields described below.
 // ---------------------------------------------------------------------------
 
+#include "native.hpp"
+
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -38,10 +40,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "../LuaLocation.hpp"
-#include "../LuaUtil.hpp"
-#include "../runtime/lconfig.hpp"
-#include "../runtime/lresolve.hpp"
+#include "../../LuaLocation.hpp"
+#include "../../LuaUtil.hpp"
+#include "../../runtime/lconfig.hpp"
+#include "../../runtime/lresolve.hpp"
 #include "Luau/Allocator.h"
 #include "Luau/Ast.h"
 #include "Luau/Bytecode.h"
@@ -58,16 +60,6 @@
 #include "module_api.h"
 
 using namespace Luau;
-
-// ---------------------------------------------------------------------------
-// Module metadata
-// ---------------------------------------------------------------------------
-static const LuauModuleInfo INFO = {
-    .abiVersion = 1,
-    .luauVersion = LUAU_GIT_HASH,
-    .entry = "luauopen_luau",
-};
-LUAU_MODULE_INFO()
 
 // ---------------------------------------------------------------------------
 // Helpers – push a Location / Position onto the Lua stack
@@ -1559,253 +1551,6 @@ static int l_parse(lua_State* L) {
     return 1;
 }
 
-struct ExtractedComment {
-    std::string content;
-    bool isBlock;
-};
-
-static bool starts_with(std::string_view text, size_t offset, std::string_view prefix) {
-    return offset + prefix.size() <= text.size() && text.substr(offset, prefix.size()) == prefix;
-}
-
-static std::string unindent_multiline_comment_content(std::string_view content) {
-    if (content.empty()) return std::string(content);
-
-    size_t start = 0;
-    size_t end = content.size();
-
-    if (start < end && content[start] == '\n')
-        ++start;
-    else if (start + 1 < end && content[start] == '\r' && content[start + 1] == '\n')
-        start += 2;
-
-    while (end > start) {
-        size_t lineStart = content.rfind('\n', end - 1);
-        lineStart = (lineStart == std::string_view::npos) ? start : lineStart + 1;
-
-        bool blank = true;
-        for (size_t i = lineStart; i < end; ++i) {
-            if (content[i] != ' ' && content[i] != '\t' && content[i] != '\r' &&
-                content[i] != '\n') {
-                blank = false;
-                break;
-            }
-        }
-
-        if (!blank) break;
-
-        end = lineStart > start ? lineStart - 1 : start;
-    }
-
-    std::string_view body = content.substr(start, end - start);
-    size_t minIndent = std::string_view::npos;
-    size_t lineStart = 0;
-
-    while (lineStart <= body.size()) {
-        size_t lineEnd = body.find('\n', lineStart);
-        if (lineEnd == std::string_view::npos) lineEnd = body.size();
-
-        size_t indent = 0;
-        bool blank = true;
-        while (lineStart + indent < lineEnd) {
-            char ch = body[lineStart + indent];
-            if (ch == ' ' || ch == '\t') {
-                ++indent;
-                continue;
-            }
-            if (ch != '\r') blank = false;
-            break;
-        }
-
-        if (!blank)
-            minIndent = minIndent == std::string_view::npos ? indent : std::min(minIndent, indent);
-
-        if (lineEnd == body.size()) break;
-        lineStart = lineEnd + 1;
-    }
-
-    if (minIndent == std::string_view::npos || minIndent == 0) return std::string(body);
-
-    std::string out;
-    out.reserve(body.size());
-
-    lineStart = 0;
-    while (lineStart <= body.size()) {
-        size_t lineEnd = body.find('\n', lineStart);
-        if (lineEnd == std::string_view::npos) lineEnd = body.size();
-
-        size_t indent = 0;
-        while (indent < minIndent && lineStart + indent < lineEnd) {
-            char ch = body[lineStart + indent];
-            if (ch != ' ' && ch != '\t') break;
-            ++indent;
-        }
-
-        out.append(body.substr(lineStart + indent, lineEnd - lineStart - indent));
-        if (lineEnd != body.size())
-            out.push_back('\n');
-        else
-            break;
-
-        lineStart = lineEnd + 1;
-    }
-
-    return out;
-}
-
-static std::string strip_leading_horizontal_whitespace(std::string_view content) {
-    size_t start = 0;
-    while (start < content.size()) {
-        char ch = content[start];
-        if (ch != ' ' && ch != '\t') break;
-        ++start;
-    }
-
-    return std::string(content.substr(start));
-}
-
-static std::string separator_for_comment_merge(std::string_view between) {
-    int newlineCount = 0;
-    for (char ch : between) {
-        if (ch == '\n') ++newlineCount;
-    }
-
-    if (newlineCount >= 2) return "\n\n";
-    if (newlineCount == 1) return "\n";
-    return " ";
-}
-
-static bool is_whitespace_only(std::string_view text) {
-    for (char ch : text) {
-        if (!is_ascii_whitespace(ch)) return false;
-    }
-    return true;
-}
-
-static bool try_extract_comment(std::string_view text, size_t offset, bool unindentBlockContent,
-                                bool stripLineLeadingWhitespace, ExtractedComment& outComment,
-                                size_t& outEnd) {
-    if (!starts_with(text, offset, "--")) return false;
-
-    if (starts_with(text, offset, "--[")) {
-        size_t eqLen = 0;
-        while (offset + 3 + eqLen < text.size() && text[offset + 3 + eqLen] == '=') ++eqLen;
-
-        if (offset + 3 + eqLen < text.size() && text[offset + 3 + eqLen] == '[') {
-            const size_t contentStart = offset + 4 + eqLen;
-            const std::string close = "]" + std::string(eqLen, '=') + "]";
-            size_t cursor = contentStart;
-
-            while (cursor + close.size() <= text.size() &&
-                   text.substr(cursor, close.size()) != close)
-                ++cursor;
-
-            std::string content;
-            if (cursor + close.size() <= text.size()) {
-                content = std::string(text.substr(contentStart, cursor - contentStart));
-                outEnd = cursor + close.size();
-            } else {
-                content = std::string(text.substr(contentStart));
-                outEnd = text.size();
-            }
-
-            if (unindentBlockContent) content = unindent_multiline_comment_content(content);
-
-            outComment = { std::move(content), true };
-            return true;
-        }
-    }
-
-    size_t cursor = offset + 2;
-    while (cursor < text.size() && text[cursor] != '\n' && text[cursor] != '\r') ++cursor;
-
-    std::string content = std::string(text.substr(offset + 2, cursor - (offset + 2)));
-    if (stripLineLeadingWhitespace) content = strip_leading_horizontal_whitespace(content);
-
-    outComment = { std::move(content), false };
-    outEnd = cursor;
-    return true;
-}
-
-static int l_extractComments(lua_State* L) {
-    size_t textLength = 0;
-    const char* textChars = luaL_checklstring(L, 1, &textLength);
-    std::string_view text(textChars, textLength);
-
-    bool unindentBlockContent = false;
-    bool stripLineLeadingWhitespace = false;
-    std::string mergeMode = "none";
-    if (lua_istable(L, 2)) {
-        lua_getfield(L, 2, "unindentMultiLineContent");
-        if (lua_isboolean(L, -1)) unindentBlockContent = lua_toboolean(L, -1) != 0;
-        lua_pop(L, 1);
-
-        lua_getfield(L, 2, "stripLineLeadingWhitespace");
-        if (lua_isboolean(L, -1)) stripLineLeadingWhitespace = lua_toboolean(L, -1) != 0;
-        lua_pop(L, 1);
-
-        lua_getfield(L, 2, "merge");
-        if (lua_isstring(L, -1)) mergeMode = lua_tostring(L, -1);
-        lua_pop(L, 1);
-    }
-
-    if (mergeMode != "none" && mergeMode != "same" && mergeMode != "all")
-        luaL_error(L, "luau.extractComments: merge must be 'none', 'same', or 'all'");
-
-    lua_createtable(L, 0, 0);
-
-    size_t outIndex = 1;
-    size_t cursor = 0;
-    size_t lastCommentEnd = 0;
-    std::optional<ExtractedComment> current;
-
-    auto flushCurrent = [&]() {
-        if (!current) return;
-
-        lua_pushlstring(L, current->content.data(), current->content.size());
-        lua_rawseti(L, -2, (int)outIndex++);
-        current.reset();
-    };
-
-    while (cursor < text.size()) {
-        size_t commentStart = cursor;
-        while (commentStart < text.size() && !starts_with(text, commentStart, "--")) ++commentStart;
-
-        if (commentStart >= text.size()) break;
-
-        ExtractedComment next;
-        size_t commentEnd = commentStart;
-        if (!try_extract_comment(text, commentStart, unindentBlockContent,
-                                 stripLineLeadingWhitespace, next, commentEnd)) {
-            cursor = commentStart + 1;
-            continue;
-        }
-
-        if (!current)
-            current = next;
-        else {
-            const std::string_view gap = text.substr(lastCommentEnd, commentStart - lastCommentEnd);
-            const bool mergeable =
-                mergeMode != "none" && is_whitespace_only(gap) &&
-                (mergeMode == "all" || (mergeMode == "same" && current->isBlock == next.isBlock));
-
-            if (!mergeable) {
-                flushCurrent();
-                current = next;
-            } else {
-                current->content.append(separator_for_comment_merge(gap));
-                current->content.append(next.content);
-            }
-        }
-
-        lastCommentEnd = commentEnd;
-        cursor = commentEnd;
-    }
-
-    flushCurrent();
-    return 1;
-}
-
 // ---------------------------------------------------------------------------
 // luau.prettyPrint(source) -> string
 // ---------------------------------------------------------------------------
@@ -2173,13 +1918,29 @@ static int l_config(lua_State* L) {
 // check / typeAt / autocomplete / typeofModule are implemented in LuauShared (_wrapper_lib)
 // because they depend on Luau.Analysis which requires the VM.
 // ---------------------------------------------------------------------------
-static const luaL_Reg funcs[] = {
+static void register_module(lua_State* L, const luaL_Reg* funcs) {
+    lua_createtable(L, 0, 8);
+    for (const luaL_Reg* reg = funcs; reg && reg->name; ++reg) {
+        lua_pushcfunction(L, reg->func, reg->name);
+        lua_setfield(L, -2, reg->name);
+    }
+    lua_setreadonly(L, -1, true);
+}
+
+static const luaL_Reg parse_funcs[] = {
     { "parse", l_parse },
-    { "extractComments", l_extractComments },
     { "prettyPrint", l_prettyPrint },
+    { nullptr, nullptr },
+};
+
+static const luaL_Reg vm_funcs[] = {
     { "compile", l_compile },
     { "load", l_load },
     { "disassemble", l_disassemble },
+    { nullptr, nullptr },
+};
+
+static const luaL_Reg analysis_funcs[] = {
     { "check", eryx_luau_check },
     { "typeAt", eryx_luau_typeAt },
     { "autocomplete", eryx_luau_autocomplete },
@@ -2189,8 +1950,17 @@ static const luaL_Reg funcs[] = {
     { nullptr, nullptr },
 };
 
-LUAU_MODULE_EXPORT int luauopen_luau(lua_State* L) {
-    luaL_register(L, "luau", funcs);
-    lua_setreadonly(L, -1, true);
+int eryx_luau_open_parse_native(lua_State* L) {
+    register_module(L, parse_funcs);
+    return 1;
+}
+
+int eryx_luau_open_vm_native(lua_State* L) {
+    register_module(L, vm_funcs);
+    return 1;
+}
+
+int eryx_luau_open_analysis_native(lua_State* L) {
+    register_module(L, analysis_funcs);
     return 1;
 }

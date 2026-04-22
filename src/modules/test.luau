@@ -1,6 +1,6 @@
 local exception = require("@eryx/exception")
 local fs = require("@eryx/fs")
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/vm")
 local pprint = require("@eryx/pprint")
 local os = require("@eryx/os")
 local stdio = require("@eryx/stdio")

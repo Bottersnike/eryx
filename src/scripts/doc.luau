@@ -58,7 +58,7 @@ if not configPath and fs.isFile("eryxdoc.config.luau") then
 	configPath = "eryxdoc.config.luau"
 end
 if configPath then
-	local luau = require("@eryx/luau")
+	local luau = require("@eryx/luau/vm")
 	local ok, result = pcall(function()
 		local fn = luau.load(fs.openSync(configPath :: string):readSync(), `={configPath}`)
 		return fn()

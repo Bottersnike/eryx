@@ -2,7 +2,7 @@
 
 -- Detects class patterns in type aliases (setmetatable-based class idioms).
 
-local luau = require("@eryx/luau")
+local luau = require("@eryx/luau/ast")
 
 local function unwrapTypeOrPack(value: any): luau.AstType?
 	if type(value) ~= "table" then

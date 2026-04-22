@@ -1,11 +1,12 @@
-local luau = require("@eryx/luau")
-local luauQuery = require("@eryx/luau_query")
+local luau = require("@eryx/luau/ast")
+local luauParse = require("@eryx/luau/parse")
+local luauQuery = require("@eryx/luau/query")
 local test = require("@eryx/test")
 
-local suite = test.Suite.new("luau_query")
+local suite = test.Suite.new("luau/query")
 
 local function parseOk(source: string): luau.ParseResult
-	local result = luau.parse(source, { captureComments = true })
+	local result = luauParse.parse(source, { captureComments = true })
 	test.expect(#result.errors):toBe(0)
 	return result
 end
