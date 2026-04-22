@@ -300,13 +300,13 @@ if(ERYX_MODULE_GFX)
     )
 
     if(ERYX_EMBED_MODULES)
-        # Accumulate GFX sources/includes/libs into the embed lists
+        # Attach GFX sources/includes/libs to the embed target immediately so
+        # generator-specific cache timing does not drop them from the link.
         foreach(_src ${GFX_SOURCES})
-            list(APPEND ERYX_EMBED_NATIVE_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
+            target_sources(eryx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/${_src}")
         endforeach()
-        set(ERYX_EMBED_NATIVE_SOURCES ${ERYX_EMBED_NATIVE_SOURCES} CACHE INTERNAL "")
-        set(ERYX_EMBED_NATIVE_INCLUDES ${ERYX_EMBED_NATIVE_INCLUDES} ${GFX_EXTRA_INCLUDES} CACHE INTERNAL "")
-        set(ERYX_EMBED_NATIVE_LIBS ${ERYX_EMBED_NATIVE_LIBS} ${GFX_EXTRA_LIBS} CACHE INTERNAL "")
+        target_include_directories(eryx PRIVATE ${GFX_EXTRA_INCLUDES})
+        target_link_libraries(eryx PRIVATE ${GFX_EXTRA_LIBS})
         set(ERYX_EMBED_NATIVE_ENTRIES ${ERYX_EMBED_NATIVE_ENTRIES} "gfx/_gfx|luauopen__gfx" CACHE INTERNAL "")
 
         # Accumulate the GFX Luau wrappers as script modules

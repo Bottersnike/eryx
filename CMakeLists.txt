@@ -344,16 +344,16 @@ function(add_luau_module MODULE_NAME SOURCE_FILE TYPES_FILE)
                 list(APPEND _all_srcs "${CMAKE_CURRENT_SOURCE_DIR}/${_extra}")
             endif()
         endforeach()
-        set(ERYX_EMBED_NATIVE_SOURCES ${ERYX_EMBED_NATIVE_SOURCES} ${_all_srcs} CACHE INTERNAL "")
+        target_sources(eryx PRIVATE ${_all_srcs})
 
         # Collect extra include dirs
         if(MOD_EXTRA_INCLUDES)
-            set(ERYX_EMBED_NATIVE_INCLUDES ${ERYX_EMBED_NATIVE_INCLUDES} ${MOD_EXTRA_INCLUDES} CACHE INTERNAL "")
+            target_include_directories(eryx PRIVATE ${MOD_EXTRA_INCLUDES})
         endif()
 
         # Collect extra link libs
         if(MOD_EXTRA_LIBS)
-            set(ERYX_EMBED_NATIVE_LIBS ${ERYX_EMBED_NATIVE_LIBS} ${MOD_EXTRA_LIBS} CACHE INTERNAL "")
+            target_link_libraries(eryx PRIVATE ${MOD_EXTRA_LIBS})
         endif()
 
         # Record the module path -> entrypoint mapping.
@@ -637,15 +637,12 @@ if(ERYX_EMBED_MODULES)
     target_sources(eryx PRIVATE
         "${EMBED_GEN_DIR}/embedded_modules.cpp"
         "${EMBED_GEN_DIR}/embedded_sources.cpp"
-        ${ERYX_EMBED_NATIVE_SOURCES}
     )
     target_include_directories(eryx PRIVATE
         ${EMBED_GEN_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/src/modules
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${ERYX_EMBED_NATIVE_INCLUDES}
     )
-    target_link_libraries(eryx PRIVATE ${ERYX_EMBED_NATIVE_LIBS})
     target_compile_definitions(eryx PRIVATE ERYX_EMBED=1 MA_ENABLE_VORBIS)
     if(ERYX_HYBRID)
         target_compile_definitions(eryx PRIVATE ERYX_HYBRID=1)
