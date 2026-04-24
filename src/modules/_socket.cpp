@@ -4,8 +4,6 @@
 // driven by libuv's event loop via uv_poll_t (watching raw Winsock handles).
 // Virtual blocking and timeouts are layered on top using uv_timer_t.
 //
-// Exposed surface (mirrors a subset of Python's `socket` module):
-//
 //   socket.socket(family, type [, proto])  -> Socket userdata
 //   socket.getaddrinfo(host, service [, family, type, proto, flags])
 //   socket.getnameinfo(host, port [, flags]) -> hostname, servicename

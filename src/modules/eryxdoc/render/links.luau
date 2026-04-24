@@ -181,8 +181,8 @@ local function withHrefPrefix(info: ResolvedWikiLink?, prefix: string, trailingA
 end
 
 -- Resolves a wikilink target to a full URL.
--- Priority: explicit @-path → dotted class.member (local then cross-module) →
--- bare name (local → article → module last-segment).
+-- Priority: explicit @-path -> dotted class.member (local then cross-module) ->
+-- bare name (local -> article -> module last-segment).
 local function resolveWikiLinkInfo(
 	rawLink: string,
 	currentModule: modules.ModuleInfo?,
@@ -190,7 +190,7 @@ local function resolveWikiLinkInfo(
 	articles: { { name: string, article: any } },
 	getLink: (any) -> string
 ): ResolvedWikiLink
-	-- Split trailing anchor: "Title#heading" → core="Title", trailingAnchor="#heading"
+	-- Split trailing anchor: "Title#heading" -> core="Title", trailingAnchor="#heading"
 	local trailingAnchor = ""
 	local core = rawLink
 	local hashPos = rawLink:find("#", 1, true)

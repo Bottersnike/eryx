@@ -225,7 +225,7 @@ local ListRule: types.BlockRule<"list", {
 		return { matched = true, cursor = cursor }
 	end,
 	onBlankLine = function(block, _openStack: { types.AnyBlockNode }): boolean
-		-- Blank line hitting the list directly (e.g. after empty item closed) → mark as maybe loose
+		-- Blank line hitting the list directly (e.g. after empty item closed) -> mark as maybe loose
 		block.maybeLoose = true
 		return false
 	end,

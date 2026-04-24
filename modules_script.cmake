@@ -92,6 +92,15 @@ add_luau_script_module(webview src/modules/webview.luau)
 add_luau_script_module(crypto/hazmat/_crypto src/modules/crypto/hazmat/_crypto.luau)
 add_luau_script_module(websocket src/modules/websocket.luau)
 
+add_luau_script_module(unicode/
+    src/modules/unicode/init.luau
+)
+add_luau_script_module(unicode/_data/
+    src/modules/unicode/_data/data.luau
+    src/modules/unicode/_data/name.luau
+    src/modules/unicode/_data/type.luau
+)
+
 if(WIN32)
 add_luau_script_module(webui src/modules/webui.luau)
 endif()

@@ -16,7 +16,7 @@ try {
 }
 
 $cpp = git ls-files '*.c' '*.cpp' '*.cc' '*.cxx' '*.h' '*.hpp' 2>$null | Where-Object { $_ -ne '' }
-$luau = git ls-files '*.luau' 2>$null | Where-Object { $_ -ne '' }
+$luau = git ls-files '*.luau' 2>$null | Where-Object { $_ -ne '' -and $_ -notlike 'src/modules/unicode/_data/*' }
 
 $formattingChanged = $false
 

@@ -1,7 +1,5 @@
 // _ssl.cpp  –  TLS wrapper for _socket, using mbedTLS (Win32)
 //
-// Provides a Python ssl-module-like interface:
-//
 //   ssl.wrap_socket(sock [, options]) -> SSLSocket
 //   ssl.create_default_context()      -> SSLContext   (client)
 //   ssl.create_server_context(certfile, keyfile [, password]) -> SSLContext (server)
@@ -279,7 +277,7 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 #else  // Linux and other POSIX
 
 static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
-    // Probe well-known CA bundle paths (same set as curl/Python)
+    // Probe well-known CA bundle paths (same set as curl)
     static const char* const candidates[] = {
         "/etc/ssl/certs/ca-certificates.crt",                 // Debian, Ubuntu, Arch
         "/etc/pki/tls/certs/ca-bundle.crt",                   // RHEL, Fedora, CentOS

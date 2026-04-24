@@ -122,7 +122,7 @@ function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
 	local recursive = if options then options.recursive else false
 	local debounce = if options then options.debounce else nil
 
-	-- Per-file debounce timers: filename → pending thread
+	-- Per-file debounce timers: filename -> pending thread
 	local pendingTimers: { [string]: thread } = {}
 	-- Per-file last event type
 	local pendingEvents: { [string]: string } = {}

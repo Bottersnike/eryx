@@ -6,7 +6,22 @@ local luau = require("@eryx/luau/ast")
 local types = require("./types")
 type CommentBlock = types.CommentBlock
 
--- Strip common leading whitespace and dash prefixes from comment text.
+-- Strip the leading comment-prefix dashes (e.g. `--`, `---`) and the single
+-- following space from a single source line.  Only used for LineComment text.
+local function stripLineCommentPrefix(line: string): string
+	local j = 1
+	while j <= #line and line:sub(j, j) == "-" do
+		j += 1
+	end
+	if j <= #line and line:sub(j, j) == " " then
+		return line:sub(j)
+	elseif j > #line then
+		return ""
+	end
+	return line
+end
+
+-- Strip common leading whitespace from comment text.
 local function unindent(text: string): string
 	local lines = string.split(string.gsub(text, "\r\n", "\n"), "\n")
 	while #lines ~= 0 and #lines[1] == 0 do
@@ -14,19 +29,6 @@ local function unindent(text: string): string
 	end
 	if #lines == 0 then
 		return text
-	end
-
-	-- Strip leading dashes before spaces
-	for i, line in lines do
-		local j = 1
-		while j <= #line and line:sub(j, j) == "-" do
-			j += 1
-		end
-		if j <= #line and line:sub(j, j) == " " then
-			lines[i] = line:sub(j)
-		elseif j > #line then
-			lines[i] = ""
-		end
 	end
 
 	-- Determine common leading whitespace from first line
@@ -96,7 +98,7 @@ local function collectComments(
 			if c.type == "BlockComment" then
 				text = raw:gsub("^%-%-%[=*%[", ""):gsub("%]=*%]$", "")
 			else
-				text = raw
+				text = stripLineCommentPrefix(raw)
 			end
 			inline[cLine] = unindent(text)
 		else
@@ -109,7 +111,7 @@ local function collectComments(
 				table.insert(cur, raw)
 			else
 				for line in raw:gmatch("[^\n]+") do
-					table.insert(cur, line)
+					table.insert(cur, stripLineCommentPrefix(line))
 				end
 			end
 			prevEnd = cEnd

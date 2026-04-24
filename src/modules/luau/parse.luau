@@ -37,7 +37,7 @@ export type ParseResult = ast.ParseResult
 export type ExtractCommentsOptions = {
 	--- If true, strip the common leading indentation from block comment content.
 	unindentMultiLineContent: boolean?,
-	--- If true, strip leading whitespace from line comment content (e.g. `-- hello` → `"hello"`).
+	--- If true, strip leading whitespace from line comment content (e.g. `-- hello` -> `"hello"`).
 	stripLineLeadingWhitespace: boolean?,
 	--- Controls merging of adjacent comments. `"none"` (default) keeps each comment separate,
 	--- `"same"` merges adjacent same-kind comments, `"all"` merges all adjacent comments.

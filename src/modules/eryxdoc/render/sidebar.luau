@@ -210,7 +210,7 @@ local function toArticleSidebar(
 end
 
 -- Format a folder name into a human-readable title.
--- "getting-started" → "Getting Started"
+-- "getting-started" -> "Getting Started"
 local function formatFolderName(name: string): string
 	return name:gsub("%-", " "):gsub("(%a)([%w]*)", function(first: string, rest: string)
 		return first:upper() .. rest
@@ -265,7 +265,7 @@ local function buildSidebarArticleSections(
 		end
 	end
 
-	-- Split top-level tree: folders → sections, loose files → topLevel
+	-- Split top-level tree: folders -> sections, loose files -> topLevel
 	local sections: { ArticleSidebarSection } = {}
 	local topLevel: { ArticleSidebarEntry } = {}
 
@@ -296,7 +296,7 @@ local function buildSidebarArticleSections(
 		local hasChildren = next(node.children) ~= nil
 
 		if hasChildren then
-			-- Folder → becomes a titled section
+			-- Folder -> becomes a titled section
 			local title = node.title or (if sectionTitles then sectionTitles[stem] else nil) or formatFolderName(stem)
 			local entries, _ = toArticleSidebar(node.children, activePage, folderTitles, folderOrder)
 			table.insert(sections, { title = title, entries = entries })

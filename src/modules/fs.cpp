@@ -214,7 +214,6 @@ static LuaFile* check_file_any(lua_State* L, int idx = 1) {
     return f;
 }
 
-// Parse Python-style mode string into open flags.
 // "b" suffix is accepted but ignored -- all I/O is binary.
 static int parse_open_flags(const char* mode, bool* readable, bool* writable) {
     *readable = false;

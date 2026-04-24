@@ -393,7 +393,7 @@ local function highlightSignature(code: string): string
 				table.insert(highlighted, '<span class="syn-punct">' .. ch .. "</span>")
 				i += 1
 
-			-- Arrow →
+			-- Arrow ->
 			elseif ch == "\xe2" and codePart:sub(i, i + 2) == "\xe2\x86\x92" then
 				table.insert(highlighted, '<span class="syn-punct">\xe2\x86\x92</span>')
 				i += 3

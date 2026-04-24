@@ -159,8 +159,8 @@ end
 
 -- Collect display titles from .meta files for all directories under `path`.
 -- Returns two maps:
---   sectionTitles: top-level folder name → display title (for sidebar section headings)
---   folderTitles:  nested path key → display title (for sub-directory labels)
+--   sectionTitles: top-level folder name -> display title (for sidebar section headings)
+--   folderTitles:  nested path key -> display title (for sub-directory labels)
 local function collectFolderTitles(path: string): ({ [string]: string }, { [string]: string }, { [string]: number })
 	local sectionTitles: { [string]: string } = {}
 	local folderTitles: { [string]: string } = {}

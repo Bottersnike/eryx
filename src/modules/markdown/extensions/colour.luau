@@ -9,7 +9,7 @@ local function parse_alpha(x: string): boolean
 end
 
 local function isRGB(s: string): boolean
-	-- normalize commas → spaces
+	-- normalize commas -> spaces
 	local body = s:match("^rgba?%((.*)%)$")
 	if not body then
 		return false

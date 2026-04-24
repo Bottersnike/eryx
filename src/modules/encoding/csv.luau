@@ -502,7 +502,6 @@ end
 --[=[
 	Serialize a list of rows into a CSV/TSV string.
 	A line terminator is appended after every row, including the last
-	(matching Python `csv.writer` behaviour).
 	@param rows -- List of rows, where each row is a list of string field values.
 	@param opts -- Generation options. See `GenerateOptions` for available fields.
 	@return string -- The serialized CSV text.
