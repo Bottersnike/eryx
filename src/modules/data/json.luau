@@ -28,6 +28,8 @@
 
 local json = {}
 
+local JSON_ARRAY_MT = {}
+
 -- ---------------------------------------------------------------------------
 -- Encode helpers
 -- ---------------------------------------------------------------------------
@@ -65,8 +67,9 @@ end
 local function isArray(t: { [any]: any }): boolean
 	local n = #t
 	if n == 0 then
-		-- empty table: treat as array only if there are no string keys
-		return next(t) == nil
+		-- Empty tables are ambiguous in Luau, so only a tagged empty table is an
+		-- array. Also require no entries to avoid silently dropping keyed values.
+		return getmetatable(t) == JSON_ARRAY_MT and next(t) == nil
 	end
 	-- Fast check: if the table has exactly n entries and #t == n it's an array.
 	local count = 0
@@ -379,6 +382,7 @@ local function parseArray(s: string, pos: number): ({ any }, number)
 
 	local arr = {}
 	if pos <= #s and string.byte(s, pos) == 0x5D then
+		setmetatable(arr, JSON_ARRAY_MT)
 		return arr, pos + 1
 	end
 
@@ -522,5 +526,32 @@ end
 	```
 ]=]
 json.null = newproxy(false)
+
+--[=[
+	A Luau table with 0 entries could be a json object (`{}`) or a JSON
+	array (`[]`).
+
+	Use this function on the values returned by [[decode]] if you need
+	to decern the difference.
+]=]
+function json.tableIsArray(table: { [any]: any })
+	return isArray(table)
+end
+
+--[=[
+	A Luau table with 0 entries could be a json object (`{}`) or a JSON
+	array (`[]`).
+
+	Use this function on a value being passed to [[encode]] to
+	explicitly mark it as an array
+]=]
+function json.tableAsArray(table: { [number]: any })
+	-- For non-empty tables, only allow tagging if they're already valid arrays.
+	-- This prevents accidental data loss such as { a = 1 } being encoded as [].
+	if next(table) ~= nil and not isArray(table :: any) then
+		error("json.tableAsArray expects an empty table or an existing array table")
+	end
+	return setmetatable(table, JSON_ARRAY_MT)
+end
 
 return json
