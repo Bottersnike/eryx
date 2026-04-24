@@ -6,7 +6,7 @@
 	block/flow sequences and mappings, anchors & aliases, multi-line strings).
 
 	```luau
-	local yaml = require("@eryx/encoding/yaml")
+	local yaml = require("@eryx/data/yaml")
 
 	local str = yaml.encode({ name = "Alice", scores = {100, 97} })
 	print(str)
@@ -301,7 +301,7 @@ end
 	are fully supported.
 
 	```luau
-	local yaml = require("@eryx/encoding/yaml")
+	local yaml = require("@eryx/data/yaml")
 	print(yaml.encode({ a = 1, b = { 2, 3 } }))
 	-- a: 1
 	-- b:
@@ -1199,7 +1199,7 @@ end
 	Only the first document is parsed when `---` separators are present.
 
 	```luau
-	local yaml = require("@eryx/encoding/yaml")
+	local yaml = require("@eryx/data/yaml")
 	local config = yaml.decode([[
 	name: My App
 	version: 1.2

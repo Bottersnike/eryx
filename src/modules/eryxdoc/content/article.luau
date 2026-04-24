@@ -1,6 +1,6 @@
 local fs = require("@eryx/fs")
 local markdown = require("@eryx/markdown")
-local yaml = require("@eryx/encoding/yaml")
+local yaml = require("@eryx/data/yaml")
 
 export type ArticleMeta = { [string]: any }
 

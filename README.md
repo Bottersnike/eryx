@@ -9,7 +9,7 @@ Eryx is a standalone [Luau](https://luau-lang.org/) runtime with a broad standar
 
 ```lua
 local http = require("@eryx/http")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 
 http.serve({ port = 8080 }, function(req)
     return {

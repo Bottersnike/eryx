@@ -18,11 +18,14 @@ add_luau_script_module(encoding/
     src/modules/encoding/base64.luau
     src/modules/encoding/base85.luau
     src/modules/encoding/hex.luau
-    src/modules/encoding/json.luau
     src/modules/encoding/url.luau
-    src/modules/encoding/yaml.luau
     src/modules/encoding/base32.luau
-    src/modules/encoding/csv.luau
+)
+add_luau_script_module(data/
+    src/modules/data/json.luau
+    src/modules/data/yaml.luau
+    src/modules/data/csv.luau
+    src/modules/data/xml.luau
 )
 add_luau_script_module(template/
     src/modules/template/init.luau
@@ -87,7 +90,6 @@ add_luau_script_module(_ffi src/modules/_ffi.luau)
 add_luau_script_module(_ssl src/modules/_ssl.luau)
 add_luau_script_module(sqlite3 src/modules/sqlite3.luau)
 add_luau_script_module(regex src/modules/regex.luau)
-add_luau_script_module(xml src/modules/encoding/xml.luau)
 add_luau_script_module(webview src/modules/webview.luau)
 add_luau_script_module(crypto/hazmat/_crypto src/modules/crypto/hazmat/_crypto.luau)
 add_luau_script_module(websocket src/modules/websocket.luau)

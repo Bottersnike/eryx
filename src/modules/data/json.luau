@@ -5,7 +5,7 @@
 	Luau values.  Follows RFC 8259 with sensible Luau-specific defaults.
 
 	```luau
-	local json = require("@eryx/encoding/json")
+	local json = require("@eryx/data/json")
 
 	local str = json.encode({ name = "Alice", scores = {100, 97} })
 	print(str)  -- '{"name":"Alice","scores":[100,97]}'

@@ -6,7 +6,7 @@
 
 	`stderrLevel` controls when records are routed to stderr.
 ]=]
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local pprint = require("@eryx/pprint")
 local stdio = require("@eryx/stdio")
 local LoggingTypes = require("@self/types")

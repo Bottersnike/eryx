@@ -5,7 +5,7 @@
 	human-readable text or JSON lines (`asJson = true`).
 ]=]
 local fs = require("@eryx/fs")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local pprint = require("@eryx/pprint")
 local LoggingTypes = require("@self/types")
 

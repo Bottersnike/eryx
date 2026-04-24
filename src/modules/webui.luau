@@ -19,7 +19,7 @@ end)
 ]=]
 
 local Signal = require("@eryx/signal")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local wv = require("@eryx/webview")
 
 local WebUi = {}

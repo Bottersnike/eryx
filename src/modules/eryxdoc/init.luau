@@ -19,7 +19,7 @@
 
 local fs = require("@eryx/fs")
 local logging = require("@eryx/logging")
-local yaml = require("@eryx/encoding/yaml")
+local yaml = require("@eryx/encodatading/yaml")
 local modulesApi = require("@self/content/modules")
 local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")
@@ -547,7 +547,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 
 	-- Versioning: update versions.json manifest and copy default version
 	if versionInfo then
-		local json = require("@eryx/encoding/json")
+		local json = require("@eryx/data/json")
 		local manifestPath = BASE_OUTPUT_DIR .. "/versions.json"
 		local versions: { { name: string, label: string, isDefault: boolean? } } = {}
 

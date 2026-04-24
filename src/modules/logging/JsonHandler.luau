@@ -4,7 +4,7 @@
 	Encodes each log record as JSON and writes newline-delimited JSON (NDJSON)
 	to a provided callback, stream-like object, or stdout.
 ]=]
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local stdio = require("@eryx/stdio")
 local LoggingTypes = require("@self/types")
 

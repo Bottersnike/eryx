@@ -1,4 +1,4 @@
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local fs = require("@eryx/fs")
 local luau = require("@eryx/luau/analyze")
 local os = require("@eryx/os")

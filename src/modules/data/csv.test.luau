@@ -1,4 +1,4 @@
-local csv = require("@eryx/encoding/csv")
+local csv = require("@eryx/data/csv")
 local test = require("@eryx/test")
 local suite = test.Suite.new("csv")
 

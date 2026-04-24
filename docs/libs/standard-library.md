@@ -41,10 +41,11 @@ The remainder of this page lists out every available library. Each available lib
 
 ## Text processing
 
-| Library         | Status   | Description                        |
-| --------------- | -------- | ---------------------------------- |
-| [[@eryx/regex]] | Complete | Regular expression support (PCRE2) |
-| Text utils      | Planned  | Wrapping, un-indenting, diffing    |
+| Library           | Status   | Description                        |
+| ----------------- | -------- | ---------------------------------- |
+| [[@eryx/regex]]   | Complete | Regular expression support (PCRE2) |
+| [[@eryx/unicode]] | Complete | Manipulation of Unicode strings    |
+| Text utils        | Planned  | Wrapping, un-indenting, diffing    |
 
 ## Command-line interface
 
@@ -113,18 +114,23 @@ The remainder of this page lists out every available library. Each available lib
 
 ## Encoding
 
-| Library                   | Status                 | Description                      |
-| ------------------------- | ---------------------- | -------------------------------- |
-| [[@eryx/encoding/base64]] | Complete               | Base64 encoding and decoding     |
-| [[@eryx/encoding/base85]] | Complete               | Base85 encoding and decoding     |
-| [[@eryx/encoding/base32]] | Complete               | Base32 encoding and decoding     |
-| [[@eryx/encoding/hex]]    | Complete               | HEX encoding and decoding        |
-| [[@eryx/encoding/url]]    | Complete               | URL-escape encoding and decoding |
-| [[@eryx/encoding/csv]]    | Complete               | CSV parser and writer            |
-| [[@eryx/encoding/json]]   | Complete               | JSON parser and writer           |
-| [[@eryx/encoding/xml]]    | Complete               | XML parser and writer            |
-| [[@eryx/encoding/yaml]]   | Mostly complete[^yaml] | YAML parser and writer           |
-| TOML                      | Planned                | TOML parser and writer           |
+| Library                   | Status   | Description                      |
+| ------------------------- | -------- | -------------------------------- |
+| [[@eryx/encoding/base64]] | Complete | Base64 encoding and decoding     |
+| [[@eryx/encoding/base85]] | Complete | Base85 encoding and decoding     |
+| [[@eryx/encoding/base32]] | Complete | Base32 encoding and decoding     |
+| [[@eryx/encoding/hex]]    | Complete | HEX encoding and decoding        |
+| [[@eryx/encoding/url]]    | Complete | URL-escape encoding and decoding |
+
+## Text-based data formats
+
+| Library             | Status                 | Description            |
+| ------------------- | ---------------------- | ---------------------- |
+| [[@eryx/data/csv]]  | Complete               | CSV parser and writer  |
+| [[@eryx/data/json]] | Complete               | JSON parser and writer |
+| [[@eryx/data/xml]]  | Complete               | XML parser and writer  |
+| [[@eryx/data/yaml]] | Mostly complete[^yaml] | YAML parser and writer |
+| TOML                | Planned                | TOML parser and writer |
 
 [^yaml]: Subset of YAML 1.2
 

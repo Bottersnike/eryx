@@ -1154,7 +1154,7 @@ end
 -- Each entry has: title, path, kind ("article"|"module"|"function"|"type"|"class"),
 -- and a text snippet for matching.
 function Renderer.generateSearchIndex(self: Renderer): string
-	local json = require("@eryx/encoding/json")
+	local json = require("@eryx/data/json")
 	local entries = {}
 
 	-- Index articles (page-level + per-section)

@@ -241,7 +241,7 @@
 ]=]
 
 local Parser = require("@self/parser")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local exception = require("@eryx/exception")
 
 --[=[

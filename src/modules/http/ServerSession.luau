@@ -1,7 +1,7 @@
 local fs = require("@eryx/fs")
 local capability = require("@eryx/capability")
 local hex = require("@eryx/encoding/hex")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 
 --[=[
 	Server-side session helpers for [[http.App]].

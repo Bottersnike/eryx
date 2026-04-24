@@ -152,7 +152,7 @@ add_luau_module(luau/_analysis_native src/modules/luau/analysis.cpp src/modules/
 add_luau_module(date src/modules/date.cpp src/modules/date.luau)
 
 if(ERYX_USE_XML)
-    add_luau_module(_native/xml src/modules/encoding/xml.cpp src/modules/_native/stub.luau
+    add_luau_module(_native/xml src/modules/data/xml.cpp src/modules/_native/stub.luau
         EXTRA_LIBS pugixml
         EXTRA_INCLUDES "${VENDOR_DIR}"
     )

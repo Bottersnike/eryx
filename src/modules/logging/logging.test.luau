@@ -1,5 +1,5 @@
 local fs = require("@eryx/fs")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local logging = require("@eryx/logging")
 local test = require("@eryx/test")
 

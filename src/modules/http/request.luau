@@ -1,6 +1,6 @@
 local body = require("./body")
 local cookieJar = require("./CookieJar")
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local multipart = require("./multipart")
 local request = {}
 
@@ -64,7 +64,7 @@ export type RequestOptions = {
 	--- When provided, the request body is generated automatically unless
 	--- `body` is also set, which is treated as an error.
 	form: { [string]: string | number | boolean | { string | number | boolean } }?,
-	--- JSON payload encoded with `@eryx/encoding/json`.
+	--- JSON payload encoded with `@eryx/data/json`.
 	json: any?,
 	--- Multipart form fields encoded as `multipart/form-data`.
 	multipart: { multipart.MultipartField }?,

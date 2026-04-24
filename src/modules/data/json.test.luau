@@ -1,4 +1,4 @@
-local json = require("@eryx/encoding/json")
+local json = require("@eryx/data/json")
 local test = require("@eryx/test")
 local suite = test.Suite.new("json")
 
