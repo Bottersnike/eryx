@@ -9,6 +9,10 @@ local test = {}
 
 -- ── ANSI colour helpers ──────────────────────────────────────────────────────
 
+local CLEAR_TO_EOL = "\27[K"
+local UP_ONE_LINE = "\27[A"
+local CLEAR_PREVIOUS_LINE = UP_ONE_LINE .. CLEAR_TO_EOL
+
 local COLOR: boolean
 do
 	-- Honour https://no-color.org/
@@ -126,14 +130,19 @@ end
 
 	@param filter  Optional Lua pattern. When provided, only tests whose name
 	               matches the pattern are executed; the rest are skipped.
-	@return RunTotals -- pass/fail/skip counts.
+	@param compact Print all tests on an accumulating single line
+	@return pass/fail/skip counts.
 ]=]
-function Suite.run(self: Suite, filter: string?): RunTotals
+function Suite.run(self: Suite, filter: string?, compact: boolean?): RunTotals
+	local t0 = os.clock()
+
 	local passed = 0
 	local failed = 0
 	local skipped = 0
 
-	stdio.write(bold(cyan(`  > {self.name}\n`)))
+	local suiteNamePrefix = bold(cyan(`  > {self.name}`))
+
+	stdio.write(suiteNamePrefix .. "\n")
 
 	if self.beforeAll then
 		local r = table.pack(pcall(self.beforeAll :: (self: Suite) -> (), self))
@@ -144,7 +153,9 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 		end
 	end
 
-	for _, t in self.tests do
+	local firstFailure = true
+
+	for n, t in self.tests do
 		-- Filter by name pattern
 		if filter and not string.find(t.name, filter) then
 			skipped += 1
@@ -158,20 +169,42 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 			continue
 		end
 
+		if compact then
+			if n ~= 1 then
+				stdio.write(UP_ONE_LINE)
+			end
+			stdio.write(CLEAR_PREVIOUS_LINE)
+			stdio.write(suiteNamePrefix .. ` {n}/{#self.tests}\n`)
+			stdio.write(CLEAR_TO_EOL)
+
+			stdio.write(`      {dim(t.name)}\n`)
+		end
+
 		if self.beforeEach then
 			pcall(self.beforeEach :: () -> ())
 		end
 
-		local t0 = os.clock()
+		local t1 = os.clock()
 		local ok, err = pcall(t.runner)
-		local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
+		local elapsed = string.format("%.2fms", (os.clock() - t1) * 1000)
 
 		-- Check if the test called test.skip() / test.skipIf()
 		if not ok and type(err.data) == "table" and (err.data :: SkipSignal).__skip == SKIP_SENTINEL then
 			skipped += 1
 			local reason = (err.data :: SkipSignal).reason
 			local label = if reason then `(skipped: {reason})` else "(skipped)"
-			stdio.write(`    {dim("-")} {dim(t.name)} {dim(label)}\n`)
+
+			if compact then
+				stdio.write(CLEAR_PREVIOUS_LINE .. CLEAR_PREVIOUS_LINE)
+				if firstFailure then
+					stdio.write(suiteNamePrefix .. "\n")
+					firstFailure = false
+				end
+
+				stdio.write(`    {dim("-")} {dim(t.name)} {dim(label)}\n\n\n`)
+			else
+				stdio.write(`    {dim("-")} {dim(t.name)} {dim(label)}\n`)
+			end
 			table.insert(self.results, {
 				name = t.name,
 				passed = true,
@@ -181,7 +214,9 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 			})
 		elseif ok then
 			passed += 1
-			stdio.write(`    {green("+")} {dim(t.name)} {dim(elapsed)}\n`)
+			if not compact then
+				stdio.write(`    {green("+")} {dim(t.name)} {dim(elapsed)}\n`)
+			end
 			table.insert(self.results, {
 				name = t.name,
 				passed = true,
@@ -191,9 +226,20 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 		else
 			failed += 1
 			local msg = fmtErr(err)
+
+			if compact then
+				stdio.write(CLEAR_PREVIOUS_LINE .. CLEAR_PREVIOUS_LINE)
+				if firstFailure then
+					stdio.write(suiteNamePrefix .. "\n")
+					firstFailure = false
+				end
+			end
 			stdio.write(`    {red("!")} {bold(t.name)} {dim(elapsed)}\n`)
 			for line in msg:gmatch("[^\n]+") do
 				stdio.write(`      {red(line)}\n`)
+			end
+			if compact then
+				stdio.write("\n\n")
 			end
 			table.insert(self.results, {
 				name = t.name,
@@ -211,6 +257,23 @@ function Suite.run(self: Suite, filter: string?): RunTotals
 
 	if self.afterAll then
 		pcall(self.afterAll :: () -> ())
+	end
+
+	if compact then
+		stdio.write(CLEAR_PREVIOUS_LINE .. CLEAR_PREVIOUS_LINE)
+		local summary: { string } = {}
+		if passed ~= 0 then
+			table.insert(summary, green(`{passed} passed`))
+		end
+		if failed ~= 0 then
+			table.insert(summary, red(`{failed} failed`))
+		end
+		if skipped ~= 0 then
+			table.insert(summary, dim(`{skipped} skipped`))
+		end
+		local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
+
+		stdio.write(suiteNamePrefix .. `: {table.concat(summary, ", ")} ({elapsed})\n`)
 	end
 
 	return { passed = passed, failed = failed, skipped = skipped }
@@ -594,7 +657,7 @@ function test.runAll(path: string, options: RunOptions?)
 	type FailEntry = { suite: string, name: string, err: string }
 	local failures: { FailEntry } = {}
 
-	stdio.write(bold(`\nRunning tests in {path}\n\n`))
+	stdio.write(bold(`\nRunning tests in {path}\n`))
 
 	local function walk(dir: string)
 		local entries = fs.listDir(dir)
@@ -611,12 +674,11 @@ function test.runAll(path: string, options: RunOptions?)
 					continue
 				end
 				local s = suite :: Suite
-				local totals = s:run(opts.filter)
+				local totals = s:run(opts.filter, true)
 				totalPassed += totals.passed
 				totalFailed += totals.failed
 				totalSkipped += totals.skipped
 				suiteCount += 1
-				stdio.write("\n")
 				for _, r in s.results do
 					if not r.passed and not r.skipped then
 						local fe: FailEntry = { suite = s.name, name = r.name, err = (r.err or "") :: string }
@@ -634,7 +696,7 @@ function test.runAll(path: string, options: RunOptions?)
 	local total = totalPassed + totalFailed + totalSkipped
 	local sep = string.rep("-", 40)
 
-	stdio.write(`{sep}\n`)
+	stdio.write(`\n{sep}\n`)
 	stdio.write(bold(` Suites:  {suiteCount}\n`))
 
 	local testLine = ""

@@ -122,9 +122,10 @@ local function cleanup(state: TempState)
 	end
 
 	if fs.exists(state.path) then
-		pcall(function()
-			fs.remove(state.path)
-		end)
+		local ok = fs.remove(state.path)
+		if not ok or fs.exists(state.path) then
+			error(`tempfile: failed to remove temporary path: {state.path}`)
+		end
 	end
 end
 

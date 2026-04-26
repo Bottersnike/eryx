@@ -85,7 +85,21 @@ add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(stream src/modules/stream.luau)
 add_luau_script_module(project src/modules/project.luau)
-add_luau_script_module(pkg/ src/modules/pkg/init.luau)
+add_luau_script_module(pkg/
+    src/modules/pkg/init.luau
+    src/modules/pkg/config.luau
+    src/modules/pkg/dependencies.luau
+    src/modules/pkg/install.luau
+    src/modules/pkg/lockfile.luau
+    src/modules/pkg/plan.luau
+    src/modules/pkg/util.luau
+)
+add_luau_script_module(pkg/sources/
+    src/modules/pkg/sources/init.luau
+    src/modules/pkg/sources/types.luau
+    src/modules/pkg/sources/local.luau
+    src/modules/pkg/sources/git.luau
+)
 add_luau_script_module(test src/modules/test.luau)
 add_luau_script_module(capability src/modules/capability.luau)
 add_luau_script_module(luau/

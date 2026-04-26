@@ -28,6 +28,7 @@ export type ProjectMetadata = {
 	license: string?,
 	licenseFile: string?,
 	keywords: { string }?,
+	sourceRoot: string?,
 }
 
 export type Links = {
@@ -250,6 +251,7 @@ local function parseProjectMetadata(value: any): ProjectMetadata
 		license = expectOptionalString(rawProject.license, "eryx.project.license"),
 		licenseFile = expectOptionalString(rawProject["license-file"], "eryx.project.license-file"),
 		keywords = expectOptionalStringArray(rawProject.keywords, "eryx.project.keywords"),
+		sourceRoot = expectOptionalString(rawProject["source-root"], "eryx.project.source-root"),
 	}
 end
 

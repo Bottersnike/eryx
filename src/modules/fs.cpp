@@ -959,13 +959,74 @@ static int fs_mkdir(lua_State* L) {
     return 1;
 }
 
+// Depth-first recursive delete. On Windows we use the Win32 API directly
+// with the \\?\ extended-length prefix so that paths longer than MAX_PATH
+// (260 chars) are handled correctly. std::filesystem silently fails on long
+// paths without this prefix.
+static void forceRemoveAll(const std::wstring& path, std::error_code& ec) {
+    ec.clear();
+#ifdef _WIN32
+
+    // Build the \\?\ prefixed version for all API calls.
+    std::wstring lp = L"\\\\?\\" + path;
+
+    DWORD attrs = GetFileAttributesW(lp.c_str());
+    if (attrs == INVALID_FILE_ATTRIBUTES) return;  // doesn't exist — nothing to do
+
+    if (attrs & FILE_ATTRIBUTE_DIRECTORY) {
+        // Ensure we can list the directory.
+        SetFileAttributesW(lp.c_str(), attrs & ~FILE_ATTRIBUTE_READONLY);
+
+        WIN32_FIND_DATAW fd;
+        HANDLE hFind = FindFirstFileW((lp + L"\\*").c_str(), &fd);
+        if (hFind != INVALID_HANDLE_VALUE) {
+            do {
+                if (wcscmp(fd.cFileName, L".") == 0 || wcscmp(fd.cFileName, L"..") == 0) continue;
+                forceRemoveAll(path + L"\\" + fd.cFileName, ec);
+                if (ec) break;
+            } while (FindNextFileW(hFind, &fd));
+            FindClose(hFind);
+        }
+
+        SetFileAttributesW(lp.c_str(), FILE_ATTRIBUTE_NORMAL);
+        if (!RemoveDirectoryW(lp.c_str()))
+            ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+    } else {
+        SetFileAttributesW(lp.c_str(), FILE_ATTRIBUTE_NORMAL);
+        if (!DeleteFileW(lp.c_str()))
+            ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
+    }
+#else
+    std::error_code ignore;
+
+    if (!fs::exists(p, ignore)) return;
+
+    if (fs::is_directory(p, ignore)) {
+        fs::permissions(p, fs::perms::owner_read | fs::perms::owner_write | fs::perms::owner_exec,
+                        fs::perm_options::add, ignore);
+        for (auto& entry : fs::directory_iterator(p, ec)) {
+            if (ec) return;
+            forceRemoveAll(entry.path(), ec);
+            if (ec) return;
+        }
+    }
+
+    fs::permissions(p, fs::perms::owner_write, fs::perm_options::add, ignore);
+    fs::remove(p, ec);
+#endif
+}
+
 // fs.remove(path) -> bool
 static int fs_remove(lua_State* L) {
     std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
-    // remove_all implements "rm -rf", remove is for empty dirs or files
-    uintmax_t count = fs::remove_all(path, ec);
-    lua_pushboolean(L, count > 0 && !ec);
+#ifdef _WIN32
+    forceRemoveAll(fs::path(path).wstring(), ec);
+#else
+    forceRemoveAll(fs::path(path), ec);
+#endif
+    std::error_code ignore;
+    lua_pushboolean(L, !ec && !fs::exists(path, ignore));
     return 1;
 }
 
