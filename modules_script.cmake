@@ -27,6 +27,13 @@ add_luau_script_module(data/
     src/modules/data/csv.luau
     src/modules/data/xml.luau
 )
+add_luau_script_module(data/toml/
+    src/modules/data/toml/init.luau
+    src/modules/data/toml/shared.luau
+    src/modules/data/toml/encoder.luau
+    src/modules/data/toml/decoder.luau
+    src/modules/data/toml/cst.luau
+)
 add_luau_script_module(template/
     src/modules/template/init.luau
     src/modules/template/parser.luau
@@ -70,12 +77,15 @@ add_luau_script_module(markdown/rules/
 
 add_luau_script_module(pprint src/modules/pprint.luau)
 add_luau_script_module(argparse src/modules/argparse.luau)
+add_luau_script_module(semver src/modules/semver.luau)
 add_luau_script_module(mime src/modules/mime.luau)
 add_luau_script_module(path src/modules/path.luau)
 add_luau_script_module(signal src/modules/signal.luau)
 add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
 add_luau_script_module(stream src/modules/stream.luau)
+add_luau_script_module(project src/modules/project.luau)
+add_luau_script_module(pkg/ src/modules/pkg/init.luau)
 add_luau_script_module(test src/modules/test.luau)
 add_luau_script_module(capability src/modules/capability.luau)
 add_luau_script_module(luau/

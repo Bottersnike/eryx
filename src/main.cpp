@@ -616,20 +616,24 @@ int main_repl() {
     return exitCode;
 }
 
-static std::filesystem::path getScriptsDir() {
+static std::filesystem::path getExecutablePath() {
     namespace fs = std::filesystem;
 #if defined(_WIN32)
     wchar_t exebuf[MAX_PATH];
     DWORD exelen = GetModuleFileNameW(nullptr, exebuf, MAX_PATH);
-    return fs::path(std::wstring(exebuf, exelen)).parent_path() / "scripts";
+    return fs::path(std::wstring(exebuf, exelen));
 #elif defined(__APPLE__)
     char exebuf[4096];
     uint32_t exelen = sizeof(exebuf);
     _NSGetExecutablePath(exebuf, &exelen);
-    return fs::canonical(exebuf).parent_path() / "scripts";
+    return fs::canonical(exebuf);
 #else
-    return fs::canonical("/proc/self/exe").parent_path() / "scripts";
+    return fs::canonical("/proc/self/exe");
 #endif
+}
+
+static std::filesystem::path getScriptsDir() {
+    return getExecutablePath().parent_path() / "scripts";
 }
 
 static std::string shell_single_quote(const std::string& value) {
@@ -1084,12 +1088,27 @@ int main(int argc, const char* argv[]) {
         return 0;
     }
 
+    if (strcmp(command, "__run-file") == 0) {
+        if (argc < 3) {
+            main_raise_usage(argv, "__run-file <script>");
+            return -1;
+        }
+        // Internal helper used by scripts/run.luau after it has resolved a
+        // project script name to a concrete file path.
+        eryx_set_cliargs_offset(3);
+        return main_run(argv[2]);
+    }
+
     if (strcmp(command, "run") == 0) {
         if (argc < 3) {
             main_raise_usage(argv, "run <script>");
             return -1;
         }
-        // "eryx run script.luau ..." -> skip exe, "run", and script path
+        ScopedEnvVar exePath("ERYX_EXE_PATH", getExecutablePath().string().c_str());
+        int result = main_builtin_script(argc, argv, "run");
+        if (result != -1) return result;
+
+        // Fallback for distributions missing scripts/run.luau.
         eryx_set_cliargs_offset(3);
         return main_run(argv[2]);
     }

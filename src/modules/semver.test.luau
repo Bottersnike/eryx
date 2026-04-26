@@ -1,0 +1,58 @@
+local test = require("@eryx/test")
+local semver = require("@eryx/semver")
+
+local suite = test.Suite.new("semver")
+
+suite:test("parses and formats semver", function()
+	local version = semver.parse("1.2.3-alpha.1+build.5")
+	test.expect(version.major):toBe(1)
+	test.expect(version.minor):toBe(2)
+	test.expect(version.patch):toBe(3)
+	test.expect(version.prerelease):toBe("alpha.1")
+	test.expect(version.build):toBe("build.5")
+	test.expect(semver.format(version)):toBe("1.2.3-alpha.1+build.5")
+end)
+
+suite:test("rejects invalid semver strings", function()
+	test.expect(semver.tryParse("1.2")):toBe(nil)
+	test.expect(semver.tryParse("1.2.03")):toBe(nil)
+	test.expect(semver.tryParse("1.2.3-01")):toBe(nil)
+	test.expect(semver.tryParse("1.2.3-")):toBe(nil)
+end)
+
+suite:test("compares semver precedence", function()
+	test.expect(semver.lessThan("1.0.0-alpha", "1.0.0-alpha.1")):toBeTrue()
+	test.expect(semver.lessThan("1.0.0-alpha.1", "1.0.0-alpha.beta")):toBeTrue()
+	test.expect(semver.lessThan("1.0.0-beta.11", "1.0.0-rc.1")):toBeTrue()
+	test.expect(semver.lessThan("1.0.0-rc.1", "1.0.0")):toBeTrue()
+	test.expect(semver.equals("1.0.0+one", "1.0.0+two")):toBeTrue()
+end)
+
+suite:test("matches exact and comparator ranges", function()
+	test.expect(semver.satisfies("1.2.3", "1.2.3")):toBeTrue()
+	test.expect(semver.satisfies("1.2.4", "1.2.3")):toBeFalse()
+	test.expect(semver.satisfies("1.5.0", ">=1.2.3 <2.0.0")):toBeTrue()
+	test.expect(semver.satisfies("2.0.0", ">=1.2.3 <2.0.0")):toBeFalse()
+end)
+
+suite:test("matches caret ranges", function()
+	test.expect(semver.satisfies("1.9.9", "^1.2.3")):toBeTrue()
+	test.expect(semver.satisfies("2.0.0", "^1.2.3")):toBeFalse()
+	test.expect(semver.satisfies("0.2.9", "^0.2.3")):toBeTrue()
+	test.expect(semver.satisfies("0.3.0", "^0.2.3")):toBeFalse()
+	test.expect(semver.satisfies("0.0.4", "^0.0.3")):toBeFalse()
+end)
+
+suite:test("matches tilde ranges", function()
+	test.expect(semver.satisfies("1.2.9", "~1.2.3")):toBeTrue()
+	test.expect(semver.satisfies("1.3.0", "~1.2.3")):toBeFalse()
+	test.expect(semver.satisfies("0.2.9", "~0.2.3")):toBeTrue()
+end)
+
+suite:test("matches or ranges", function()
+	test.expect(semver.satisfies("1.5.0", "^1.2.3 || ^2.0.0")):toBeTrue()
+	test.expect(semver.satisfies("2.1.0", "^1.2.3 || ^2.0.0")):toBeTrue()
+	test.expect(semver.satisfies("3.0.0", "^1.2.3 || ^2.0.0")):toBeFalse()
+end)
+
+return suite

@@ -19,7 +19,7 @@
 
 local fs = require("@eryx/fs")
 local logging = require("@eryx/logging")
-local yaml = require("@eryx/encodatading/yaml")
+local yaml = require("@eryx/data/yaml")
 local modulesApi = require("@self/content/modules")
 local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")

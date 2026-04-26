@@ -318,9 +318,9 @@ end
 
 -- Type checking ---------------------------------------------------------------
 
---- Assert that `type(value) == expected`.
+--- Assert that `typeof(value) == expected`.
 function Expecter.toBeType(self: Expecter, expected: string)
-	local got = type(self.values[1])
+	local got = typeof(self.values[1])
 	if got ~= expected then
 		error(`Expected type "{expected}" but got "{got}"`, 2)
 	end
