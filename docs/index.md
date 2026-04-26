@@ -34,3 +34,20 @@ end, "https://example.org")
 ```
 
 All it takes is `@eryx/`. [[Welcome to Eryx|Get started now]].
+
+<script>
+(function() {
+  var ua = navigator.userAgent;
+  var url = /Windows/i.test(ua) ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-windows.zip'
+          : /Linux/i.test(ua)   ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-linux.zip'
+          : null;
+  if (!url) return;
+  var actions = document.querySelector('.md-hero-actions');
+  if (!actions) return;
+  var a = document.createElement('a');
+  a.className = 'md-hero-action';
+  a.href = url;
+  a.textContent = 'Download';
+  actions.insertBefore(a, actions.lastElementChild);
+})();
+</script>
