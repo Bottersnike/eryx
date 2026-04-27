@@ -544,6 +544,10 @@ void eryx_coerce_to_exception(lua_State* L) {
 
 LuaException* eryx_get_exception(lua_State* L, int idx) {
     LuaException* exception = NULL;
+    // Guard against lightuserdata
+    if (lua_tolightuserdata(L, idx) != NULL) {
+        return NULL;
+    }
     void* p = lua_touserdata(L, idx);
     if (p != NULL) {
         if (((LuaException*)p)->tag == LUA_EXCEPTION_TAG) {

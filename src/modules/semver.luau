@@ -199,6 +199,22 @@ function semver.tryParse(source: string): Version?
 end
 
 --[=[
+	Return a normalized SemVer range string.
+]=]
+function semver.formatRange(range: Range): string
+	local components = {}
+	for _, i in range.sets do
+		local sub = {}
+		for _, j in i do
+			table.insert(sub, j.op .. semver.format(j.version))
+		end
+		table.insert(components, table.concat(sub, "||"))
+	end
+
+	return table.concat(components, " ")
+end
+
+--[=[
 	Return a normalized SemVer string.
 ]=]
 function semver.format(version: Version | string): string

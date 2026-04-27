@@ -10,7 +10,7 @@ The rest of this page focuses on what's available from CommonMark and GFM in the
 
 Headings break up your document into sections. There's one right above this line. Markdown supports up to 6 levels of headings, written as:
 
-```
+```md
 # First-level heading
 ## Second-level heading
 ### Third-level heading
@@ -23,7 +23,7 @@ These headings can be used to generate an automatic table of contents for a page
 
 An alternative style for headings, matching setext, can be used:
 
-```
+```md
 First-level heading
 ===================
 
@@ -48,7 +48,7 @@ Inline styles can be used to decorate the text within a paragraph, adding **bold
 
 To create a quote, prefix the line with `> `:
 
-````
+````md
 > I'm a quote
 > > I'm a nested quote
 > ## Quotes can contain other items
@@ -77,7 +77,7 @@ Links can be defined using shorthand: `<http://example.org>`, <http://example.or
 
 The definition for a link can be defined on a different line:
 
-```
+```md
 A good example website is [foo] run by iana.
 
 [foo]: http://example.com
@@ -99,7 +99,7 @@ By default, all built-in markdown extensions are enabled.
 
 Two style of tables are supported. The standard GFM style:
 
-```
+```md
 | Heading | Heading |
 | ------- | ------- |
 | Cell 1  | Cell 2  |
@@ -108,7 +108,7 @@ Two style of tables are supported. The standard GFM style:
 
 And the PHP markdown extensions style:
 
-```
+```md
 Heading | Heading
 --------|--------
 Cell 1  | Cell 2
@@ -124,7 +124,7 @@ Both render the same:
 
 A column can be centred by writing the heading underline as `:---:` instead of `-----`. For example
 
-```
+```md
 | Heading | Heading |
 | :-----: | ------- |
 | Cell 1  | Cell 2  |
@@ -150,7 +150,7 @@ If a code block contains only a CSS colour, it will show a preview of that colou
 
 Footnotes can be useful to reference information in a document that you don't want to present right away. They are defined using the following syntax:
 
-```
+```md
 Footnotes[^1] are cool.
 
 [^1]: This is the footnote
@@ -167,7 +167,7 @@ An admonition allows you to place a chunk of text within a call-out box.
 
 The following syntax is used to define one:
 
-```
+```md
 :::warning
 This is a useful warning
 :::
@@ -190,7 +190,7 @@ The admonition type specified after `:::` can be anything you want, though eryxd
 
 Tabs present multiple "pages" of content within a single tabbed notebook.
 
-```
+```md
 === Tab 1
 This is the content of tab 1
 ===
@@ -212,7 +212,7 @@ The closing `===` can be omitted if followed immediately by a new tab. On the oc
 
 Task lists render as a normal list, but with checkboxes:
 
-```
+```md
 - [ ] Foo
 - [ ] Bar
 - [x] Buzz

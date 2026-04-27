@@ -117,10 +117,8 @@ function webview.create(options: WebViewOptions?): WebViewHandle
 	return nil :: any
 end
 
-return table.freeze(
-	capability.require(
-		"@eryx/_native/webview",
-		"WebView window support",
-		"Use a Windows build with WebView support to require @eryx/webview."
-	)
+return capability.require(
+	"@eryx/_native/webview",
+	"WebView window support",
+	"Use a Windows build with WebView support to require @eryx/webview."
 ) :: typeof(webview)

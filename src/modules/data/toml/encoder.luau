@@ -78,9 +78,9 @@ local function joinPath(path: { string }, upto: number): { string }
 	return out
 end
 
-local function canPatchScalarValue(value: any): boolean
+local function canPatchAssignmentValue(value: any): boolean
 	local t = type(value)
-	return t == "string" or t == "number" or t == "boolean"
+	return t == "string" or t == "number" or t == "boolean" or t == "table"
 end
 
 local function decoratedLine(
@@ -166,7 +166,7 @@ local function tryPatchCSTScalarAssignments(cstValue: any, sort: boolean): strin
 				continue
 			end
 
-			if not canPatchScalarValue(value) then
+			if not canPatchAssignmentValue(value) then
 				return nil
 			end
 
@@ -184,7 +184,7 @@ local function tryPatchCSTScalarAssignments(cstValue: any, sort: boolean): strin
 			if value == nil then
 				continue
 			end
-			if not canPatchScalarValue(value) then
+			if not canPatchAssignmentValue(value) then
 				return nil
 			end
 			if #path == 1 then

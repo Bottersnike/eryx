@@ -1045,12 +1045,16 @@ local function parseKeyValue(parser: Parser)
 		parserError(parser, "unexpected trailing characters")
 	end
 
-	if parser.captureCST and type(value) ~= "table" then
+	if parser.captureCST then
 		local preTrailing = string.sub(parser.source, lineStart, suffixStart - 1)
+
+		-- Only preserve single-line assignments.
+		-- This includes scalars, inline tables, and single-line arrays.
 		if not string.find(preTrailing, "[\r\n]") then
 			local suffixEndExclusive = parser.pos
 			local newline = ""
 			local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
+
 			if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
 				newline = "\r\n"
 			elseif b == 0x0A then

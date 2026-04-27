@@ -958,13 +958,13 @@ h4 {
 .article-content .md-paragraph:not(:last-child),
 .article-content .md-list:not(:last-child),
 .article-content .md-list:not(:last-child) {
-    margin-bottom: 1.25em;
+    margin-bottom: 1em;
 }
 .article-content .md-quote:not(:first-child),
 .article-content .md-paragraph:not(:first-child),
 .article-content .md-list:not(:first-child),
 .article-content .md-list:not(:first-child) {
-    margin-top: 1.25em;
+    margin-top: 1em;
 }
 .md-list_item > .md-list {
     margin-top: 0 !important;
@@ -1274,6 +1274,9 @@ pre.md-code_block:last-child {
     margin-bottom: 0.4rem;
     font-size: 0.88rem;
     letter-spacing: 0.03em;
+}
+.md-admonition-title + .md-paragraph {
+    margin-top: 0 !important;
 }
 
 .md-admonition p {

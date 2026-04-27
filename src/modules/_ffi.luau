@@ -200,10 +200,8 @@ _ffi.i32 = (nil :: any) :: ForeignType
 --- Signed 64-bit integer.
 _ffi.i64 = (nil :: any) :: ForeignType
 
-return table.freeze(
-	capability.require(
-		"@eryx/_native/_ffi",
-		"Foreign function interface support",
-		"Use a build with FFI support on a supported platform to require @eryx/_ffi."
-	)
+return capability.require(
+	"@eryx/_native/_ffi",
+	"Foreign function interface support",
+	"Use a build with FFI support on a supported platform to require @eryx/_ffi."
 ) :: typeof(_ffi)

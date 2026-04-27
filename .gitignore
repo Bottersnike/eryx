@@ -4,7 +4,12 @@
 
 # For local development
 .luaurc
-
+eryx.toml
+eryx.lock
+/eryx_packages/
+/dummy_repos_for_package_management/
+/src/modules/data/toml-test/
+/src/modules/data/toml_spec.test.luau
 /src/temp_projects/
 
 # clangd

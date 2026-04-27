@@ -23,7 +23,7 @@ For any resolved base path, eryx checks the following candidates in order:
 3. `<path>/init.luau`
 4. `<path>/init.lua`
 
-`.luau` is always preferred over `.lua`. Files ending in `.config.luau` are always excluded from require resolution.
+`.luau` is always preferred over `.lua`. Files named `.config.luau` are always excluded from require resolution.
 
 ## Native Modules
 
@@ -53,7 +53,7 @@ typedef struct {
 } LuauModuleInfo;
 ```
 
-Both `abiVersion` and `luauVersion` are checked at load time. A mismatch is a hard error - this prevents subtle crashes from ABI drift between the runtime and the module.
+Both `abiVersion` and `luauVersion` are checked at load time. A mismatch is a hard error -- this prevents subtle crashes from ABI drift between the runtime and the module.
 
 The entrypoint function receives a fresh `lua_State*` thread and returns the number of values pushed:
 
@@ -195,7 +195,3 @@ Inside an `init.luau` file:
 - `../` goes up from the parent directory
 
 This means `@self/sibling` from `mydir/init.luau` resolves to `mydir/sibling.luau`, while `./sibling` resolves to `<parent>/sibling.luau`.
-
-## Require Caching
-
-All resolved modules are cached in the `_LOADED` registry table. The cache key includes both the module type and path (e.g. `0:path` for filesystem, `1:path` for VFS), so the same path in different layers won't collide. Subsequent `require()` calls for the same module return the cached value without re-executing the module.

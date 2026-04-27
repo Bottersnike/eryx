@@ -10,7 +10,7 @@
 
 	Outputs the value of an expression, coerced to a string.
 
-	```
+	```template
 	{{ name }}              -- variable lookup from context
 	{{ user.email }}        -- nested/dotted property access
 	{{ 42 }}               -- numeric literal (integer or decimal)
@@ -28,7 +28,7 @@
 
 	Ignored by the engine; produces no output.
 
-	```
+	```template
 	{# This is a comment #}
 	```
 
@@ -37,7 +37,7 @@
 	Conditional blocks. The condition is truthy/falsy (`nil` and `false`
 	are falsy; everything else is truthy).
 
-	```
+	```template
 	{% if logged_in then %}Welcome!{% end %}
 
 	{% if count == 0 then %}
@@ -53,14 +53,14 @@
 
 	Conditions can be chained with `and` / `or`:
 
-	```
+	```template
 	{% if role == "admin" and active then %}...{% end %}
 	{% if x or y then %}...{% end %}
 	```
 
 	A bare expression (no operator) is treated as a truthiness check:
 
-	```
+	```template
 	{% if user then %}...{% end %}
 	{% if true then %}...{% end %}
 	{% if not logged_in then %}...{% end %}
@@ -71,7 +71,7 @@
 	Iterates over key/value pairs of a table expression. Both loop
 	variables are injected into the context and restored after the loop.
 
-	```
+	```template
 	{% for i, item in items do %}
 	  {{ i }}: {{ item.name }}
 	{% end %}
@@ -82,7 +82,7 @@
 	Counts from `start` to `end` (inclusive). The loop variable is
 	injected into the context and restored after the loop.
 
-	```
+	```template
 	{% for i = 1, 5 do %}
 	  Row {{ i }}
 	{% end %}
@@ -93,7 +93,7 @@
 	Defines a reusable template block. Arguments become context variables
 	within the macro body.
 
-	```
+	```template
 	{% macro greeting(name, title) %}
 	  Hello, {{ title }} {{ name }}!
 	{% end %}
@@ -102,7 +102,7 @@
 	Call a macro with `{% use %}` to provide a body, or `{{ }}` for a
 	simple inline call:
 
-	```
+	```templateHtml
 	{% use greeting("Alice", "Dr.") %}
 	  <p>Extra content here</p>
 	{% end %}
@@ -117,7 +117,7 @@
 	can fill with custom content. Each slot has a default body that is
 	used when the caller does not provide a `{% fill %}` for it.
 
-	```
+	```templateHtml
 	{% macro card(title) %}
 	  <div class="card">
 	    <h2>{{ title }}</h2>
@@ -141,7 +141,7 @@
 	Inlines another template file at parse time. The path is resolved
 	relative to the directory of the current template file.
 
-	```
+	```templateHtml
 	{% include "header.html" %}{% end %}
 	<main>Content</main>
 	{% include "footer.html" %}{% end %}
@@ -152,7 +152,7 @@
 	slot, and named slots can be filled with `{% fill %}` - just like
 	macro calls.
 
-	```
+	```templateHtml
 	{% include "layout.html" %}
 	  {% fill sidebar %}<nav>Custom nav</nav>{% end %}
 	  {% fill content %}<p>Page body here</p>{% end %}
@@ -162,7 +162,7 @@
 	Inside the included file, use `{% slot %}` to define the placeholder
 	regions that callers can fill:
 
-	```
+	```templateHtml
 	{# layout.html #}
 	<div class="sidebar">{% slot sidebar %}<nav>Default nav</nav>{% end %}</div>
 	<div class="content">{% slot content %}<p>Default content</p>{% end %}</div>

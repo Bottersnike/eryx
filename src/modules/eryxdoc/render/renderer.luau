@@ -184,10 +184,7 @@ function Renderer.new(
 				return this:_resolveWikiLinkInfo(link, this.currentMod)
 			end),
 		},
-		codeLanguages = {
-			["luau"] = highlight.highlightLuau,
-			["sh"] = highlight.highlightShell,
-		},
+		codeLanguages = highlight,
 		useCrlf = false,
 		annotateHtml = true,
 	})
@@ -197,10 +194,7 @@ function Renderer.new(
 				return this:_resolveWikiLink(link, this.currentMod)
 			end),
 		},
-		codeLanguages = {
-			["luau"] = highlight.highlightLuau,
-			["sh"] = highlight.highlightShell,
-		},
+		codeLanguages = highlight,
 		useCrlf = false,
 		annotateHtml = true,
 	})
@@ -258,7 +252,7 @@ function Renderer._renderTypeHoverHtml(self: Renderer, signatureText: string?): 
 	if not signatureText or signatureText == "" then
 		return nil
 	end
-	return `<pre class="type-hover-card__code">{highlight.highlightSignature(signatureText)}</pre>`
+	return `<pre class="type-hover-card__code">{highlight.LUAU_SIGNATURE(signatureText)}</pre>`
 end
 
 function Renderer._renderSymbolHoverHtml(
@@ -271,12 +265,12 @@ function Renderer._renderSymbolHoverHtml(
 		self.currentMod = currentMod
 		local docHtml = self.hoverMarkdown:renderHtml(self.hoverMarkdown:parse(docText))
 		local signatureHtml = if signatureText and signatureText ~= ""
-			then `<div class="type-hover-card__signature-inline">{highlight.highlightSignature(signatureText)}</div>`
+			then `<div class="type-hover-card__signature-inline">{highlight.LUAU_SIGNATURE(signatureText)}</div>`
 			else ""
 		return `<div class="type-hover-card__doc">{docHtml}{signatureHtml}</div>`
 	end
 	if signatureText and signatureText ~= "" then
-		return `<pre class="type-hover-card__code">{highlight.highlightSignature(signatureText)}</pre>`
+		return `<pre class="type-hover-card__code">{highlight.LUAU_SIGNATURE(signatureText)}</pre>`
 	end
 	return nil
 end
@@ -700,8 +694,8 @@ function Renderer.renderPage(
 		isActivePage = function(x: string)
 			return false
 		end,
-		highlight = highlight.highlightLuau,
-		highlightSig = highlight.highlightSignature,
+		highlight = highlight.luau,
+		highlightSig = highlight.LUAU_SIGNATURE,
 		signatureHtml = signatureHtml,
 		signatureHtmlLinks = signatureHtmlLinks,
 		typeLink = function(typeName: string, ctx: { [string]: any }): string

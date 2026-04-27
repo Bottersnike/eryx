@@ -180,6 +180,8 @@ function xml.document(): XmlDocument
 	return nil :: any
 end
 
-return table.freeze(
-	capability.require("@eryx/_native/xml", "XML parsing support", "Enable XML support to use @eryx/xml.")
-) :: typeof(xml)
+return capability.require(
+		"@eryx/_native/xml",
+		"XML parsing support",
+		"Enable XML support to use @eryx/xml."
+	) :: typeof(xml)

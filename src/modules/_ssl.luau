@@ -303,6 +303,8 @@ _ssl.VERIFY_REQUIRED = 2 :: number
 
 _ssl.SslContext = {} :: SslContext
 
-return table.freeze(
-	capability.require("@eryx/_native/_ssl", "TLS/SSL support", "Enable cryptography support to use @eryx/_ssl.")
-) :: typeof(_ssl)
+return capability.require(
+		"@eryx/_native/_ssl",
+		"TLS/SSL support",
+		"Enable cryptography support to use @eryx/_ssl."
+	) :: typeof(_ssl)

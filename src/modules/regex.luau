@@ -188,6 +188,8 @@ regex.ENDANCHORED = 0 :: number
 regex.UCP = 0 :: number
 regex.DUPNAMES = 0 :: number
 
-return table.freeze(
-	capability.require("@eryx/_native/regex", "Regular expression support", "Enable PCRE2 support to use @eryx/regex.")
+return capability.require(
+	"@eryx/_native/regex",
+	"Regular expression support",
+	"Enable PCRE2 support to use @eryx/regex."
 ) :: typeof(regex)

@@ -31,6 +31,7 @@ local function normalizePath(path: any): { string }
 		end
 		return out
 	end
+
 	error("path must be a dotted string or an array of path parts")
 end
 
@@ -42,14 +43,26 @@ local function pathWhereKey(path: { string }, where: string): string
 	return pathKey(path) .. "\0" .. where
 end
 
+local function parentPath(path: { string }): { string }?
+	if #path == 0 then
+		return nil
+	end
+
+	local out = table.clone(path)
+	table.remove(out)
+	return out
+end
+
 local function unwrapAssignedValue(state: State, value: any): any
 	if type(value) ~= "table" then
 		return value
 	end
+
 	local assignedFromProxy = state.tableByProxy[value]
 	if assignedFromProxy ~= nil then
 		return assignedFromProxy
 	end
+
 	return value
 end
 
@@ -58,13 +71,64 @@ local function markChanged(state: State, path: { string })
 	state.changedByPath[pathKey(path)] = state.changeSeq
 end
 
+local function removePathAndDescendants(map: { [string]: any }, key: string)
+	map[key] = nil
+
+	local prefix = key .. "\0"
+	for existing in map do
+		if string.sub(existing, 1, #prefix) == prefix then
+			map[existing] = nil
+		end
+	end
+end
+
+local function invalidatePreservedCST(state: State, path: { string })
+	local key = pathKey(path)
+
+	-- Do NOT remove assignmentByPath[key].
+	-- The emitter needs it as the original-location anchor.
+
+	removePathAndDescendants(state.headerByPath, key)
+	removePathAndDescendants(state.styleByPath, key)
+
+	local prefix = key .. "\0"
+	for existing in state.commentByPathAndWhere do
+		if existing == key or string.sub(existing, 1, #prefix) == prefix then
+			state.commentByPathAndWhere[existing] = nil
+		end
+	end
+end
+
+local function invalidateWrite(state: State, path: { string })
+	invalidatePreservedCST(state, path)
+	markChanged(state, path)
+end
+
+local function registerTableTree(state: State, value: any, path: { string })
+	if type(value) ~= "table" then
+		return
+	end
+
+	state.pathByTable[value] = path
+
+	for k, v in value do
+		if type(v) == "table" then
+			local childPath = table.clone(path)
+			table.insert(childPath, tostring(k))
+			registerTableTree(state, v, childPath)
+		end
+	end
+end
+
 local function makeProxy(state: State, tableValue: { [any]: any }, path: { string }): any
 	local existing = state.proxyByTable[tableValue]
 	if existing ~= nil then
+		state.pathByTable[tableValue] = path
 		return existing
 	end
 
 	local proxy = {}
+
 	state.proxyByTable[tableValue] = proxy
 	state.tableByProxy[proxy] = tableValue
 	state.pathByTable[tableValue] = path
@@ -73,28 +137,38 @@ local function makeProxy(state: State, tableValue: { [any]: any }, path: { strin
 	setmetatable(proxy, {
 		__index = function(_, key)
 			local value = (tableValue :: any)[key]
+
 			if type(value) == "table" then
 				local childPath = table.clone(path)
 				table.insert(childPath, tostring(key))
 				return makeProxy(state, value :: { [any]: any }, childPath)
 			end
+
 			return value
 		end,
+
 		__newindex = function(_, key, value)
 			local unwrapped = unwrapAssignedValue(state, value)
-			local t = tableValue :: any
-			t[key] = unwrapped
+
 			local changedPath = table.clone(path)
 			table.insert(changedPath, tostring(key))
-			markChanged(state, changedPath)
+
+			invalidateWrite(state, changedPath)
+
+			local t = tableValue :: any
+			t[key] = unwrapped
+
 			if type(unwrapped) == "table" then
-				state.pathByTable[unwrapped] = changedPath
+				registerTableTree(state, unwrapped, changedPath)
 			end
+
 			state.dirty = true
 		end,
+
 		__pairs = function()
 			return next, tableValue, nil
 		end,
+
 		__len = function()
 			return #tableValue
 		end,
@@ -106,8 +180,10 @@ end
 function cst.fromDecoded(source: string, decoded: { [any]: any }, cstData: any?): any
 	local assignmentByPath = {}
 	local headerByPath = {}
+
 	if type(cstData) == "table" and type((cstData :: any).assignmentByPath) == "table" then
 		assignmentByPath = (cstData :: any).assignmentByPath
+
 		if type((cstData :: any).headerByPath) == "table" then
 			headerByPath = (cstData :: any).headerByPath
 		end
@@ -129,11 +205,13 @@ function cst.fromDecoded(source: string, decoded: { [any]: any }, cstData: any?)
 		changedByPath = {},
 		changeSeq = 0,
 	}
+
 	return makeProxy(state, decoded, {})
 end
 
 function cst.newEmpty(): any
 	local root = {}
+
 	local state: State = {
 		root = root,
 		source = nil,
@@ -148,6 +226,7 @@ function cst.newEmpty(): any
 		changedByPath = {},
 		changeSeq = 0,
 	}
+
 	return makeProxy(state, root, {})
 end
 
@@ -155,6 +234,7 @@ function cst.isCSTObject(value: any): boolean
 	if type(value) ~= "table" then
 		return false
 	end
+
 	return stateByProxy[value] ~= nil
 end
 
@@ -163,9 +243,11 @@ function cst.getSourceIfUnchanged(value: any): string?
 	if state == nil then
 		return nil
 	end
+
 	if state.dirty then
 		return nil
 	end
+
 	return state.source
 end
 
@@ -174,6 +256,7 @@ function cst.getOriginalSource(value: any): string?
 	if state == nil then
 		return nil
 	end
+
 	return state.source
 end
 
@@ -182,6 +265,7 @@ function cst.getSemanticRoot(value: any): { [any]: any }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.root
 end
 
@@ -190,6 +274,7 @@ function cst.getStyleMap(value: any): { [string]: string }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.styleByPath
 end
 
@@ -198,6 +283,7 @@ function cst.getCommentMap(value: any): { [string]: string }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.commentByPathAndWhere
 end
 
@@ -206,6 +292,7 @@ function cst.getAssignmentMap(value: any): { [string]: any }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.assignmentByPath
 end
 
@@ -214,6 +301,7 @@ function cst.getHeaderMap(value: any): { [string]: any }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.headerByPath
 end
 
@@ -222,20 +310,25 @@ function cst.getChangedPathMap(value: any): { [string]: number }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return state.changedByPath
 end
 
 local function getAtPath(root: any, path: { string }): any
 	local cursor = root
+
 	for i = 1, #path do
 		if type(cursor) ~= "table" then
 			return nil
 		end
+
 		cursor = (cursor :: any)[path[i]]
+
 		if cursor == nil then
 			return nil
 		end
 	end
+
 	return cursor
 end
 
@@ -244,6 +337,7 @@ function cst.getValueAtPath(value: any, path: { string }): any
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return getAtPath(state.root, path)
 end
 
@@ -253,10 +347,13 @@ local function cloneValue(value: any): any
 	end
 
 	local copy = {}
+
 	for k, v in value do
 		copy[k] = cloneValue(v)
 	end
+
 	setmetatable(copy, getmetatable(value))
+
 	return copy
 end
 
@@ -265,6 +362,7 @@ function cst.toTable(value: any): { [any]: any }
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	return cloneValue(state.root)
 end
 
@@ -273,10 +371,13 @@ function cst.setStyle(value: any, path: any, style: string)
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	if style ~= "header" and style ~= "dotted" then
 		error("style must be 'header' or 'dotted'")
 	end
+
 	local parts = normalizePath(path)
+
 	state.styleByPath[pathKey(parts)] = style
 	markChanged(state, parts)
 	state.dirty = true
@@ -287,6 +388,7 @@ function cst.getStyle(value: any, path: any): string?
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	local parts = normalizePath(path)
 	return state.styleByPath[pathKey(parts)]
 end
@@ -296,11 +398,15 @@ function cst.setComment(value: any, path: any, comment: string, where: string?)
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	local slot = if where == nil then "before" else where
+
 	if slot ~= "before" and slot ~= "inline" and slot ~= "after" then
 		error("where must be 'before', 'inline', or 'after'")
 	end
+
 	local parts = normalizePath(path)
+
 	state.commentByPathAndWhere[pathWhereKey(parts, slot)] = comment
 	markChanged(state, parts)
 	state.dirty = true
@@ -311,8 +417,10 @@ function cst.getComment(value: any, path: any, where: string?): string?
 	if state == nil then
 		error("value is not a TOML CST object")
 	end
+
 	local slot = if where == nil then "before" else where
 	local parts = normalizePath(path)
+
 	return state.commentByPathAndWhere[pathWhereKey(parts, slot)]
 end
 

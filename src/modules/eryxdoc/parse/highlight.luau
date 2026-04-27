@@ -1,4 +1,4 @@
--- Luau syntax highlighting for code blocks in documentation.
+local regex = require("@eryx/regex")
 
 local function htmlEscape(s: string): string
 	if not s then
@@ -7,85 +7,27 @@ local function htmlEscape(s: string): string
 	return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end
 
-local KEYWORDS: { [string]: boolean } = {}
-for _, kw in
-	{
-		"and",
-		"break",
-		"continue",
-		"do",
-		"else",
-		"elseif",
-		"end",
-		"false",
-		"for",
-		"function",
-		"if",
-		"in",
-		"local",
-		"const",
-		"nil",
-		"not",
-		"or",
-		"repeat",
-		"return",
-		"then",
-		"true",
-		"until",
-		"while",
-		"type",
-		"export",
-	}
-do
-	KEYWORDS[kw] = true
-end
+type RegexRule = {
+	class: string?,
+	regex: regex.Regex,
+}
 
-local BUILTINS: { [string]: boolean } = {}
-for _, b in
-	{
-		"print",
-		"warn",
-		"error",
-		"require",
-		"tostring",
-		"tonumber",
-		"typeof",
-		"select",
-		"pcall",
-		"xpcall",
-		"pairs",
-		"ipairs",
-		"next",
-		"unpack",
-		"rawget",
-		"rawset",
-		"setmetatable",
-		"getmetatable",
-		"assert",
-		"string",
-		"table",
-		"math",
-		"coroutine",
-		"buffer",
-	}
-do
-	BUILTINS[b] = true
-end
-
-local function trimEol(line: string, i: number): (number, string)
-	local eol = line:find("\r\n", i)
-	if eol then
-		return eol, line:sub(i, eol - 1)
+local function span(className: string?, text: string): string
+	if not className then
+		return htmlEscape(text)
 	end
-	eol = line:find("\n", i)
-	if eol then
-		return eol, line:sub(i, eol - 1)
-	end
-	return #line + 1, line:sub(i, #line + 1)
+
+	return `<span class="{className}">{htmlEscape(text)}</span>`
 end
 
---- Tokenize Luau source and wrap in syntax-coloring spans.
-local function highlightLuau(code: string): string
+local function rule(className: string?, pattern: string, flags: string?): RegexRule
+	return {
+		class = className,
+		regex = regex.new(pattern, flags),
+	}
+end
+
+local function highlightByRegex(code: string, rules: { RegexRule }): string
 	if not code then
 		return ""
 	end
@@ -95,66 +37,24 @@ local function highlightLuau(code: string): string
 	local len = #code
 
 	while i <= len do
-		local ch = code:sub(i, i)
+		local matchedClass: string? = nil
+		local matchedText: string? = nil
 
-		-- String (double or single quote)
-		if ch == '"' or ch == "'" then
-			local q = ch
-			local j = i + 1
-			while j <= len do
-				local c = code:sub(j, j)
-				if c == "\\" then
-					j += 2
-				elseif c == q then
-					j += 1
-					break
-				else
-					j += 1
-				end
-			end
-			table.insert(out, '<span class="syn-str">' .. htmlEscape(code:sub(i, j - 1)) .. "</span>")
-			i = j
+		for _, r in rules do
+			local m = r.regex:find(code, i)
 
-		-- Comment
-		elseif code:sub(i, i + 1) == "--" then
-			local eol, line = trimEol(code, i)
-			table.insert(out, '<span class="syn-comment">' .. htmlEscape(line) .. "</span>")
-			i = eol
+			if m and m.start == i and #m.match > 0 then
+				matchedClass = r.class
+				matchedText = m.match
+				break
+			end
+		end
 
-		-- Number
-		elseif ch:match("%d") then
-			local j = i
-			while j <= len and code:sub(j, j):match("[%d%.xXeEaAbBcCdDfF_]") do
-				j += 1
-			end
-			table.insert(out, '<span class="syn-num">' .. htmlEscape(code:sub(i, j - 1)) .. "</span>")
-			i = j
-
-		-- Identifier / keyword
-		elseif ch:match("[%a_]") then
-			local j = i
-			while j <= len and code:sub(j, j):match("[%w_]") do
-				j += 1
-			end
-			local word = code:sub(i, j - 1)
-			if word == "self" then
-				table.insert(out, '<span class="syn-self">' .. word .. "</span>")
-			elseif KEYWORDS[word] then
-				table.insert(out, '<span class="syn-kw">' .. word .. "</span>")
-			elseif BUILTINS[word] then
-				table.insert(out, '<span class="syn-builtin">' .. htmlEscape(word) .. "</span>")
-			else
-				local nextCh = if j <= len then code:sub(j, j) else ""
-				local prevCh = if i > 1 then code:sub(i - 1, i - 1) else ""
-				if nextCh == "(" or prevCh == ":" then
-					table.insert(out, '<span class="syn-fn">' .. htmlEscape(word) .. "</span>")
-				else
-					table.insert(out, htmlEscape(word))
-				end
-			end
-			i = j
+		if matchedText then
+			table.insert(out, span(matchedClass, matchedText))
+			i += #matchedText
 		else
-			table.insert(out, htmlEscape(ch))
+			table.insert(out, htmlEscape(code:sub(i, i)))
 			i += 1
 		end
 	end
@@ -162,261 +62,455 @@ local function highlightLuau(code: string): string
 	return table.concat(out)
 end
 
--- Split a shell line into tokens respecting quoted strings.
-local function splitShellLine(line: string)
-	local t = {}
+local function findSoonest(code: string, i: number, needles: { string }): number?
+	local best: number? = nil
+
+	for _, needle in needles do
+		local at = code:find(needle, i, true)
+		if at and (not best or at < best) then
+			best = at
+		end
+	end
+
+	return best
+end
+
+local TEMPLATE_RULES = {
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'(?:\\.|[^'\\\r\n])*']==]),
+
+	rule("syn-num", [==[\G-?(?:0|[1-9]\d*)(?:\.\d+)?]==]),
+
+	rule(
+		"syn-kw",
+		[==[\G(?:if|then|elseif|else|end|for|in|do|macro|use|slot|fill|include|and|or|not|true|false|nil)\b]==]
+	),
+
+	rule(
+		"syn-builtin",
+		[==[\G(?:length|upper|lower|trim|capitalize|title|replace|first|last|join|reverse|keys|values|sort|abs|round|floor|ceil|default|json|type)\b]==]
+	),
+
+	rule("syn-builtin", [==[\G\|\s*[A-Za-z_][A-Za-z0-9_]*]==]),
+
+	rule("syn-param", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*:)]==]),
+	rule(nil, [==[\G[A-Za-z_][A-Za-z0-9_]*]==]),
+
+	rule("syn-punct", [==[\G==|~=|<=|>=|[<>=+\-*/%,.[\]()]|[|]]==]),
+}
+
+local function highlightTemplateBlock(
+	code: string,
+	startAt: number,
+	openDelim: string,
+	closeDelim: string
+): (string, number)
+	local closeAt = code:find(closeDelim, startAt + #openDelim, true)
+
+	if not closeAt then
+		return span("syn-fn", openDelim) .. highlightByRegex(code:sub(startAt + #openDelim), TEMPLATE_RULES), #code + 1
+	end
+
+	local innerStart = startAt + #openDelim
+	local innerEnd = closeAt - 1
+
+	local html = span("syn-fn", openDelim)
+		.. highlightByRegex(code:sub(innerStart, innerEnd), TEMPLATE_RULES)
+		.. span("syn-fn", closeDelim)
+
+	return html, closeAt + #closeDelim
+end
+
+local function highlightTemplated(code: string, templatedLanguage: { RegexRule }): string
+	if not code then
+		return ""
+	end
+
+	local out = {}
 	local i = 1
-	local len = #line
+	local len = #code
+
 	while i <= len do
-		local ch = line:sub(i, i)
-		if ch:match("%s") then
-			i += 1
-		elseif ch == '"' or ch == "'" then
-			local q = ch
-			local j = i + 1
-			while j <= len do
-				local c = line:sub(j, j)
-				if c == "\\" then
-					j += 2
-				elseif c == q then
-					j += 1
-					break
-				else
-					j += 1
-				end
-			end
-			table.insert(t, line:sub(i, j - 1))
-			i = j
-		else
-			local j = i
-			while j <= len and not line:sub(j, j):match("%s") do
-				j += 1
-			end
-			table.insert(t, line:sub(i, j - 1))
-			i = j
-		end
-	end
-	return t
-end
+		local nextTemplate = findSoonest(code, i, { "{{", "{%", "{#" })
 
--- Highlight simple shell commands: command (first token), flags, args, strings, numbers, env vars
-local function highlightShell(code: string): string
-	if not code then
-		return ""
-	end
-
-	local lines = string.split(code, "\n")
-	local out = {}
-
-	for _, line in lines do
-		if line == "" then
-			table.insert(out, "")
-		else
-			local parts = {}
-			local i = 1
-			local len = #line
-			local seenToken = false
-
-			while i <= len do
-				local ch = line:sub(i, i)
-
-				-- Whitespace: preserve as-is
-				if ch:match("%s") then
-					local j = i
-					while j <= len and line:sub(j, j):match("%s") do
-						j += 1
-					end
-					table.insert(parts, htmlEscape(line:sub(i, j - 1)))
-					i = j
-
-				-- Shell comment: rest of line
-				elseif ch == "#" then
-					table.insert(parts, '<span class="syn-comment">' .. htmlEscape(line:sub(i)) .. "</span>")
-					break
-
-				-- Quoted string
-				elseif ch == '"' or ch == "'" then
-					local q = ch
-					local j = i + 1
-					while j <= len do
-						local c = line:sub(j, j)
-						if c == "\\" then
-							j += 2
-						elseif c == q then
-							j += 1
-							break
-						else
-							j += 1
-						end
-					end
-					table.insert(parts, '<span class="syn-str">' .. htmlEscape(line:sub(i, j - 1)) .. "</span>")
-					seenToken = true
-					i = j
-
-				-- Unquoted token
-				else
-					local j = i
-					while j <= len and not line:sub(j, j):match("%s") do
-						j += 1
-					end
-					local tok = line:sub(i, j - 1)
-					local esc = htmlEscape(tok)
-
-					if tok:match("^%$[%w_]+") then
-						table.insert(parts, '<span class="syn-builtin">' .. esc .. "</span>")
-					elseif tok:match("^%-") then
-						table.insert(parts, '<span class="syn-kw">' .. esc .. "</span>")
-					elseif tok:match("^%d+$") or tok:match("^%d+[%d%.]*$") then
-						table.insert(parts, '<span class="syn-num">' .. esc .. "</span>")
-					elseif not seenToken then
-						table.insert(parts, '<span class="syn-fn">' .. esc .. "</span>")
-						seenToken = true
-					else
-						table.insert(parts, '<span class="syn-param">' .. esc .. "</span>")
-					end
-
-					i = j
-				end
-			end
-
-			table.insert(out, table.concat(parts, ""))
-		end
-	end
-
-	return table.concat(out, "\n")
-end
-
---- Highlight a type-signature block (struct fields, function signatures).
---- Understands `name: Type, -- comment` patterns and Luau type syntax.
-local function highlightSignature(code: string): string
-	if not code then
-		return ""
-	end
-
-	local lines = string.split(code, "\n")
-	local out = {}
-
-	for _, line in lines do
-		-- Split line into code part and comment part
-		local codePart, commentPart = line:match("^(.-)(%s*%-%-.*)$")
-		if not codePart then
-			codePart = line
-			commentPart = nil
+		if not nextTemplate then
+			table.insert(out, highlightByRegex(code:sub(i), templatedLanguage))
+			break
 		end
 
-		-- Highlight the code portion
-		local highlighted = {}
-		local i = 1
-		local len = #codePart
+		if nextTemplate > i then
+			table.insert(out, highlightByRegex(code:sub(i, nextTemplate - 1), templatedLanguage))
+		end
 
-		while i <= len do
-			local ch = codePart:sub(i, i)
+		local opener = code:sub(nextTemplate, nextTemplate + 1)
 
-			-- String literals
-			if ch == '"' or ch == "'" then
-				local q = ch
-				local j = i + 1
-				while j <= len do
-					local c = codePart:sub(j, j)
-					if c == "\\" then
-						j += 2
-					elseif c == q then
-						j += 1
-						break
-					else
-						j += 1
-					end
-				end
-				table.insert(highlighted, '<span class="syn-str">' .. htmlEscape(codePart:sub(i, j - 1)) .. "</span>")
-				i = j
+		if opener == "{{" then
+			local html, nextI = highlightTemplateBlock(code, nextTemplate, "{{", "}}")
+			table.insert(out, html)
+			i = nextI
+		elseif opener == "{%" then
+			local html, nextI = highlightTemplateBlock(code, nextTemplate, "{%", "%}")
+			table.insert(out, html)
+			i = nextI
+		elseif opener == "{#" then
+			local closeAt = code:find("#}", nextTemplate + 2, true)
 
-			-- Numbers
-			elseif ch:match("%d") then
-				local j = i
-				while j <= len and codePart:sub(j, j):match("[%d%.xXeE_]") do
-					j += 1
-				end
-				table.insert(highlighted, '<span class="syn-num">' .. htmlEscape(codePart:sub(i, j - 1)) .. "</span>")
-				i = j
-
-			-- Identifiers
-			elseif ch:match("[%a_]") then
-				local j = i
-				while j <= len and codePart:sub(j, j):match("[%w_]") do
-					j += 1
-				end
-				local word = codePart:sub(i, j - 1)
-
-				-- Check context: is this word followed by ':' (field name) or preceded by ':' (type name)?
-				local afterColon = false
-				-- Walk backwards past whitespace to check if preceded by : or ,
-				local k = i - 1
-				while k >= 1 and codePart:sub(k, k):match("%s") do
-					k -= 1
-				end
-				if k >= 1 and codePart:sub(k, k) == ":" then
-					afterColon = true
-				end
-
-				-- Check if followed by ':'
-				local m = j
-				while m <= len and codePart:sub(m, m):match("%s") do
-					m += 1
-				end
-				local beforeColon = m <= len and codePart:sub(m, m) == ":"
-
-				if word == "true" or word == "false" or word == "nil" then
-					table.insert(highlighted, '<span class="syn-kw">' .. word .. "</span>")
-				elseif afterColon then
-					-- Type position (after colon)
-					table.insert(highlighted, '<span class="syn-type">' .. htmlEscape(word) .. "</span>")
-				elseif beforeColon then
-					-- Field name position (before colon)
-					table.insert(highlighted, '<span class="syn-param">' .. htmlEscape(word) .. "</span>")
-				elseif word == "self" then
-					table.insert(highlighted, '<span class="syn-self">' .. word .. "</span>")
-				else
-					-- Could be a type name in other positions (return type, generic, etc)
-					-- Check if it looks like a type (starts uppercase) or is a known keyword-like
-					if KEYWORDS[word] then
-						table.insert(highlighted, '<span class="syn-kw">' .. word .. "</span>")
-					elseif word:match("^%u") then
-						table.insert(highlighted, '<span class="syn-type">' .. htmlEscape(word) .. "</span>")
-					else
-						table.insert(highlighted, htmlEscape(word))
-					end
-				end
-				i = j
-
-			-- Punctuation with semantic meaning
-			elseif ch == ":" then
-				table.insert(highlighted, '<span class="syn-punct">' .. ch .. "</span>")
-				i += 1
-
-			-- Arrow ->
-			elseif ch == "\xe2" and codePart:sub(i, i + 2) == "\xe2\x86\x92" then
-				table.insert(highlighted, '<span class="syn-punct">\xe2\x86\x92</span>')
-				i += 3
+			if closeAt then
+				table.insert(out, span("syn-comment", code:sub(nextTemplate, closeAt + 1)))
+				i = closeAt + 2
 			else
-				table.insert(highlighted, htmlEscape(ch))
-				i += 1
+				table.insert(out, span("syn-comment", code:sub(nextTemplate)))
+				break
 			end
 		end
-
-		-- Append comment if present
-		if commentPart then
-			table.insert(highlighted, '<span class="syn-comment">' .. htmlEscape(commentPart) .. "</span>")
-		end
-
-		table.insert(out, table.concat(highlighted))
 	end
 
-	return table.concat(out, "\n")
+	return table.concat(out)
 end
+
+local LUAU_RULES = {
+	rule("syn-comment", [==[\G--\[(=*)\[.*?\]\1\]]==], "s"),
+	rule("syn-str", [==[\G\[(=*)\[.*?\]\1\]]==], "s"),
+
+	rule("syn-comment", [==[\G--[^\r\n]*]==]),
+
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'(?:\\.|[^'\\\r\n])*']==]),
+
+	rule("syn-num", [==[\G0[xX][0-9a-fA-F_]+(?:\.[0-9a-fA-F_]+)?(?:[pP][+-]?[0-9_]+)?]==]),
+	rule("syn-num", [==[\G\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?[\d_]+)?]==]),
+
+	rule("syn-self", [==[\Gself\b]==]),
+
+	rule(
+		"syn-kw",
+		[==[\G(?:and|break|continue|do|else|elseif|end|false|for|function|if|in|local|const|nil|not|or|repeat|return|then|true|until|while|type|export)\b]==]
+	),
+
+	rule(
+		"syn-builtin",
+		[==[\G(?:print|warn|error|require|tostring|tonumber|typeof|select|pcall|xpcall|pairs|ipairs|next|unpack|rawget|rawset|setmetatable|getmetatable|assert|string|table|math|coroutine|buffer)\b]==]
+	),
+
+	rule("syn-fn", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*\()]==]),
+	rule("syn-fn", [==[\G(?<=:)[A-Za-z_][A-Za-z0-9_]*]==]),
+
+	rule(nil, [==[\G[A-Za-z_][A-Za-z0-9_]*]==]),
+}
+
+local SHELL_RULES = {
+	rule("syn-comment", [==[\G#[^\r\n]*]==]),
+
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'[^'\r\n]*']==]),
+
+	rule("syn-builtin", [==[\G\$[A-Za-z_][A-Za-z0-9_]*]==]),
+	rule("syn-kw", [==[\G--?[A-Za-z0-9_-]+]==]),
+	rule("syn-num", [==[\G[+-]?\d+(?:\.\d+)?]==]),
+
+	rule("syn-fn", [==[\G(?m)(?<=^|\n)\s*\K\S+]==]),
+
+	-- Not really a real syn type, but stops weird mixing of numbers in the middle of text
+	rule("syn-text", [==[\G\S+]==]),
+}
+
+local JSON_RULES = {
+	rule("syn-param", [==[\G"(?:\\.|[^"\\\r\n])*"(?=\s*:)]==]),
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+
+	rule("syn-num", [==[\G-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?]==]),
+	rule("syn-kw", [==[\G(?:true|false|null)\b]==]),
+
+	rule("syn-punct", [==[\G[\[\]{}:,]]==]),
+}
+
+local TOML_RULES = {
+	rule("syn-comment", [==[\G#[^\r\n]*]==]),
+
+	rule("syn-str", [==[\G"""(?:.|\r|\n)*?"""]==]),
+	rule("syn-str", [==[\G'''(?:.|\r|\n)*?''']==]),
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'[^'\r\n]*']==]),
+
+	rule("syn-type", [==[\G\[\[[^\]\r\n]+\]\]]==]),
+	rule("syn-type", [==[\G\[[^\]\r\n]+\]]==]),
+
+	rule("syn-num", [==[\G[+-]?\d{4}-\d{2}-\d{2}[Tt ][0-9:.]+(?:Z|[+-]\d{2}:\d{2})?]==]),
+	rule("syn-num", [==[\G[+-]?\d{4}-\d{2}-\d{2}]==]),
+	rule("syn-num", [==[\G\d{2}:\d{2}:\d{2}(?:\.\d+)?]==]),
+
+	rule("syn-kw", [==[\G(?:true|false|inf|nan)\b]==]),
+
+	rule("syn-num", [==[\G[+-]?(?:0x[0-9A-Fa-f_]+|0o[0-7_]+|0b[01_]+)]==]),
+	rule("syn-num", [==[\G[+-]?\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?[\d_]+)?]==]),
+
+	rule("syn-param", [==[\G[A-Za-z_][A-Za-z0-9_-]*(?=\s*(?:=|\.))]==]),
+
+	rule("syn-punct", [==[\G[=.,\[\]{}]]==]),
+}
+
+local SIGNATURE_RULES = {
+	rule("syn-comment", [==[\G--[^\r\n]*]==]),
+
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'(?:\\.|[^'\\\r\n])*']==]),
+
+	rule("syn-num", [==[\G0[xX][0-9a-fA-F_]+]==]),
+	rule("syn-num", [==[\G\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?[\d_]+)?]==]),
+
+	rule("syn-kw", [==[\G(?:export|type|read|write|typeof|true|false|nil)\b]==]),
+	rule("syn-self", [==[\Gself\b]==]),
+
+	rule("syn-fn", [==[\G[.:][A-Za-z_][A-Za-z0-9_]*(?=\s*(?:<|\())]==]),
+	rule("syn-fn", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*\()]==]),
+
+	rule("syn-param", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*:)]==]),
+
+	rule("syn-type", [==[\G[A-Z][A-Za-z0-9_]*]==]),
+	rule("syn-type", [==[\G(?:any|unknown|never|string|number|boolean|thread|buffer|nil)\b]==]),
+
+	-- Useful for callback: ((err: any, connection: Connection<T...>) → ())
+	-- Lowercase callback argument names before :
+	rule("syn-param", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*:)]==]),
+
+	-- ... in T... / (...)
+	rule("syn-punct", [==[\G%.%.%.]==]),
+
+	-- Punctuation
+	rule("syn-punct", [==[\G->|→|[:.<>{}()[\],.?|&=]]==]),
+
+	-- Fallback identifier
+	rule(nil, [==[\G[A-Za-z_][A-Za-z0-9_]*]==]),
+}
+
+local YAML_RULES = {
+	rule("syn-comment", [==[\G#[^\r\n]*]==]),
+	rule("syn-param", [==[\G[A-Za-z0-9_.-]+(?=\s*:)]==]),
+
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'[^'\r\n]*']==]),
+
+	rule("syn-kw", [==[\G(?:true|false|null|yes|no|on|off)\b]==]),
+	rule("syn-num", [==[\G[+-]?\d+(?:\.\d+)?]==]),
+
+	rule("syn-punct", [==[\G[-\[\]{}:,|>]]==]),
+}
+
+local INI_RULES = {
+	rule("syn-comment", [==[\G[;#][^\r\n]*]==]),
+	rule("syn-type", [==[\G\[[^\]\r\n]+\]]==]),
+	rule("syn-param", [==[\G[A-Za-z0-9_.-]+(?=\s*=)]==]),
+
+	rule("syn-str", [==[\G"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\G'[^'\r\n]*']==]),
+
+	rule("syn-kw", [==[\G(?:true|false|yes|no|on|off)\b]==]),
+	rule("syn-num", [==[\G[+-]?\d+(?:\.\d+)?]==]),
+
+	rule("syn-punct", [==[\G=]==]),
+}
+
+local DIFF_RULES = {
+	rule("syn-comment", [==[\G@@[^\r\n]*]==]),
+	rule("syn-kw", [==[\G\+\+\+[^\r\n]*]==]),
+	rule("syn-kw", [==[\G---[^\r\n]*]==]),
+	rule("syn-str", [==[\G\+[^\r\n]*]==]),
+	rule("syn-comment", [==[\G-[^\r\n]*]==]),
+}
+
+local XML_RULES = {
+	rule("syn-comment", [==[\G<!--(?:.|\r|\n)*?-->]==]),
+	rule("syn-kw", [==[\G<!\[CDATA\[(?:.|\r|\n)*?\]\>]==]),
+	rule("syn-type", [==[\G</?[A-Za-z_][A-Za-z0-9_:-]*]==]),
+	rule("syn-param", [==[\G\s+[A-Za-z_][A-Za-z0-9_:-]*(?=\s*=)]==]),
+	rule("syn-str", [==[\G"(?:\\.|[^"])*"]==]),
+	rule("syn-str", [==[\G'[^']*']==]),
+	rule("syn-punct", [==[\G/?>]==]),
+}
+
+local HTML_RULES = {
+	-- Comments / doctype / CDATA
+	rule("syn-comment", [==[\G<!--[\s\S]*?-->]==]),
+	rule("syn-kw", [==[\G<!doctype\b[^>]*>]==], "i"),
+	rule("syn-kw", [==[\G<!\[CDATA\[[\s\S]*?\]\]>]==]),
+
+	-- Closing/opening tag names
+	rule("syn-type", [==[\G</?[A-Za-z][A-Za-z0-9:-]*]==]),
+
+	-- Attribute names
+	rule("syn-param", [==[\G\s+[A-Za-z_:][A-Za-z0-9_.:-]*(?=\s*(?:=|/?>))]==]),
+
+	-- Attribute values
+	rule("syn-str", [==[\G"(?:&[A-Za-z0-9#]+;|[^"])*"]==]),
+	rule("syn-str", [==[\G'(?:&[A-Za-z0-9#]+;|[^'])*']==]),
+	rule("syn-str", [==[\G[^\s"'=<>`]+(?=\s|/?>)]==]),
+
+	-- Entities
+	rule("syn-kw", [==[\G&(?:[A-Za-z][A-Za-z0-9]+|#[0-9]+|#x[0-9A-Fa-f]+);]==]),
+
+	-- Punctuation
+	rule("syn-punct", [==[\G/?>]==]),
+	rule("syn-punct", [==[\G=]==]),
+}
+
+local MARKDOWN_RULES = {
+	-- Fenced code block markers
+	rule("syn-fn", [==[\G(?m)^[ \t]{0,3}(`{3,}|~{3,})[^\r\n]*]==]),
+
+	-- ATX headings
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}#{1,6}(?=\s)]==]),
+
+	-- Setext underline markers only
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}=+[ \t]*$]==]),
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}-+[ \t]*$]==]),
+
+	-- Blockquotes, including nested quote markers: >, >>, > >
+	rule("syn-fn", [==[\G(?m)^[ \t]{0,3}(?:>[ \t]?)+]==]),
+
+	-- Thematic breaks
+	rule("syn-fn", [==[\G(?m)^[ \t]{0,3}(?:-{3,}|\*{3,}|_{3,})[ \t]*$]==]),
+
+	-- Admonitions: :::warning / :::
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}:::[A-Za-z0-9_-]*[ \t]*$]==]),
+
+	-- Tabs: === Tab, ===+ Tab, ===! Tab, ===
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}===[+!]?(?:[ \t]+[^\r\n]+)?[ \t]*$]==]),
+
+	-- Link definitions / footnote definitions
+	rule("syn-param", [==[\G\[\^[^\]\r\n]+\](?!:)]==]),
+	rule("syn-param", [==[\G(?m)^[ \t]{0,3}\[[^\]\r\n]+\]:]==]),
+	rule("syn-param", [==[\G(?m)^[ \t]{0,3}\[\^[^\]\r\n]+\]:]==]),
+
+	-- GFM / PHP Markdown Extra table separator rows
+	rule("syn-fn", [==[\G(?m)^[ \t]*\|?(?:[ \t]*:?-{3,}:?[ \t]*\|)+[ \t]*:?-{3,}:?[ \t]*\|?[ \t]*$]==]),
+
+	-- Table pipes
+	rule("syn-fn", [==[\G\|]==]),
+
+	-- Lists and task lists
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}[-+*][ \t]+(?=\[[ xX]\][ \t]+)]==]),
+	rule("syn-fn", [==[\G\[[ xX]\]]==]),
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}[-+*][ \t]+]==]),
+	rule("syn-kw", [==[\G(?m)^[ \t]{0,3}\d+[.)][ \t]+]==]),
+
+	-- Inline code
+	rule("syn-str", [==[\G`+[^`\r\n]*`+]==]),
+
+	-- Images / links / wikilinks
+	rule("syn-fn", [==[\G!\[]==]),
+	rule("syn-str", [==[\G\[\[[^\]\r\n]+(?:\|[^\]\r\n]+)?\]\]]==]),
+	rule("syn-fn", [==[\G[\[\]]]==]),
+	rule("syn-str", [==[\G\([^) \t\r\n]+(?:\s+"[^"]*")?\)]==]),
+	rule("syn-str", [==[\G<https?://[^>\s]+>]==]),
+	rule("syn-str", [==[\Ghttps?://[^\s<>()]+]==]),
+
+	-- Footnote references
+	rule("syn-param", [==[\G\[\^[^\]\r\n]+\]]==]),
+
+	-- Strikethrough, bold, italic markers
+	rule("syn-fn", [==[\G~~?]==]),
+	rule("syn-fn", [==[\G\*\*\*|___]==]),
+	rule("syn-fn", [==[\G\*\*|__]==]),
+	rule("syn-fn", [==[\G\*|_]==]),
+
+	-- Entities
+	rule("syn-kw", [==[\G&(?:[A-Za-z][A-Za-z0-9]+|#[0-9]+|#x[0-9A-Fa-f]+);]==]),
+
+	-- Escaped punctuation
+	rule("syn-fn", [==[\G\\[\\`*{}\[\]()#+\-.!_|>~:]]==]),
+}
+
+local C_RULES = {
+	-- Preprocessor
+	rule(
+		"syn-kw",
+		[==[\G(?m)^[ \t]*#[ \t]*(?:include|define|undef|if|ifdef|ifndef|elif|else|endif|pragma|error|warning|line)\b[^\r\n]*]==]
+	),
+
+	-- Comments
+	rule("syn-comment", [==[\G//[^\r\n]*]==]),
+	rule("syn-comment", [==[\G/\*[\s\S]*?\*/]==]),
+
+	-- Strings / chars
+	rule("syn-str", [==[\GL?"(?:\\.|[^"\\\r\n])*"]==]),
+	rule("syn-str", [==[\GL?'(?:\\.|[^'\\\r\n])*']==]),
+
+	-- Numbers
+	rule("syn-num", [==[\G0[xX][0-9A-Fa-f]+(?:[uUlL]*)]==]),
+	rule("syn-num", [==[\G(?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?[fFlL]?]==]),
+	rule("syn-num", [==[\G\d+(?:[eE][+-]?\d+)?[uUlL]*]==]),
+
+	-- Keywords
+	rule(
+		"syn-kw",
+		[==[\G(?:auto|break|case|const|continue|default|do|else|enum|extern|for|goto|if|inline|register|restrict|return|sizeof|static|struct|switch|typedef|union|volatile|while|_Alignas|_Alignof|_Atomic|_Bool|_Complex|_Generic|_Imaginary|_Noreturn|_Static_assert|_Thread_local)\b]==]
+	),
+
+	-- Builtin/common types
+	rule(
+		"syn-type",
+		[==[\G(?:void|char|short|int|long|float|double|signed|unsigned|bool|size_t|ssize_t|ptrdiff_t|intptr_t|uintptr_t|int8_t|int16_t|int32_t|int64_t|uint8_t|uint16_t|uint32_t|uint64_t|FILE)\b]==]
+	),
+
+	-- Constants/macros
+	rule("syn-kw", [==[\G(?:NULL|true|false|stdin|stdout|stderr)\b]==]),
+
+	-- Function calls / declarations
+	rule("syn-fn", [==[\G[A-Za-z_][A-Za-z0-9_]*(?=\s*\()]==]),
+
+	-- ALL_CAPS macros
+	rule("syn-builtin", [==[\G[A-Z_][A-Z0-9_]{2,}\b]==]),
+
+	-- Identifiers
+	rule(nil, [==[\G[A-Za-z_][A-Za-z0-9_]*]==]),
+
+	-- Operators / punctuation
+	rule("syn-punct", [==[\G->|\+\+|--|==|!=|<=|>=|&&|\|\||<<|>>|[{}()[\];,.:?~!%^&*+\-/|<>=#]]==]),
+}
 
 return {
-	highlightLuau = highlightLuau,
-	highlightSignature = highlightSignature,
-	highlightShell = highlightShell,
+	luau = function(code: string): string
+		return highlightByRegex(code, LUAU_RULES)
+	end,
+	LUAU_SIGNATURE = function(code: string): string
+		return highlightByRegex(code, SIGNATURE_RULES)
+	end,
+	sh = function(code: string): string
+		return highlightByRegex(code, SHELL_RULES)
+	end,
+	toml = function(code: string): string
+		return highlightByRegex(code, TOML_RULES)
+	end,
+	json = function(code: string): string
+		return highlightByRegex(code, JSON_RULES)
+	end,
+	yaml = function(code: string): string
+		return highlightByRegex(code, YAML_RULES)
+	end,
+	ini = function(code: string): string
+		return highlightByRegex(code, INI_RULES)
+	end,
+	diff = function(code: string): string
+		return highlightByRegex(code, DIFF_RULES)
+	end,
+	xml = function(code: string): string
+		return highlightByRegex(code, XML_RULES)
+	end,
+	html = function(code: string): string
+		return highlightByRegex(code, HTML_RULES)
+	end,
+	md = function(code: string): string
+		return highlightByRegex(code, MARKDOWN_RULES)
+	end,
+	c = function(code: string): string
+		return highlightByRegex(code, C_RULES)
+	end,
+	template = function(code: string): string
+		return highlightTemplated(code, {})
+	end,
+	templateHtml = function(code: string): string
+		return highlightTemplated(code, HTML_RULES)
+	end,
+
 	htmlEscape = htmlEscape,
-}
+} :: { [string]: (string) -> string }

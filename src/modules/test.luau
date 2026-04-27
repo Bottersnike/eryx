@@ -134,6 +134,10 @@ end
 	@return pass/fail/skip counts.
 ]=]
 function Suite.run(self: Suite, filter: string?, compact: boolean?): RunTotals
+	if not COLOR then
+		compact = false
+	end
+
 	local t0 = os.clock()
 
 	local passed = 0
@@ -187,6 +191,7 @@ function Suite.run(self: Suite, filter: string?, compact: boolean?): RunTotals
 		local t1 = os.clock()
 		local ok, err = pcall(t.runner)
 		local elapsed = string.format("%.2fms", (os.clock() - t1) * 1000)
+		local err = err :: any
 
 		-- Check if the test called test.skip() / test.skipIf()
 		if not ok and type(err.data) == "table" and (err.data :: SkipSignal).__skip == SKIP_SENTINEL then
@@ -562,10 +567,13 @@ end
 -- ── File loading ─────────────────────────────────────────────────────────────
 
 -- Loads a .test.luau file and returns the Suite it returns, or errors.
-local function load_test_file(path: string): Suite
+local function load_test_file(path: string): Suite?
 	local source = fs.openSync(path):readSync()
 	local fn = luau.load(source, `@{path}`)
 	local suite = fn()
+	if not suite then
+		return nil
+	end
 	if type(suite) ~= "table" or getmetatable(suite) ~= Suite then
 		error(`{path} did not return a Suite`)
 	end
@@ -591,7 +599,7 @@ export type RunOptions = {
 	@param path The path to the test file.
 	@param options Run options (exitOnFail, filter).
 ]=]
-function test.runOne(path: string, options: RunOptions?)
+function test.runOne(path: string, options: RunOptions?): RunTotals
 	local opts: RunOptions = options or {}
 	local exitOnFail = if opts.exitOnFail ~= nil then opts.exitOnFail else true
 
@@ -602,6 +610,9 @@ function test.runOne(path: string, options: RunOptions?)
 			os.exit(1)
 		end
 		return { passed = 0, failed = 1, skipped = 0 }
+	end
+	if not result then
+		return { passed = 0, failed = 0, skipped = 0 }
 	end
 
 	local totals = result:run(opts.filter)
@@ -667,21 +678,26 @@ function test.runAll(path: string, options: RunOptions?)
 			if fs.isDirectory(full) then
 				walk(full)
 			elseif entry:match("%.test%.luau$") then
-				local ok, suite = pcall(load_test_file, full)
+				local ok, suite = pcall(function()
+					return load_test_file(full)
+				end)
 				if not ok then
 					stdio.write(red(`  Failed to load {full}:\n  {fmtErr(suite)}\n\n`))
 					totalFailed += 1
 					continue
 				end
-				local s = suite :: Suite
-				local totals = s:run(opts.filter, true)
+				if not suite then
+					continue
+				end
+
+				local totals = suite:run(opts.filter, true)
 				totalPassed += totals.passed
 				totalFailed += totals.failed
 				totalSkipped += totals.skipped
 				suiteCount += 1
-				for _, r in s.results do
+				for _, r in suite.results do
 					if not r.passed and not r.skipped then
-						local fe: FailEntry = { suite = s.name, name = r.name, err = (r.err or "") :: string }
+						local fe: FailEntry = { suite = suite.name, name = r.name, err = (r.err or "") :: string }
 						table.insert(failures, fe)
 					end
 				end

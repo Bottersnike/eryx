@@ -516,6 +516,9 @@ function HttpServer.listen(self: HttpServer, callback: ((host: string, port: num
 				self:close()
 				error(client_or_err)
 			end
+			if typeof(client_or_err) == "Exception" and client_or_err.message == "socket closed" then
+				break
+			end
 			if self._running then
 				print("accept error: ", client_or_err)
 			end

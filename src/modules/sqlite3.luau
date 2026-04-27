@@ -153,10 +153,8 @@ function sqlite3.version(): string
 	return nil :: any
 end
 
-return table.freeze(
-	capability.require(
-		"@eryx/_native/sqlite3",
-		"SQLite database support",
-		"Enable sqlite support to use @eryx/sqlite3."
-	)
+return capability.require(
+	"@eryx/_native/sqlite3",
+	"SQLite database support",
+	"Enable sqlite support to use @eryx/sqlite3."
 ) :: typeof(sqlite3)

@@ -24,10 +24,7 @@ function exception.format(error: Exception, useAnsi: boolean?): string
 	return nil :: any
 end
 function exception.isInterrupt(error: any): boolean
-	if typeof(error) ~= "Exception" then
-		return false
-	end
-	return error.type == "interrupt"
+	return nil :: any
 end
 
 return table.freeze(exception)

@@ -307,6 +307,54 @@ static void socket_interrupt_all(EryxRuntime* rt, void* /*ctx*/) {
     }
 }
 
+// Cancel all pending ops for a specific socket, resuming waiting threads with an
+// error.  Must be called before closing the fd so that uv_poll_stop clears
+// loop->watchers[fd] before the OS reuses the fd number.
+static void cancel_socket_pending_ops(lua_State* L, LuaSocket* s) {
+    EryxRuntime* rt = eryx_get_runtime(L);
+    auto itmap = g_pendingSocketOps.find(rt);
+    if (itmap == g_pendingSocketOps.end()) return;
+
+    std::vector<int> refs;
+    for (auto& kv : itmap->second) {
+        if (kv.second->socket == s) refs.push_back(kv.first);
+    }
+
+    for (int ref : refs) {
+        auto it = itmap->second.find(ref);
+        if (it == itmap->second.end()) continue;
+        SocketPendingOp* op = it->second;
+        if (!op || op->finished) {
+            itmap->second.erase(it);
+            continue;
+        }
+
+        op->finished = true;
+
+        if (op->thread && op->threadRef != LUA_NOREF) {
+            lua_pushstring(op->thread, "socket closed");
+            int tref = op->threadRef;
+            op->threadRef = LUA_NOREF;
+            eryx_push_thread(rt, tref, 1, true);
+        }
+
+        op->handles_closing = 0;
+        if (!uv_is_closing((uv_handle_t*)&op->poll)) {
+            op->handles_closing++;
+            uv_poll_stop(&op->poll);
+            uv_close((uv_handle_t*)&op->poll, handle_close_cb);
+        }
+        if (op->has_timer && !uv_is_closing((uv_handle_t*)&op->timer)) {
+            op->handles_closing++;
+            uv_timer_stop(&op->timer);
+            uv_close((uv_handle_t*)&op->timer, handle_close_cb);
+        }
+
+        if (op->handles_closing <= 0) delete op;
+        itmap->second.erase(ref);
+    }
+}
+
 // Schedule an async socket operation: creates uv_poll_t + optional uv_timer_t.
 // Caller must return lua_yield(L, 0) immediately after calling this.
 static void schedule_socket_op(lua_State* L, LuaSocket* s, OpType op,
@@ -334,11 +382,17 @@ static void schedule_socket_op(lua_State* L, LuaSocket* s, OpType op,
     pending->handles_closing = 0;
 
     // Init and start poll
+    int poll_init_rc;
 #ifdef _WIN32
-    uv_poll_init_socket(rt->loop, &pending->poll, s->fd);
+    poll_init_rc = uv_poll_init_socket(rt->loop, &pending->poll, s->fd);
 #else
-    uv_poll_init(rt->loop, &pending->poll, s->fd);
+    poll_init_rc = uv_poll_init(rt->loop, &pending->poll, s->fd);
 #endif
+    if (poll_init_rc < 0) {
+        lua_unref(rt->GL, ref);
+        delete pending;
+        luaL_error(L, "uv_poll_init failed: %s", uv_strerror(poll_init_rc));
+    }
     pending->poll.data = pending;
     uv_poll_start(&pending->poll, events, poll_cb);
     // Track pending socket op so it can be interrupted (module-local map)
@@ -632,6 +686,7 @@ static int sock_connect(lua_State* L) {
 static int sock_close(lua_State* L) {
     LuaSocket* s = check_socket(L, 1);
     if (s->fd != INVALID_SOCKET) {
+        cancel_socket_pending_ops(L, s);
         sock_fd_close(s->fd);
         s->fd = INVALID_SOCKET;
     }

@@ -6,6 +6,7 @@ children:
   - testing
   - filesystem
   - tasks
+  - package-management
   - documentation
   - standard-library
   - what-next

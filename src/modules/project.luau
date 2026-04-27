@@ -12,6 +12,7 @@ local fs = require("@eryx/fs")
 local os = require("@eryx/os")
 local path = require("@eryx/path")
 local toml = require("@eryx/data/toml")
+local semver = require("@eryx/semver")
 
 export type Author = {
 	name: string,
@@ -39,33 +40,57 @@ export type Links = {
 	[string]: string?,
 }
 
-export type GitDependency = {
-	git: string,
-	rev: string?,
-	tag: string?,
-	branch: string?,
-}
+-- Represents a dependency that is available on git
+--
+-- Exactly one of rev, tag or branch must be specified
+export type GitDependency =
+	{
+		git: string,
+		rev: string,
+	}
+	| {
+		git: string,
+		tag: string,
+	}
+	| {
+		git: string,
+		branch: string,
+	}
 
+-- Represents a dependency that is on the local filesystem
+--
+-- This dependency will not be copied, and is only referenced as an
+-- alias.
+-- A child eryx.toml is ignored.
 export type PathDependency = {
 	path: string,
 }
 
+-- Represents a dependency that is on the local filesystem
+--
+-- The contents of this dependency will be copied to the local project,
+-- and any root eryx.toml will be used for child dependency resolution
 export type LocalDependency = {
 	["local"]: string,
-	package: string?,
 }
 
-export type LocalCopyDependency = {
-	["local-copy"]: string,
-	package: string?,
-}
-
+-- Represents a dependency that is a downloadable archive
+--
+-- The archive may optionally include an eryx.toml,
+-- which will be used for child depdendency resolution
 export type UrlDependency = {
 	url: string,
 	sha256: string?,
 }
 
-export type Dependency = string | GitDependency | PathDependency | LocalDependency | LocalCopyDependency | UrlDependency
+-- Represents a package available on a repository
+export type RepositoryDependency = {
+	repo: string,
+	version: semver.Range?,
+	packageName: string?,
+}
+
+export type Dependency = string | GitDependency | PathDependency | LocalDependency | UrlDependency | RepositoryDependency
 export type Dependencies = { [string]: Dependency }
 
 export type BuildTarget = {
@@ -86,6 +111,7 @@ export type Manifest = {
 	project: ProjectMetadata,
 	links: Links?,
 	scripts: { [string]: string }?,
+	repositories: { [string]: string }?,
 	dependencies: Dependencies?,
 	devDependencies: Dependencies?,
 	build: { [string]: BuildTarget }?,
@@ -280,31 +306,50 @@ local function parseDependency(value: any, context: string): Dependency
 		return value
 	end
 	local raw = expectTable(value, context)
-	if raw.git ~= nil then
-		return {
-			git = expectString(raw.git, at(context, "git")),
-			rev = expectOptionalString(raw.rev, at(context, "rev")),
-			tag = expectOptionalString(raw.tag, at(context, "tag")),
-			branch = expectOptionalString(raw.branch, at(context, "branch")),
-		}
-	elseif raw["local"] ~= nil then
+	if raw.git then
+		if raw.rev then
+			return {
+				git = expectString(raw.git, at(context, "git")),
+				rev = expectString(raw.rev, at(context, "rev")),
+			}
+		end
+		if raw.tag then
+			return {
+				git = expectString(raw.git, at(context, "git")),
+				tag = expectString(raw.tag, at(context, "tag")),
+			}
+		end
+		if raw.branch then
+			return {
+				git = expectString(raw.git, at(context, "git")),
+				branch = expectString(raw.branch, at(context, "branch")),
+			}
+		end
+		return fail(`git dependency {context} must specify exactly one of rev/tag/branch.`)
+	elseif raw["local"] then
 		return {
 			["local"] = expectString(raw["local"], at(context, "local")),
-			package = expectOptionalString(raw.package, at(context, "package")),
+			alias = expectOptionalString(raw.alias, at(context, "alias")),
 		}
-	elseif raw["local-copy"] ~= nil then
-		return {
-			["local-copy"] = expectString(raw["local-copy"], at(context, "local-copy")),
-			package = expectOptionalString(raw.package, at(context, "package")),
-		}
-	elseif raw.path ~= nil then
+	elseif raw.path then
 		return {
 			path = expectString(raw.path, at(context, "path")),
+			alias = expectOptionalString(raw.alias, at(context, "alias")),
 		}
-	elseif raw.url ~= nil then
+	elseif raw.url then
 		return {
 			url = expectString(raw.url, at(context, "url")),
 			sha256 = expectOptionalString(raw.sha256, at(context, "sha256")),
+		}
+	elseif raw.repo then
+		local ver: semver.Range? = nil
+		local verStr = expectOptionalString(raw.version, at(context, "version"))
+		if verStr then
+			ver = semver.parseRange(verStr)
+		end
+		return {
+			repo = expectString(raw.repo, at(context, "repo")),
+			version = ver,
 		}
 	end
 	return fail(`expected {context} to be a version string or dependency source table`)
@@ -369,6 +414,7 @@ local function parseManifestTable(raw: { [any]: any }): Manifest
 		project = parseProjectMetadata(eryx.project),
 		links = parseLinks(eryx.links),
 		scripts = parseStringMap(eryx.scripts, "eryx.scripts"),
+		repositories = parseStringMap(eryx.repositories, "eryx.repositories"),
 		dependencies = parseDependencies(eryx.dependencies, "eryx.dependencies"),
 		devDependencies = parseDependencies(eryx["dev-dependencies"], "eryx.dev-dependencies"),
 		build = parseBuildTargets(eryx.build),
@@ -418,7 +464,7 @@ local function parseLockTable(raw: { [any]: any }): Lockfile
 	local lock = expectTable(raw.lock, "lock")
 	local packagesValue = raw.package
 	local packages = {}
-	if packagesValue ~= nil then
+	if packagesValue then
 		if type(packagesValue) ~= "table" then
 			fail("expected package to be an array of tables")
 		end

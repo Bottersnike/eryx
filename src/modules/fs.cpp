@@ -963,9 +963,9 @@ static int fs_mkdir(lua_State* L) {
 // with the \\?\ extended-length prefix so that paths longer than MAX_PATH
 // (260 chars) are handled correctly. std::filesystem silently fails on long
 // paths without this prefix.
+#ifdef _WIN32
 static void forceRemoveAll(const std::wstring& path, std::error_code& ec) {
     ec.clear();
-#ifdef _WIN32
 
     // Build the \\?\ prefixed version for all API calls.
     std::wstring lp = L"\\\\?\\" + path;
@@ -997,6 +997,9 @@ static void forceRemoveAll(const std::wstring& path, std::error_code& ec) {
             ec = std::error_code(static_cast<int>(GetLastError()), std::system_category());
     }
 #else
+static void forceRemoveAll(const fs::path& p, std::error_code& ec) {
+    ec.clear();
+
     std::error_code ignore;
 
     if (!fs::exists(p, ignore)) return;
@@ -1021,9 +1024,9 @@ static int fs_remove(lua_State* L) {
     std::string path = luaL_checkpathlike(L, 1);
     std::error_code ec;
 #ifdef _WIN32
-    forceRemoveAll(fs::path(path).wstring(), ec);
+    forceRemoveAll(fs::absolute(fs::path(path)).wstring(), ec);
 #else
-    forceRemoveAll(fs::path(path), ec);
+    forceRemoveAll(fs::absolute(fs::path(path)), ec);
 #endif
     std::error_code ignore;
     lua_pushboolean(L, !ec && !fs::exists(path, ignore));

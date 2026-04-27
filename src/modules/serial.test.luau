@@ -402,6 +402,9 @@ end)
 -- ============================================================
 
 suite:test("open: respects custom baud rate (9600)", function()
+	-- Open both ports, just to validate that we can use them
+	withPair(function() end)
+
 	-- Just verify it opens without error; we can't easily measure baud rate
 	local p = serial.open(PORT_A, { baudRate = 9600 })
 	test.expect(p.readable):toBeTrue()

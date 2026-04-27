@@ -129,10 +129,8 @@ _crypto.ecc = {} :: EccLib
 _crypto.rsa = {} :: RsaLib
 _crypto.random = {} :: RandomLib
 
-return table.freeze(
-	capability.require(
-		"@eryx/crypto/hazmat/_native",
-		"Native cryptography support",
-		"Enable cryptography support to use @eryx/crypto/hazmat/_crypto."
-	)
+return capability.require(
+	"@eryx/crypto/hazmat/_native",
+	"Native cryptography support",
+	"Enable cryptography support to use @eryx/crypto/hazmat/_crypto."
 ) :: typeof(_crypto)
