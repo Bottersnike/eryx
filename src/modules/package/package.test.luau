@@ -103,7 +103,8 @@ local function makeProjectManifest(
 	version: string,
 	dependenciesBlock: string?,
 	repositories: { [string]: string }?,
-	sourceRoot: string?
+	sourceRoot: string?,
+	devDependenciesBlock: string?
 ): string
 	local lines = {
 		"[eryx]",
@@ -139,11 +140,17 @@ local function makeProjectManifest(
 		table.insert(lines, "")
 	end
 
+	if devDependenciesBlock and devDependenciesBlock ~= "" then
+		table.insert(lines, '[eryx."dev-dependencies"]')
+		table.insert(lines, devDependenciesBlock)
+		table.insert(lines, "")
+	end
+
 	return table.concat(lines, "\n")
 end
 
 local function makePackageManifest(name: string, version: string, sourceRoot: string?): string
-	return makeProjectManifest(name, version, nil, nil, sourceRoot)
+	return makeProjectManifest(name, version, nil, nil, sourceRoot, nil)
 end
 
 local function makePackageArchive(name: string, version: string, spec: RepoVersionSpec?): buffer
@@ -366,7 +373,7 @@ end
 local function writeGitPackage(dir: string, spec: GitPackageSpec)
 	writeFile(
 		fs.path.join(dir, "eryx.toml"),
-		makeProjectManifest(spec.name, spec.version, spec.dependenciesBlock, spec.repositories, spec.sourceRoot)
+		makeProjectManifest(spec.name, spec.version, spec.dependenciesBlock, spec.repositories, spec.sourceRoot, nil)
 	)
 
 	local files = spec.files or {
@@ -473,6 +480,219 @@ suite:test("install reuses eryx.lock for repository dependencies", function()
 				test.expect(readInstalledInit(root, secondLock, "foo")):toBe('return "foo@1.0.0"\n')
 			end)
 		end, "eryx-package-lock-test")
+	end)
+end)
+
+suite:test("install ignores dev-dependencies by default", function()
+	local state: RepoState = {
+		foo = {
+			["1.0.0"] = {},
+		},
+		bar = {
+			["1.0.0"] = {},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl)
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeProjectManifest(
+					"dev-ignore-demo",
+					"0.1.0",
+					'foo = { repo = "dummy", version = "1.0.0" }',
+					{ dummy = repositoryUrl },
+					nil,
+					'bar = { repo = "dummy", version = "1.0.0" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall()
+
+				local lock = lockfile.load(root)
+				test.expect(lock):toNotBeNil()
+				assert(lock)
+				test.expect(countLockPackages(lock)):toBe(1)
+				test.expect(readLuaurcAliases(root).foo):toNotBeNil()
+				test.expect(readLuaurcAliases(root).bar):toBeNil()
+				test.expect(#(lock.devRoots or {})):toBe(0)
+			end)
+		end, "eryx-package-dev-ignore-test")
+	end)
+end)
+
+suite:test("install --dev includes dev-dependencies and records them separately in the lock", function()
+	local state: RepoState = {
+		foo = {
+			["1.0.0"] = {},
+		},
+		bar = {
+			["1.0.0"] = {},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl)
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeProjectManifest(
+					"dev-install-demo",
+					"0.1.0",
+					'foo = { repo = "dummy", version = "1.0.0" }',
+					{ dummy = repositoryUrl },
+					nil,
+					'bar = { repo = "dummy", version = "1.0.0" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall(true)
+
+				local lock = lockfile.load(root)
+				test.expect(lock):toNotBeNil()
+				assert(lock)
+				test.expect(countLockPackages(lock)):toBe(2)
+				test.expect(#lock.roots):toBe(1)
+				test.expect(#(lock.devRoots or {})):toBe(1)
+				test.expect(readLuaurcAliases(root).foo):toBe(lock.rootAliases.foo)
+				test.expect(readLuaurcAliases(root).bar):toBe((lock.devRootAliases or {}).bar)
+			end)
+		end, "eryx-package-dev-install-test")
+	end)
+end)
+
+suite:test("plain install after install --dev preserves dev dependencies untouched", function()
+	local state: RepoState = {
+		foo = {
+			["1.0.0"] = {},
+		},
+		bar = {
+			["1.0.0"] = {},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl)
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeProjectManifest(
+					"dev-preserve-demo",
+					"0.1.0",
+					'foo = { repo = "dummy", version = "1.0.0" }',
+					{ dummy = repositoryUrl },
+					nil,
+					'bar = { repo = "dummy", version = "1.0.0" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall(true)
+
+				local firstLock = lockfile.load(root)
+				test.expect(firstLock):toNotBeNil()
+				assert(firstLock)
+				local firstAliases = readLuaurcAliases(root)
+				test.expect(firstAliases.bar):toBe((firstLock.devRootAliases or {}).bar)
+
+				pkg.doInstall()
+
+				local secondLock = lockfile.load(root)
+				test.expect(secondLock):toNotBeNil()
+				assert(secondLock)
+				local secondAliases = readLuaurcAliases(root)
+				test.expect(#(secondLock.devRoots or {})):toBe(1)
+				test.expect(secondAliases.bar):toBe((secondLock.devRootAliases or {}).bar)
+				test.expect(secondAliases.bar):toBe(firstAliases.bar)
+				test.expect(countLockPackages(secondLock)):toBe(2)
+			end)
+		end, "eryx-package-dev-preserve-test")
+	end)
+end)
+
+suite:test("selected update can target dev-dependencies when requested", function()
+	local state: RepoState = {
+		foo = {
+			["1.0.0"] = {},
+		},
+		bar = {
+			["1.0.0"] = {},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl, sync)
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeProjectManifest(
+					"dev-update-demo",
+					"0.1.0",
+					'foo = { repo = "dummy", version = "1.0.0" }',
+					{ dummy = repositoryUrl },
+					nil,
+					'bar = { repo = "dummy" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall(true)
+
+				local firstLock = lockfile.load(root)
+				test.expect(firstLock):toNotBeNil()
+				assert(firstLock)
+				test.expect(findLockedPackage(firstLock, "foo").data.version):toBe("1.0.0")
+				local firstDevRoots = firstLock.devRoots or {}
+				test.expect(#firstDevRoots):toBe(1)
+				test.expect(firstLock.packages[firstDevRoots[1].target].data.version):toBe("1.0.0")
+
+				state.bar["1.1.0"] = {}
+				sync()
+
+				pkg.doUpdate({ "bar" }, true)
+
+				local secondLock = lockfile.load(root)
+				test.expect(secondLock):toNotBeNil()
+				assert(secondLock)
+				test.expect(findLockedPackage(secondLock, "foo").data.version):toBe("1.0.0")
+				local devRoots = secondLock.devRoots or {}
+				test.expect(#devRoots):toBe(1)
+				test.expect(secondLock.packages[devRoots[1].target].data.version):toBe("1.1.0")
+			end)
+		end, "eryx-package-dev-update-test")
+	end)
+end)
+
+suite:test("upgrade --dev rewrites repository versions in dev-dependencies", function()
+	local state: RepoState = {
+		bar = {
+			["1.0.0"] = {},
+			["1.1.0"] = {},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl)
+		tempfile.withTempDir(function(root)
+			local manifestPath = fs.path.join(root, "eryx.toml")
+			writeFile(
+				manifestPath,
+				makeProjectManifest(
+					"dev-upgrade-demo",
+					"0.1.0",
+					nil,
+					{ dummy = repositoryUrl },
+					nil,
+					'bar = { repo = "dummy", version = "^1.0.0" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doUpgrade(nil, true)
+
+				local manifest = project.load(manifestPath)
+				local depTable = manifest.cst.eryx["dev-dependencies"].bar :: any
+				test.expect(depTable.version):toBe("1.1.0")
+			end)
+		end, "eryx-package-dev-upgrade-test")
 	end)
 end)
 

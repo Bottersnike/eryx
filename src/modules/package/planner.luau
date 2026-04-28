@@ -89,6 +89,7 @@ function planner.produceInstallPlan(tree: { types.Requirement }): types.InstallP
 		plan = {
 			nodes = {},
 			roots = {},
+			devRoots = {},
 		},
 		repositorySelections = {},
 		resolving = {},
@@ -143,6 +144,7 @@ function planner.generateLockFile(plan: types.InstallPlan): types.LockFile
 	end
 
 	local roots = {}
+	local devRoots = {}
 
 	for _, edge in plan.roots do
 		table.insert(roots, {
@@ -151,11 +153,20 @@ function planner.generateLockFile(plan: types.InstallPlan): types.LockFile
 		})
 	end
 
+	for _, edge in plan.devRoots do
+		table.insert(devRoots, {
+			alias = edge.alias,
+			target = edge.target,
+		})
+	end
+
 	return {
-		version = 1,
+		version = 2,
 		packages = packages,
 		roots = roots,
+		devRoots = devRoots,
 		rootAliases = layout.computeAliases(plan, plan.roots, installNames, true),
+		devRootAliases = layout.computeAliases(plan, plan.devRoots, installNames, true),
 	}
 end
 
@@ -220,17 +231,48 @@ function planner.buildRequirementTreeFromLock(
 	return requirement
 end
 
-function planner.produceInstallPlanFromLock(root: string, lock: types.LockFile): types.InstallPlan
-	if lock.version ~= 1 then
+local function collectReachableTargets(
+	lock: types.LockFile,
+	edges: { types.InstallEdge },
+	reachable: { [string]: boolean }
+)
+	for _, edge in edges do
+		if reachable[edge.target] then
+			continue
+		end
+
+		local pkg = lock.packages[edge.target]
+		if not pkg then
+			error(`Lock file references missing package {edge.target}`)
+		end
+
+		reachable[edge.target] = true
+		collectReachableTargets(lock, pkg.dependencies, reachable)
+	end
+end
+
+function planner.produceInstallPlanFromLock(root: string, lock: types.LockFile, includeDev: boolean?): types.InstallPlan
+	if lock.version ~= 1 and lock.version ~= 2 then
 		error(`Unsupported lock file version {lock.version}`)
 	end
 
+	local selectedRoots = copyEdges(lock.roots)
+	local selectedDevRoots = if includeDev and lock.version >= 2 and lock.devRoots then copyEdges(lock.devRoots) else {}
+	local reachable: { [string]: boolean } = {}
+	collectReachableTargets(lock, selectedRoots, reachable)
+	collectReachableTargets(lock, selectedDevRoots, reachable)
+
 	local plan: types.InstallPlan = {
 		nodes = {},
-		roots = copyEdges(lock.roots),
+		roots = selectedRoots,
+		devRoots = selectedDevRoots,
 	}
 
 	for id, pkg in lock.packages do
+		if not reachable[id] then
+			continue
+		end
+
 		local requirement = requirementFromLock(root, pkg)
 		local installName = pkg.installName or util.installNameFor(requirement, id)
 
@@ -243,6 +285,12 @@ function planner.produceInstallPlanFromLock(root: string, lock: types.LockFile):
 	end
 
 	for _, edge in plan.roots do
+		if not plan.nodes[edge.target] then
+			error(`Lock file references missing package {edge.target}`)
+		end
+	end
+
+	for _, edge in plan.devRoots do
 		if not plan.nodes[edge.target] then
 			error(`Lock file references missing package {edge.target}`)
 		end

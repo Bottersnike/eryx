@@ -1,6 +1,6 @@
 # Package Management
 
-Eryx has its own package manager, which can be used to install dependencies into a project. Dependencies are defined in `eryx.toml`, in the `[eryx.dependencies]` section.
+Eryx has its own package manager, which can be used to install dependencies into a project. Top-level dependencies are defined in `eryx.toml`, using `[eryx.dependencies]` for normal dependencies and `[eryx."dev-dependencies"]` for development-only dependencies.
 
 Packages are usually installed into `eryx_packages` at the root of the project. This folder should never be tracked with source control, and is automatically populated when using `eryx pkg`. When using git, add `eryx_packages/` to `.gitignore`. Both `eryx.toml` and `eryx.lock` should however be tracked with source control.
 
@@ -8,7 +8,7 @@ If an install only contains path dependencies, Eryx will not create `eryx_packag
 
 Cyclic dependencies are not permitted. Multiple versions of the same package may be installed when required. When repository packages are used, Eryx prefers valid solutions that minimise duplicate package versions.
 
-Within `[eryx.dependencies]`, the table key is the dependency name used by Eryx. By default, this is also the Luau alias.
+Within either dependency table, the table key is the dependency name used by Eryx. By default, this is also the Luau alias.
 
 ## The lockfile
 
@@ -29,13 +29,13 @@ The lock file also tracks package-manager-owned aliases, so installs can preserv
 
 The package manager is accessed through `eryx pkg`. The following commands are available:
 
-- `eryx pkg install`: Installs all packages as defined in `eryx.toml`, reusing `eryx.lock` when possible, and updating `.luaurc` as appropriate.
-- `eryx pkg update [deps...]`: Re-resolves all packages, or only the selected top-level dependencies, and writes a new lock file.
-- `eryx pkg upgrade [deps...]`: Like `update`, but also rewrites repository dependency versions in `eryx.toml` to the resolved versions.
-- `eryx pkg add [...]`: Adds a new dependency. The following sections outline the specific formats for each dependency type.
-- `eryx pkg remove <dep>`: Removes an existing dependency, using the key in `eryx.toml` as the dependency name.
-- `eryx pkg tree`: Resolve all dependencies from `eryx.toml`, as if performing a fresh resolution, then display the dependency graph.
-- `eryx pkg ls`: List all dependencies defined in `eryx.toml`.
+- `eryx pkg install`: Installs normal dependencies. Pass `--dev` to also include `dev-dependencies`.
+- `eryx pkg update [deps...]`: Re-resolves normal dependencies, or only the selected top-level dependencies, and writes a new lock file. Pass `--dev` to include `dev-dependencies`.
+- `eryx pkg upgrade [deps...]`: Like `update`, but also rewrites repository dependency versions in `eryx.toml` to the resolved versions. Pass `--dev` to include `dev-dependencies`.
+- `eryx pkg add [...]`: Adds a new dependency. Pass `--dev` to add it under `[eryx."dev-dependencies"]`. The following sections outline the specific formats for each dependency type.
+- `eryx pkg remove <dep>`: Removes an existing dependency from `[eryx.dependencies]`. Pass `--dev` to remove it from `[eryx."dev-dependencies"]` instead.
+- `eryx pkg tree`: Resolve normal dependencies from `eryx.toml`, as if performing a fresh resolution, then display the dependency graph. Pass `--dev` to include `dev-dependencies`.
+- `eryx pkg ls`: List normal dependencies defined in `eryx.toml`. Pass `--dev` to also list `dev-dependencies`.
 
 ## Aliases and `.luaurc`
 

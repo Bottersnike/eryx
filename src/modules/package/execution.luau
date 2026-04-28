@@ -9,6 +9,32 @@ local types = require("./types")
 local sources = require("./sources")
 local execution = {}
 
+local function combineEdges(a: { types.InstallEdge }, b: { types.InstallEdge }): { types.InstallEdge }
+	local out = {}
+	for _, edge in a do
+		table.insert(out, edge)
+	end
+	for _, edge in b do
+		table.insert(out, edge)
+	end
+	return out
+end
+
+local function combineAliasMaps(a: types.AliasMap?, b: types.AliasMap?): types.AliasMap?
+	if a == nil and b == nil then
+		return nil
+	end
+
+	local out: types.AliasMap = {}
+	for alias, target in a or {} do
+		out[alias] = target
+	end
+	for alias, target in b or {} do
+		out[alias] = target
+	end
+	return out
+end
+
 local function needsMaterialization(plan: types.InstallPlan): boolean
 	for _, node in plan.nodes do
 		if node.requirement.type ~= "path" then
@@ -220,8 +246,11 @@ function execution.execute(root: string, plan: types.InstallPlan, previousLock: 
 		end
 	end
 
-	local aliases = layout.computeAliases(plan, plan.roots, installNames, true)
-	local previousRootAliases = if previousLock then previousLock.rootAliases else nil
+	local rootEdges = combineEdges(plan.roots, plan.devRoots)
+	local aliases = layout.computeAliases(plan, rootEdges, installNames, true)
+	local previousRootAliases = if previousLock
+		then combineAliasMaps(previousLock.rootAliases, previousLock.devRootAliases)
+		else nil
 	installAliases(root, aliases, previousRootAliases, previousLock == nil)
 
 	cleanupPackagesDir(root, installDirs, activeGitCacheEntries(plan))

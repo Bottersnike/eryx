@@ -9,17 +9,23 @@ local semver = require("@eryx/semver")
 local stdio = require("@eryx/stdio")
 
 local parser = argparse.Parser.new("pkg", "Erxy package manager")
-parser:addSubCommand("install", "Install all packages")
+local install = parser:addSubCommand("install", "Install all packages")
+install:addFlag("dev", nil, "Also include dev-dependencies")
 local update = parser:addSubCommand("update", "Re-resolve and update all packages, or selected dependencies")
+update:addFlag("dev", nil, "Also include dev-dependencies")
 update:addPositional("package", "string", nil, false, "Dependencies to update", true)
 local upgrade = parser:addSubCommand("upgrade", "Update and rewrite repository dependency versions in eryx.toml")
+upgrade:addFlag("dev", nil, "Also include dev-dependencies")
 upgrade:addPositional("package", "string", nil, false, "Repository dependencies to upgrade", true)
-parser:addSubCommand("tree", "Show the dependency tree")
-parser:addSubCommand("ls", "List all top level dependencies")
+local tree = parser:addSubCommand("tree", "Show the dependency tree")
+tree:addFlag("dev", nil, "Also include dev-dependencies")
+local ls = parser:addSubCommand("ls", "List all top level dependencies")
+ls:addFlag("dev", nil, "Also include dev-dependencies")
 
 local add = parser:addSubCommand("add", "Install a new dependency")
 add:addFlag("path", nil, "Mark this dependency as a path dependency")
 add:addFlag("dry", nil, "Do not perform an install after updating dependencies")
+add:addFlag("dev", nil, "Add this dependency under dev-dependencies")
 add:addOption("sha256", nil, "string", nil, false, "URL package SHA256")
 add:addOption("rev", nil, "string", nil, false, "Git revision")
 add:addOption("tag", nil, "string", nil, false, "Git tag")
@@ -30,21 +36,31 @@ add:addPositional("package", "string")
 local remove = parser:addSubCommand("remove", "Remove an existing dependency")
 remove:addPositional("package", "string")
 remove:addFlag("dry", nil, "Do not perform an install after updating dependencies")
+remove:addFlag("dev", nil, "Remove this dependency from dev-dependencies")
 
 local args = parser:parse() :: {
 	help: boolean,
-	install: {}?,
+	install: {
+		dev: boolean,
+	}?,
 	update: {
+		dev: boolean,
 		package: { string }?,
 	}?,
 	upgrade: {
+		dev: boolean,
 		package: { string }?,
 	}?,
-	ls: {}?,
-	tree: {}?,
+	ls: {
+		dev: boolean,
+	}?,
+	tree: {
+		dev: boolean,
+	}?,
 	add: {
 		path: boolean,
 		dry: boolean,
+		dev: boolean,
 		sha256: string?,
 		rev: string?,
 		tag: string?,
@@ -53,6 +69,7 @@ local args = parser:parse() :: {
 	}?,
 	remove: {
 		dry: boolean,
+		dev: boolean,
 		package: string,
 	}?,
 }
@@ -160,6 +177,16 @@ local function printInstallPlanTree(plan: pkgTypes.InstallPlan)
 
 	for i, edge in plan.roots do
 		printNode(edge, "", i == #plan.roots, seen)
+	end
+
+	if #plan.devRoots > 0 then
+		if #plan.roots > 0 then
+			print("")
+		end
+		print("Dev dependencies:")
+		for i, edge in plan.devRoots do
+			printNode(edge, "", i == #plan.devRoots, seen)
+		end
 	end
 end
 
@@ -525,22 +552,22 @@ local function main()
 	end
 
 	if args.install then
-		pkg.doInstall()
+		pkg.doInstall(args.install.dev)
 		return
 	end
 
 	if args.update then
-		pkg.doUpdate(args.update.package)
+		pkg.doUpdate(args.update.package, args.update.dev)
 		return
 	end
 
 	if args.upgrade then
-		pkg.doUpgrade(args.upgrade.package)
+		pkg.doUpgrade(args.upgrade.package, args.upgrade.dev)
 		return
 	end
 
 	if args.tree then
-		local plan = pkg.computeInstallPlan()
+		local plan = pkg.computeInstallPlan(args.tree.dev)
 		if plan then
 			printInstallPlanTree(plan)
 		end
@@ -553,11 +580,33 @@ local function main()
 				print(formatDependency(name, dep))
 			end
 		end
+		if args.ls.dev and prj.manifest.devDependencies then
+			for name, dep in prj.manifest.devDependencies do
+				print(formatDependency(name, dep) .. " [dev]")
+			end
+		end
 		return
 	end
 
 	if args.add then
 		local name, dependency = parseAddDependency()
+		local targetDeps = if args.add.dev then prj.manifest.devDependencies else prj.manifest.dependencies
+		local otherDeps = if args.add.dev then prj.manifest.dependencies else prj.manifest.devDependencies
+
+		if targetDeps and targetDeps[name] ~= nil then
+			error(
+				`Dependency "{name}" is already present in eryx.{if args.add.dev
+					then "dev-dependencies"
+					else "dependencies"}`
+			)
+		end
+		if otherDeps and otherDeps[name] ~= nil then
+			error(
+				`Dependency "{name}" is already present in eryx.{if args.add.dev
+					then "dependencies"
+					else "dev-dependencies"}`
+			)
+		end
 
 		-- Normalise semver back to a string, so we can save to TOML
 		if (dependency :: any).version then
@@ -565,36 +614,39 @@ local function main()
 		end
 
 		-- Modify in the CST, so we preserve the rest of document
-		if not prj.cst.eryx.dependencies then
-			prj.cst.eryx.dependencies = {}
+		local key = if args.add.dev then "dev-dependencies" else "dependencies"
+		if not prj.cst.eryx[key] then
+			prj.cst.eryx[key] = {}
 		end
-		prj.cst.eryx.dependencies[name] = dependency
+		prj.cst.eryx[key][name] = dependency
 
 		project.save(prj)
 
 		if not args.add.dry then
-			pkg.doInstall()
+			pkg.doInstall(args.add.dev)
 		end
 		return
 	end
 
 	if args.remove then
-		if not prj.manifest.dependencies then
+		local manifestDeps = if args.remove.dev then prj.manifest.devDependencies else prj.manifest.dependencies
+		if not manifestDeps then
 			print(`Package {args.remove.package} not installed`)
 			return
 		end
-		if not prj.manifest.dependencies[args.remove.package] then
+		if not manifestDeps[args.remove.package] then
 			print(`Package {args.remove.package} not installed`)
 			return
 		end
 
 		-- Modify in the CST, so we preserve the rest of document
-		prj.cst.eryx.dependencies[args.remove.package] = nil
+		local key = if args.remove.dev then "dev-dependencies" else "dependencies"
+		prj.cst.eryx[key][args.remove.package] = nil
 
 		project.save(prj)
 
 		if not args.remove.dry then
-			pkg.doInstall()
+			pkg.doInstall(args.remove.dev)
 		end
 		return
 	end

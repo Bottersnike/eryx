@@ -80,6 +80,7 @@ export type InstallNode = {
 export type InstallPlan = {
 	nodes: { [string]: InstallNode },
 	roots: { InstallEdge },
+	devRoots: { InstallEdge },
 }
 
 export type AliasMap = { [string]: string }
@@ -97,6 +98,8 @@ export type LockFile = {
 	version: number,
 	roots: { InstallEdge },
 	rootAliases: AliasMap,
+	devRoots: { InstallEdge }?,
+	devRootAliases: AliasMap?,
 	packages: { [string]: LockPackage },
 }
 
