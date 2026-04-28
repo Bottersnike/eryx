@@ -5,6 +5,26 @@ local types = require("./types")
 
 local layout = {}
 
+local function applySourceRoot(basePath: string, sourceRoot: string?): string
+	if sourceRoot == nil or sourceRoot == "" or sourceRoot == "." then
+		return basePath
+	end
+
+	local normalizedBase = basePath:gsub("\\", "/"):gsub("/+$", "")
+	local normalizedRoot = sourceRoot:gsub("\\", "/")
+
+	while normalizedRoot:sub(1, 2) == "./" do
+		normalizedRoot = normalizedRoot:sub(3)
+	end
+
+	normalizedRoot = normalizedRoot:gsub("^/+", ""):gsub("/+$", "")
+	if normalizedRoot == "" or normalizedRoot == "." then
+		return normalizedBase
+	end
+
+	return normalizedBase .. "/" .. normalizedRoot
+end
+
 local function aliasPathForEdge(
 	plan: types.InstallPlan,
 	edge: types.InstallEdge,
@@ -19,7 +39,7 @@ local function aliasPathForEdge(
 	local r = node.requirement
 
 	if r.type == "path" then
-		return r.path
+		return applySourceRoot(r.path, r.sourceRoot)
 	end
 
 	local targetName = installNames[edge.target]
@@ -28,9 +48,9 @@ local function aliasPathForEdge(
 	end
 
 	if root then
-		return util.PACKAGES_DIR .. "/" .. targetName
+		return applySourceRoot(util.PACKAGES_DIR .. "/" .. targetName, r.sourceRoot)
 	else
-		return "../" .. targetName
+		return applySourceRoot("../" .. targetName, r.sourceRoot)
 	end
 end
 

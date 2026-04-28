@@ -25,6 +25,7 @@ type RepoDependencySpec = {
 type RepoVersionSpec = {
 	dependencies: { [string]: RepoDependencySpec }?,
 	files: { [string]: string }?,
+	sourceRoot: string?,
 }
 
 type RepoState = {
@@ -39,6 +40,7 @@ type GitPackageSpec = {
 	dependenciesBlock: string?,
 	repositories: { [string]: string }?,
 	files: { [string]: string }?,
+	sourceRoot: string?,
 }
 
 local function reservePort(): number
@@ -100,7 +102,8 @@ local function makeProjectManifest(
 	name: string,
 	version: string,
 	dependenciesBlock: string?,
-	repositories: { [string]: string }?
+	repositories: { [string]: string }?,
+	sourceRoot: string?
 ): string
 	local lines = {
 		"[eryx]",
@@ -111,6 +114,11 @@ local function makeProjectManifest(
 		`version = "{version}"`,
 		"",
 	}
+
+	if sourceRoot then
+		table.insert(lines, `source-root = "{sourceRoot}"`)
+		table.insert(lines, "")
+	end
 
 	if repositories and next(repositories) ~= nil then
 		table.insert(lines, "[eryx.repositories]")
@@ -134,21 +142,13 @@ local function makeProjectManifest(
 	return table.concat(lines, "\n")
 end
 
-local function makePackageManifest(name: string, version: string): string
-	return table.concat({
-		"[eryx]",
-		"manifest-version = 1",
-		"",
-		"[eryx.project]",
-		`name = "{name}"`,
-		`version = "{version}"`,
-		"",
-	}, "\n")
+local function makePackageManifest(name: string, version: string, sourceRoot: string?): string
+	return makeProjectManifest(name, version, nil, nil, sourceRoot)
 end
 
 local function makePackageArchive(name: string, version: string, spec: RepoVersionSpec?): buffer
 	local files: { [string]: buffer } = {
-		["eryx.toml"] = buffer.fromstring(makePackageManifest(name, version)),
+		["eryx.toml"] = buffer.fromstring(makePackageManifest(name, version, if spec then spec.sourceRoot else nil)),
 		["init.luau"] = buffer.fromstring(
 			if spec
 					and spec.files
@@ -216,6 +216,7 @@ local function withRepository<T...>(state: RepoState, run: (url: string, sync: (
 				{
 					name = ctx.params.package,
 					dependencies = if spec.dependencies then spec.dependencies else {},
+					sourceRoot = spec.sourceRoot,
 				}
 		end)
 
@@ -365,7 +366,7 @@ end
 local function writeGitPackage(dir: string, spec: GitPackageSpec)
 	writeFile(
 		fs.path.join(dir, "eryx.toml"),
-		makeProjectManifest(spec.name, spec.version, spec.dependenciesBlock, spec.repositories)
+		makeProjectManifest(spec.name, spec.version, spec.dependenciesBlock, spec.repositories, spec.sourceRoot)
 	)
 
 	local files = spec.files or {
@@ -692,6 +693,34 @@ suite:test("path dependencies stay alias-only and do not create eryx_packages", 
 	end, "eryx-package-path-test")
 end)
 
+suite:test("path dependencies ignore target eryx.toml entirely", function()
+	tempfile.withTempDir(function(root)
+		local depPath = fs.path.join(root, "linked-dep")
+		local manifestDepPath = depPath:gsub("\\", "/")
+		fs.mkdir(depPath)
+		fs.mkdir(fs.path.join(depPath, "src"))
+		writeFile(fs.path.join(depPath, "eryx.toml"), makeProjectManifest("linked-dep", "0.1.0", nil, nil, "src"))
+		writeFile(fs.path.join(depPath, "src", "init.luau"), 'return "linked-dep"\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			makeProjectManifest("path-demo", "0.1.0", 'linked = { path = "' .. manifestDepPath .. '" }', nil)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+
+			local aliases = readLuaurcAliases(root)
+			local lock = lockfile.load(root)
+			test.expect(lock):toNotBeNil()
+			assert(lock)
+
+			test.expect(aliases.linked):toBe(manifestDepPath)
+			test.expect(findLockedPackage(lock, "linked").data.sourceRoot):toBeNil()
+		end)
+	end, "eryx-package-path-source-root-test")
+end)
+
 suite:test("selected update requires an existing lock file", function()
 	tempfile.withTempDir(function(root)
 		writeFile(
@@ -821,6 +850,94 @@ suite:test("repository dependencies install their child dependencies", function(
 				test.expect(fooRc):toContain("../" .. (bar.installName :: string))
 			end)
 		end, "eryx-package-repo-child-test")
+	end)
+end)
+
+suite:test("repository aliases respect source-root across install and lock reuse", function()
+	local state: RepoState = {
+		foo = {
+			["1.0.0"] = {
+				sourceRoot = "src",
+				files = {
+					["src/init.luau"] = 'return "foo@1.0.0"\n',
+				},
+			},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl)
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeManifest("repo-source-root-demo", repositoryUrl, 'foo = { repo = "dummy", version = "1.0.0" }')
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall()
+
+				local firstLock = lockfile.load(root)
+				test.expect(firstLock):toNotBeNil()
+				assert(firstLock)
+				local foo = findLockedPackage(firstLock, "foo")
+				local expectedAlias = `eryx_packages/{foo.installName :: string}/src`
+
+				test.expect(readLuaurcAliases(root).foo):toBe(expectedAlias)
+				test.expect(firstLock.rootAliases.foo):toBe(expectedAlias)
+				test.expect(foo.data.sourceRoot):toBe("src")
+
+				pkg.doInstall()
+
+				test.expect(readLuaurcAliases(root).foo):toBe(expectedAlias)
+			end)
+		end, "eryx-package-repo-source-root-test")
+	end)
+end)
+
+suite:test("child package aliases respect dependency source-root", function()
+	local state: RepoState = {
+		foo = {},
+		bar = {
+			["1.0.0"] = {
+				sourceRoot = "lib",
+				files = {
+					["lib/init.luau"] = 'return "bar@1.0.0"\n',
+				},
+			},
+		},
+	}
+
+	withRepository(state, function(repositoryUrl, sync)
+		state.foo["1.0.0"] = {
+			dependencies = {
+				bar = { repo = repositoryUrl, version = "1.0.0" },
+			},
+		}
+		sync()
+
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeManifest(
+					"repo-child-source-root-demo",
+					repositoryUrl,
+					'foo = { repo = "dummy", version = "1.0.0" }'
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall()
+
+				local lock = lockfile.load(root)
+				test.expect(lock):toNotBeNil()
+				assert(lock)
+
+				local foo = findLockedPackage(lock, "foo")
+				local bar = lock.packages[findDependencyTarget(foo, "bar")]
+				local childAliases = readLuaurcAliases(fs.path.join(root, "eryx_packages", foo.installName :: string))
+
+				test.expect(childAliases.bar):toBe(`../{bar.installName :: string}/lib`)
+			end)
+		end, "eryx-package-child-source-root-test")
 	end)
 end)
 

@@ -225,6 +225,7 @@ local gitSource: types.Source = {
 			ref = { type = "commit", value = resolvedCommit },
 			requestedRef = ref,
 			gitFolder = gitFolder,
+			sourceRoot = nil,
 			tree = {},
 		}
 
@@ -232,6 +233,7 @@ local gitSource: types.Source = {
 			local visitingKey = cycles.pushVisiting(r, visiting, name)
 
 			local childPrj = project.parse(config)
+			r.sourceRoot = childPrj.manifest.project.sourceRoot
 			recurse(root, path, childPrj.manifest, r.tree, visiting, false)
 
 			cycles.popVisiting(visitingKey, visiting)
@@ -282,6 +284,7 @@ local gitSource: types.Source = {
 				type = requirement.requestedRef.type,
 				value = requirement.requestedRef.value,
 			},
+			sourceRoot = requirement.sourceRoot,
 		}
 	end,
 
@@ -302,6 +305,7 @@ local gitSource: types.Source = {
 				value = requestedRefData.value,
 			},
 			gitFolder = gitFolderPath(root, url),
+			sourceRoot = package.data.sourceRoot,
 			tree = {},
 		}
 	end,

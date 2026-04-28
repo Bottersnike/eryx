@@ -43,6 +43,7 @@ local repo: types.Source = {
 			type = "local",
 			name = name,
 			path = dep["local"],
+			sourceRoot = nil,
 			tree = {},
 		}
 
@@ -50,6 +51,7 @@ local repo: types.Source = {
 
 		local childPrj = project.loadNearest(dep["local"])
 		if childPrj then
+			r.sourceRoot = childPrj.manifest.project.sourceRoot
 			recurse(root, dep["local"], childPrj.manifest, r.tree, visiting, allowLocal)
 		end
 
@@ -82,6 +84,7 @@ local repo: types.Source = {
 	generateLock = function(requirement: types.Requirement): { [string]: any }
 		return {
 			path = requirement.path,
+			sourceRoot = requirement.sourceRoot,
 		}
 	end,
 
@@ -90,6 +93,7 @@ local repo: types.Source = {
 			type = "local",
 			name = "",
 			path = package.data.path,
+			sourceRoot = package.data.sourceRoot,
 			tree = {},
 		}
 	end,

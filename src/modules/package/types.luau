@@ -21,12 +21,14 @@ export type Requirement =
 		type: "local",
 		name: string,
 		path: string,
+		sourceRoot: string?,
 		tree: { Requirement },
 	}
 	| {
 		type: "path",
 		name: string,
 		path: string,
+		sourceRoot: string?,
 		tree: { Requirement },
 	}
 	| {
@@ -37,6 +39,7 @@ export type Requirement =
 		ref: GitRef,
 		requestedRef: GitRef,
 		gitFolder: string,
+		sourceRoot: string?,
 		tree: { Requirement },
 	}
 	| {
@@ -44,6 +47,7 @@ export type Requirement =
 		name: string,
 		path: string,
 		sha256: string?,
+		sourceRoot: string?,
 		tree: { Requirement },
 	}
 	| {
@@ -56,6 +60,7 @@ export type Requirement =
 		path: string,
 		range: semver.Range?,
 		version: semver.Version?,
+		sourceRoot: string?,
 		tree: { Requirement },
 	}
 export type RequirementKind = "local" | "path" | "git" | "file" | "repository"

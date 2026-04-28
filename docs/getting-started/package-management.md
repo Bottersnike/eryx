@@ -41,6 +41,8 @@ The package manager is accessed through `eryx pkg`. The following commands are a
 
 Eryx writes package aliases into `.luaurc`.
 
+If a package manifest sets `eryx.project.source-root`, Eryx points that package's alias at the declared source folder instead of the package directory itself. For example, a package installed into `eryx_packages/foo-1234abcd` with `source-root = "src"` will be aliased to `eryx_packages/foo-1234abcd/src`.
+
 When a previous `eryx.lock` is available, Eryx treats the aliases recorded in that lock as package-manager-owned. During install:
 
 - Aliases currently owned by Eryx are updated in place.
@@ -60,7 +62,7 @@ A path dependency represents a Luau alias. This dependency will emit an alias in
 The configured path is currently used as written in `eryx.toml`; it is not rebased relative to the manifest file.
 
 :::note
-Path dependencies exist exclusively to configure Luau aliases. As such, any `eryx.toml` files within a path dependency are ignored. Critically, this means `sourceRoot` is ignored.
+Path dependencies exist exclusively to configure Luau aliases. Eryx does not read `eryx.toml` from the target folder at all for this dependency type. That means child dependencies are ignored, and `eryx.project.source-root` is ignored too.
 :::
 
 ```toml
@@ -84,6 +86,8 @@ A local dependency links to a folder available on the local filesystem. The fold
 
 Local dependencies should be used when the path truly represents a dependency, as opposed to just a Luau alias, which should instead be represented as a path dependency.
 
+If the discovered manifest declares `eryx.project.source-root`, the generated alias points at that subdirectory inside the installed copy.
+
 The configured path is currently used as written in `eryx.toml`; it is not rebased relative to the manifest file.
 
 ```toml
@@ -104,6 +108,8 @@ eryx pkg add package=./foo/bar
 ### URL dependencies
 
 A URL dependency represents an archive available as an HTTP resource. Currently only ZIP files are supported. An `eryx.toml` present inside the archive is explored to discover child dependencies.
+
+If that manifest declares `eryx.project.source-root`, the generated alias points at that subdirectory inside the extracted package.
 
 Optionally, a `sha256` hash can be provided for file integrity. This is strongly recommended. If the downloaded file does not match the provided hash, installation is aborted.
 
@@ -133,6 +139,8 @@ A Git dependency represents a package available on a Git server. The requested v
 
 An `eryx.toml` present at the repository root is used for discovery of child dependencies.
 
+If that manifest declares `eryx.project.source-root`, the generated alias points at that subdirectory inside the checked out package.
+
 Although dependencies may be requested by branch or tag, Eryx resolves them to exact commits and records both the requested ref and the resolved commit in `eryx.lock`.
 
 ```toml
@@ -160,6 +168,8 @@ A repository dependency represents a package available on a package repository. 
 If no version is specified, the latest available version satisfying all constraints is used.
 
 If `repo` contains `://`, it is treated as a repository URL directly. Otherwise, it must match a key present in `[eryx.repositories]`.
+
+If the package metadata declares `eryx.project.source-root`, the generated alias points at that subdirectory inside the installed package.
 
 ```toml
 [eryx.repositories]

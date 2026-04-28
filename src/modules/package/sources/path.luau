@@ -32,6 +32,7 @@ local repo: types.Source = {
 			type = "path",
 			name = name,
 			path = dep["path"],
+			sourceRoot = nil,
 			tree = {},
 		}
 
@@ -57,6 +58,7 @@ local repo: types.Source = {
 			type = "path",
 			name = "",
 			path = package.data.path,
+			sourceRoot = nil,
 			tree = {},
 		}
 	end,

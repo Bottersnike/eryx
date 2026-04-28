@@ -16,6 +16,21 @@ local function repositoryBaseId(repository: string, key: string): string
 	return repository .. "\0" .. key
 end
 
+local function ensureDirRecursive(path: string)
+	if path == "" or fs.exists(path) then
+		return
+	end
+
+	local parent = fs.path.dirname(path)
+	if parent and parent ~= path and parent ~= "" then
+		ensureDirRecursive(parent)
+	end
+
+	if not fs.exists(path) then
+		fs.mkdir(path)
+	end
+end
+
 local function listRepositoryVersions(repository: string, key: string): { semver.Version }
 	local res = http.get(`{repository}/packages/{key}`)
 	-- if res.status ~= 200 or res.headers["content-type"] ~= "application/json" then
@@ -53,6 +68,7 @@ local function getManifestFromRepository(repository: string, key: string, versio
 		project = {
 			name = key,
 			version = semver.format(version),
+			sourceRoot = rawMetadata.sourceRoot,
 		},
 		dependencies = dependencies,
 		raw = {},
@@ -183,6 +199,7 @@ local repo: types.Source = {
 			path = repository .. "\0" .. (dep.package or name),
 			range = dep.version,
 			version = nil,
+			sourceRoot = nil,
 			tree = {},
 		}
 
@@ -214,8 +231,10 @@ local repo: types.Source = {
 		-- TODO: We're vulnerable to `../` in zip filenames
 		for path, data in zip.unpack(pkzip) do
 			local fullyQualified = fs.path.join(dest, path)
-
-			fs.mkdir(fs.path.basename(fullyQualified))
+			local parent = fs.path.dirname(fullyQualified)
+			if parent then
+				ensureDirRecursive(parent)
+			end
 			local f = fs.open(fullyQualified, "w")
 			f:write(data)
 			f:close()
@@ -254,6 +273,7 @@ local repo: types.Source = {
 			path = requirement.path,
 			range = requirement.range,
 			version = version,
+			sourceRoot = requirement.sourceRoot,
 			tree = {},
 		}
 
@@ -278,6 +298,10 @@ local repo: types.Source = {
 
 		if #node.dependencies == 0 and not ctx.resolving[node.id] then
 			local manifest = getManifestFromRepository(requirement.repository, requirement.key, version)
+			if manifest then
+				local nodeRequirement = node.requirement :: any
+				nodeRequirement.sourceRoot = manifest.project.sourceRoot
+			end
 			if manifest and manifest.dependencies then
 				local childRequirements: { types.Requirement } = {}
 				local visiting: types.Visiting = { order = {}, set = {} }
@@ -297,6 +321,7 @@ local repo: types.Source = {
 			repository = requirement.repository,
 			key = requirement.key,
 			version = semver.format(requirement.version),
+			sourceRoot = requirement.sourceRoot,
 		}
 	end,
 
@@ -309,6 +334,7 @@ local repo: types.Source = {
 			path = package.data.repository .. "\0" .. package.data.key,
 			range = nil,
 			version = semver.parse(package.data.version),
+			sourceRoot = package.data.sourceRoot,
 			tree = {},
 		}
 	end,

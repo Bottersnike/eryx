@@ -147,14 +147,18 @@ local urlSource: types.Source = {
 			name = name,
 			path = url,
 			sha256 = sha256,
+			sourceRoot = nil,
 			tree = {},
 		}
 
 		local childManifest = getManifestFromUrl(url, sha256)
 		if childManifest and childManifest.dependencies then
+			r.sourceRoot = childManifest.project.sourceRoot
 			local visitingKey = cycles.pushVisiting(r, visiting, name)
 			recurse(root, path, childManifest, r.tree, visiting, false)
 			cycles.popVisiting(visitingKey, visiting)
+		elseif childManifest then
+			r.sourceRoot = childManifest.project.sourceRoot
 		end
 
 		table.insert(requirements, r)
@@ -179,6 +183,7 @@ local urlSource: types.Source = {
 		return {
 			url = requirement.path,
 			sha256 = requirement.sha256,
+			sourceRoot = requirement.sourceRoot,
 		}
 	end,
 
@@ -188,6 +193,7 @@ local urlSource: types.Source = {
 			name = "",
 			path = package.data.url,
 			sha256 = package.data.sha256,
+			sourceRoot = package.data.sourceRoot,
 			tree = {},
 		}
 	end,

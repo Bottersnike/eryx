@@ -137,10 +137,7 @@ ERYX_RUN_ONCE_STATE eryx_run_once(lua_State* GL, EryxRuntime* rt, lua_State** ru
             return ERYX_RUN_ONCE_STATE::kSuccess;
         default:
             if (int exceptionIndex = eryx_find_exception_index(L)) {
-                if (exceptionIndex != lua_gettop(L)) {
-                    lua_pushvalue(L, exceptionIndex);
-                    lua_replace(L, -2);
-                }
+                lua_settop(L, exceptionIndex);
                 return ERYX_RUN_ONCE_STATE::kError;
             }
             // Wrap raw string errors into LuaException before the coroutine's
