@@ -397,4 +397,8 @@ function analysis.getconfig(folderPath: PathLike?): LuauConfig
 	return native.getconfig(folderPath)
 end
 
+function analysis.parseLuaurc(source: string, path: string, overwriteAliases: boolean?, compat: boolean?): LuauConfig
+	return native.parseLuaurc(source, path, overwriteAliases, compat)
+end
+
 return table.freeze(analysis)

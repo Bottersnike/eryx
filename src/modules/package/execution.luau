@@ -1,3 +1,5 @@
+-- @ignore
+
 local json = require("@eryx/data/json")
 local fs = require("@eryx/fs")
 

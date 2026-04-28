@@ -49,6 +49,7 @@
 #include "Luau/Bytecode.h"
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Compiler.h"
+#include "Luau/Config.h"  // We just want the luaurc parsing side of things, so it's safe to use this in a shared module
 #include "Luau/Lexer.h"
 #include "Luau/Location.h"
 #include "Luau/ParseOptions.h"
@@ -1818,6 +1819,7 @@ static int l_resolve(lua_State* L) {
     }
     return 2;
 }
+
 static int l_config(lua_State* L) {
     auto mode_to_string = [](Luau::Mode mode) -> const char* {
         switch (mode) {
@@ -1912,6 +1914,96 @@ static int l_config(lua_State* L) {
     return 1;
 }
 
+static int l_parseLuaurc(lua_State* L) {
+    size_t configSize;
+    const char* source = luaL_checklstring(L, 1, &configSize);
+
+    const char* path = luaL_checkstring(L, 2);
+    const bool overwriteAliases = luaL_optboolean(L, 3, true);
+    const bool compat = luaL_optboolean(L, 4, false);
+
+    Luau::ConfigOptions opts;
+    opts.aliasOptions = Luau::ConfigOptions::AliasOptions{
+        .configLocation = path,
+        .overwriteAliases = overwriteAliases,
+    };
+    opts.compat = compat;
+
+    Luau::Config cfg;
+    auto err = Luau::parseConfig(source, cfg, opts);
+    if (err) {
+        luaL_error(L, "Error parsing config: %s", (*err).c_str());
+    }
+
+    lua_createtable(L, 0, 8);
+
+    auto mode_to_string = [](Luau::Mode mode) -> const char* {
+        switch (mode) {
+            case Luau::Mode::Strict:
+                return "strict";
+            case Luau::Mode::Nonstrict:
+                return "nonstrict";
+            case Luau::Mode::NoCheck:
+                return "nocheck";
+            default:
+                return "nonstrict";
+        }
+    };
+
+    lua_pushstring(L, mode_to_string(cfg.mode));
+    lua_setfield(L, -2, "mode");
+
+    lua_createtable(L, 0, 0);
+    for (int code = LintWarning::Code_Unknown; code < LintWarning::Code__Count; ++code) {
+        if (cfg.enabledLint.isEnabled(LintWarning::Code(code))) {
+            lua_pushboolean(L, true);
+            lua_setfield(L, -2, LintWarning::getName(LintWarning::Code(code)));
+        }
+    }
+    lua_setfield(L, -2, "enabledLint");
+
+    lua_createtable(L, 0, 0);
+    for (int code = LintWarning::Code_Unknown; code < LintWarning::Code__Count; ++code) {
+        if (cfg.fatalLint.isEnabled(LintWarning::Code(code))) {
+            lua_pushboolean(L, true);
+            lua_setfield(L, -2, LintWarning::getName(LintWarning::Code(code)));
+        }
+    }
+    lua_setfield(L, -2, "fatalLint");
+
+    lua_pushboolean(L, cfg.lintErrors);
+    lua_setfield(L, -2, "lintErrors");
+    lua_pushboolean(L, cfg.typeErrors);
+    lua_setfield(L, -2, "typeErrors");
+
+    lua_createtable(L, (int)cfg.globals.size(), 0);
+    for (size_t i = 0; i < cfg.globals.size(); ++i) {
+        lua_pushstring(L, cfg.globals[i].c_str());
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+    lua_setfield(L, -2, "globals");
+
+    lua_createtable(L, 0, (int)cfg.aliases.size());
+    for (const auto& [key, alias] : cfg.aliases) {
+        lua_createtable(L, 0, 3);
+
+        lua_pushstring(L, std::string(alias.configLocation).c_str());
+        lua_setfield(L, -2, "configLocation");
+
+        lua_pushstring(L, alias.originalCase.c_str());
+        lua_setfield(L, -2, "originalCase");
+
+        lua_pushstring(L, alias.value.c_str());
+        lua_setfield(L, -2, "value");
+
+        lua_setfield(L, -2, key.c_str());
+    }
+    lua_setfield(L, -2, "aliases");
+
+    lua_pushnil(L);
+    return 1;
+}
+
 // ---------------------------------------------------------------------------
 // Module entry point
 //
@@ -1947,6 +2039,7 @@ static const luaL_Reg analysis_funcs[] = {
     { "typeofModule", eryx_luau_typeofModule },
     { "resolve", l_resolve },
     { "getconfig", l_config },
+    { "parseLuaurc", l_parseLuaurc },
     { nullptr, nullptr },
 };
 

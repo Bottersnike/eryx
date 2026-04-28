@@ -94,6 +94,7 @@ add_luau_script_module(package/
     src/modules/package/planning.luau
     src/modules/package/types.luau
     src/modules/package/util.luau
+    src/modules/package/luaurc.luau
 )
 add_luau_script_module(package/sources/
     src/modules/package/sources/git.luau

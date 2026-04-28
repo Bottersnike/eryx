@@ -1,3 +1,5 @@
+-- @ignore
+
 local types = require("@self/../types")
 
 local sources: { types.Source } = {

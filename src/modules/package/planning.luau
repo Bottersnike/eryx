@@ -1,3 +1,5 @@
+-- @ignore
+
 local util = require("./util")
 local types = require("./types")
 

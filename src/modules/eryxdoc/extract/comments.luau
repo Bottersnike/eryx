@@ -10,15 +10,22 @@ type CommentBlock = types.CommentBlock
 -- following space from a single source line.  Only used for LineComment text.
 local function stripLineCommentPrefix(line: string): string
 	local j = 1
+
 	while j <= #line and line:sub(j, j) == "-" do
 		j += 1
 	end
-	if j <= #line and line:sub(j, j) == " " then
-		return line:sub(j)
-	elseif j > #line then
-		return ""
+
+	-- Fewer than two leading dashes: not a line comment
+	if j < 3 then
+		return line
 	end
-	return line
+
+	-- Optional single space after the dashes
+	if j <= #line and line:sub(j, j) == " " then
+		j += 1
+	end
+
+	return line:sub(j)
 end
 
 -- Strip common leading whitespace from comment text.

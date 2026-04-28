@@ -284,6 +284,13 @@ suite:test("toNumber: non-numeric or multi-codepoint returns nil", function()
 	test.expect(unicode.toNumber("ab")):toBeNil()
 end)
 
+suite:test("category: basic Unicode general categories", function()
+	test.expect(unicode.category(string.byte("A"))):toBe("Lu")
+	test.expect(unicode.category(utf8.codepoint("π"))):toBe("Ll")
+	test.expect(unicode.category(utf8.codepoint("١"))):toBe("Nd")
+	test.expect(unicode.category(utf8.codepoint("\u{0301}"))):toBe("Mn")
+end)
+
 suite:test("case mapping: simple latin", function()
 	test.expect(unicode.toUpperCase("hello")):toBe("HELLO")
 	test.expect(unicode.toLowercase("HELLO")):toBe("hello")

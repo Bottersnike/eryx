@@ -1,4 +1,6 @@
 --!nolint LocalShadow
+-- @ignore
+
 local fs = require("@eryx/fs")
 local os = require("@eryx/os")
 local project = require("@eryx/project")

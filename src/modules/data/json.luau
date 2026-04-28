@@ -2,7 +2,8 @@
 	JSON encoding and decoding.
 
 	Serialises Luau values to JSON text and parses JSON text back into
-	Luau values.  Follows RFC 8259 with sensible Luau-specific defaults.
+	Luau values. By default decoding follows RFC 8259 JSON, with optional
+	flags for JSON5-style and JSONC-style extensions.
 
 	```luau
 	local json = require("@eryx/data/json")
@@ -12,6 +13,9 @@
 
 	local tbl = json.decode('{"x":1,"y":2}')
 	print(tbl.x, tbl.y)  -- 1  2
+
+	local json5 = json.decode("{foo: 0x2A, bar: 'hi'}", json.JSON5)
+	print(json5.foo, json5.bar) -- 42  hi
 	```
 
 	**Mapping rules:**
@@ -27,6 +31,7 @@
 ]=]
 
 local json = {}
+local unicode = require("@eryx/unicode")
 
 local JSON_ARRAY_MT = {}
 
@@ -90,6 +95,50 @@ export type EncodeOptions = {
 	--- Sort object keys alphabetically.
 	sortKeys: boolean?,
 }
+
+export type DecodeOptions = {
+	--- Allow comments using `//` or `/* ... */`
+	comments: boolean?,
+	--- Allow trailing commas, eg `[1, 2, 3, ]`
+	trailingComma: boolean?,
+	--- Allow single quoted strings, eg `'foo'`
+	singleQuotedStrings: boolean?,
+	--- Allow escaping a newline in a string with a backslash
+	multilineStrings: boolean?,
+
+	--- Allow unquoted keys, eg `{foo: "bar"}`
+	unquotedKeys: boolean?,
+	--- Add support for JSON5's additional numbers (NaN, Infinity, 0xFF, +1, .5, 5.)
+	json5Numbers: boolean?,
+	--- Allow JSON5's additional whitespace characters such as NBSP, BOM, LS/PS, and other Zs characters.
+	json5Whitespace: boolean?,
+	--- Allow JSON5 string escapes such as \xNN, \v, and \0.
+	json5Escapes: boolean?,
+}
+
+--- Preset decode options for JSON5-style parsing.
+json.DECODE_JSON5 = {
+	comments = true,
+	trailingComma = true,
+	singleQuotedStrings = true,
+	multilineStrings = true,
+	unquotedKeys = true,
+	json5Numbers = true,
+	json5Whitespace = true,
+	json5Escapes = true,
+} :: DecodeOptions
+
+--- Preset decode options for JSONC-style parsing.
+json.DECODE_JSONC = {
+	comments = true,
+	trailingComma = true,
+	singleQuotedStrings = false,
+	multilineStrings = false,
+	unquotedKeys = false,
+	json5Numbers = false,
+	json5Whitespace = false,
+	json5Escapes = false,
+} :: DecodeOptions
 
 local function encodeValue(v: any, opts: EncodeOptions, depth: number, buf: { string })
 	local pretty = opts.pretty or false
@@ -201,6 +250,79 @@ function json.encode(value: any, options: EncodeOptions?): string
 	return table.concat(buf)
 end
 
+--[=[
+	Preset decode options for JSON5.
+
+	Enables comments, trailing commas, single-quoted strings, multiline
+	strings, unquoted keys, JSON5 number forms, JSON5 whitespace, and JSON5
+	string escapes.
+]=]
+json.JSON5 = table.freeze({
+	comments = true,
+	trailingComma = true,
+	singleQuotedStrings = true,
+	multilineStrings = true,
+	unquotedKeys = true,
+	json5Numbers = true,
+	json5Whitespace = true,
+	json5Escapes = true,
+} :: DecodeOptions)
+
+--[=[
+	Preset decode options for JSONC.
+
+	Enables comments and trailing commas while keeping the rest of the parser
+	close to standard JSON.
+]=]
+json.JSONC = table.freeze({
+	comments = true,
+	trailingComma = true,
+} :: DecodeOptions)
+
+local function nextUtf8Pos(s: string, pos: number): number
+	local nextPos = utf8.offset(s, 2, pos)
+	return nextPos or (#s + 1)
+end
+
+local function isJson5WhitespaceCodepoint(cp: number): boolean
+	if cp == 0x0009 or cp == 0x000A or cp == 0x000B or cp == 0x000C or cp == 0x000D or cp == 0x0020 then
+		return true
+	end
+
+	if cp == 0x00A0 or cp == 0x2028 or cp == 0x2029 or cp == 0xFEFF then
+		return true
+	end
+
+	return unicode.category(cp) == "Zs"
+end
+
+local function isJson5LineTerminatorAt(s: string, pos: number): number?
+	local b1 = string.byte(s, pos)
+	if b1 == nil then
+		return nil
+	end
+
+	if b1 == 0x0A then
+		return 1
+	end
+
+	if b1 == 0x0D then
+		if string.byte(s, pos + 1) == 0x0A then
+			return 2
+		end
+		return 1
+	end
+
+	if b1 == 0xE2 and string.byte(s, pos + 1) == 0x80 then
+		local b3 = string.byte(s, pos + 2)
+		if b3 == 0xA8 or b3 == 0xA9 then
+			return 3
+		end
+	end
+
+	return nil
+end
+
 -- ---------------------------------------------------------------------------
 -- Decode
 -- ---------------------------------------------------------------------------
@@ -209,32 +331,72 @@ end
 -- integer cursor (1-based index).  Each parse_* function returns the parsed
 -- value and the next cursor position.
 
-local function skipWhitespace(s: string, pos: number): number
+local function skipWhitespace(s: string, pos: number, options: DecodeOptions?): number
+	local comments = options and options.comments
+	local json5Whitespace = options and options.json5Whitespace
+
 	while pos <= #s do
 		local b = string.byte(s, pos)
+		-- normal whitespace
 		if b == 0x20 or b == 0x09 or b == 0x0A or b == 0x0D then
 			pos += 1
+		elseif json5Whitespace and b ~= nil and b < 0x80 and (b == 0x0B or b == 0x0C) then
+			pos += 1
+		elseif json5Whitespace and b ~= nil and b >= 0x80 then
+			local cp = utf8.codepoint(s, pos)
+			if isJson5WhitespaceCodepoint(cp) then
+				pos = nextUtf8Pos(s, pos)
+			else
+				break
+			end
+		-- line comment //
+		elseif comments and b == 0x2F and string.byte(s, pos + 1) == 0x2F then
+			pos += 2
+			while pos <= #s do
+				if isJson5LineTerminatorAt(s, pos) or string.byte(s, pos) == 0x0A or string.byte(s, pos) == 0x0D then
+					break
+				end
+				pos += 1
+			end
+		-- block comment /*
+		elseif comments and b == 0x2F and string.byte(s, pos + 1) == 0x2A then
+			pos += 2
+
+			while pos <= #s - 1 do
+				if string.byte(s, pos) == 0x2A and string.byte(s, pos + 1) == 0x2F then
+					pos += 2
+					break
+				end
+				pos += 1
+			end
+
+			if pos > #s then
+				error("Unterminated block comment")
+			end
 		else
 			break
 		end
 	end
+
 	return pos
 end
 
 -- Forward declaration
-local parseValue: (s: string, pos: number) -> (any, number)
+local parseValue: (s: string, pos: number, options: DecodeOptions?) -> (any, number)
 
-local function parseString(s: string, pos: number): (string, number)
+local function parseString(s: string, pos: number, delimiter: number, options: DecodeOptions?): (string, number)
 	-- pos should point at the opening "
-	assert(string.byte(s, pos) == 0x22, "Expected '\"'")
+	assert(string.byte(s, pos) == delimiter, "Expected '\"'")
 	pos += 1
 
 	local parts: { string } = {}
 	local start = pos
+	local multilineStrings = options and options.multilineStrings
+	local json5Escapes = options and options.json5Escapes
 
 	while pos <= #s do
 		local b = string.byte(s, pos)
-		if b == 0x22 then
+		if b == delimiter then
 			-- closing quote
 			table.insert(parts, string.sub(s, start, pos - 1))
 			return table.concat(parts), pos + 1
@@ -242,9 +404,17 @@ local function parseString(s: string, pos: number): (string, number)
 			-- escape
 			table.insert(parts, string.sub(s, start, pos - 1))
 			pos += 1
+			if pos > #s then
+				error("Unterminated string")
+			end
 			local esc = string.byte(s, pos)
-			if esc == 0x22 then
+			local continuationLen = if multilineStrings then isJson5LineTerminatorAt(s, pos) else nil
+			if continuationLen then
+				pos += continuationLen - 1
+			elseif esc == 0x22 then
 				table.insert(parts, '"')
+			elseif esc == 0x27 and (delimiter == 0x27 or json5Escapes) then
+				table.insert(parts, "'")
 			elseif esc == 0x5C then
 				table.insert(parts, "\\")
 			elseif esc == 0x2F then
@@ -259,6 +429,25 @@ local function parseString(s: string, pos: number): (string, number)
 				table.insert(parts, "\r")
 			elseif esc == 0x74 then
 				table.insert(parts, "\t")
+			elseif esc == 0x76 and json5Escapes then
+				table.insert(parts, "\v")
+			elseif esc == 0x30 and json5Escapes then
+				local nextByte = string.byte(s, pos + 1)
+				if nextByte and nextByte >= 0x30 and nextByte <= 0x39 then
+					error("Invalid \\0 escape at position " .. tostring(pos))
+				end
+				table.insert(parts, "\0")
+			elseif esc == 0x78 and json5Escapes then
+				local hex = string.sub(s, pos + 1, pos + 2)
+				if #hex ~= 2 then
+					error("Invalid \\x escape at position " .. tostring(pos))
+				end
+				local code = tonumber(hex, 16)
+				if code == nil then
+					error("Invalid \\x escape at position " .. tostring(pos))
+				end
+				table.insert(parts, string.char(code))
+				pos += 2
 			elseif esc == 0x75 then
 				-- \uXXXX
 				local hex = string.sub(s, pos + 1, pos + 4)
@@ -313,11 +502,23 @@ local function parseString(s: string, pos: number): (string, number)
 					)
 				end
 				pos += 4
+			elseif json5Escapes then
+				if esc >= 0x30 and esc <= 0x39 then
+					error("Invalid escape character at position " .. tostring(pos) .. " (" .. tostring(esc) .. ")")
+				end
+
+				local escapedEnd = nextUtf8Pos(s, pos) - 1
+				table.insert(parts, string.sub(s, pos, escapedEnd))
+				pos = escapedEnd
 			else
-				error("Invalid escape character at position " .. tostring(pos))
+				error(`Invalid escape character at position {pos} ({esc})`)
 			end
 			pos += 1
 			start = pos
+		elseif isJson5LineTerminatorAt(s, pos) then
+			error("Unterminated string")
+		elseif b ~= nil and b < 0x20 then
+			error("Invalid control character in string at position " .. tostring(pos))
 		else
 			pos += 1
 		end
@@ -325,34 +526,221 @@ local function parseString(s: string, pos: number): (string, number)
 	error("Unterminated string")
 end
 
-local function parseNumber(s: string, pos: number): (number, number)
+local function isAsciiIdentifierStart(b: number): boolean
+	return (b >= 0x41 and b <= 0x5A) or (b >= 0x61 and b <= 0x7A) or b == 0x24 or b == 0x5F
+end
+
+local function isAsciiIdentifierPart(b: number): boolean
+	return isAsciiIdentifierStart(b) or (b >= 0x30 and b <= 0x39)
+end
+
+local function parseIdentifierAscii(s: string, pos: number): (string, number)
 	local start = pos
-	-- optional minus
-	if string.byte(s, pos) == 0x2D then
+	local b = string.byte(s, pos)
+
+	if not b or not isAsciiIdentifierStart(b) then
+		error("Expected identifier at position " .. tostring(pos))
+	end
+
+	pos += 1
+
+	while pos <= #s do
+		local part = string.byte(s, pos)
+		if not part or not isAsciiIdentifierPart(part) then
+			break
+		end
 		pos += 1
 	end
+
+	return string.sub(s, start, pos - 1), pos
+end
+
+local function parseUnicodeEscape(s: string, pos: number): (number, number)
+	if string.byte(s, pos) ~= 0x5C or string.byte(s, pos + 1) ~= 0x75 then
+		error("Invalid identifier escape at position " .. tostring(pos))
+	end
+
+	local hex = string.sub(s, pos + 2, pos + 5)
+	if #hex ~= 4 then
+		error("Invalid identifier escape at position " .. tostring(pos))
+	end
+
+	local cp = tonumber(hex, 16)
+	if cp == nil then
+		error("Invalid identifier escape at position " .. tostring(pos))
+	end
+
+	return cp, pos + 6
+end
+
+local function isIdentifierStartCodepoint(cp: number): boolean
+	if cp == 0x24 or cp == 0x5F then
+		return true
+	end
+
+	local category = unicode.category(cp)
+	return category == "Lu"
+		or category == "Ll"
+		or category == "Lt"
+		or category == "Lm"
+		or category == "Lo"
+		or category == "Nl"
+end
+
+local function isIdentifierPartCodepoint(cp: number): boolean
+	if isIdentifierStartCodepoint(cp) then
+		return true
+	end
+
+	if cp == 0x200C or cp == 0x200D then
+		return true
+	end
+
+	local category = unicode.category(cp)
+	return category == "Mn" or category == "Mc" or category == "Nd" or category == "Pc"
+end
+
+local function parseIdentifierName(s: string, pos: number): (string, number)
+	local parts: { string } = {}
+	local start = pos
+	local expectStart = true
+
+	while pos <= #s do
+		local b = string.byte(s, pos)
+		local cp: number
+		local nextPos: number
+
+		if b == 0x5C then
+			table.insert(parts, string.sub(s, start, pos - 1))
+			cp, nextPos = parseUnicodeEscape(s, pos)
+		else
+			cp = utf8.codepoint(s, pos)
+			nextPos = nextUtf8Pos(s, pos)
+		end
+
+		if expectStart then
+			if not isIdentifierStartCodepoint(cp) then
+				error("Expected identifier at position " .. tostring(pos))
+			end
+			expectStart = false
+		elseif not isIdentifierPartCodepoint(cp) then
+			if b == 0x5C then
+				error("Invalid identifier escape at position " .. tostring(pos))
+			end
+			break
+		end
+
+		if b == 0x5C then
+			table.insert(parts, utf8.char(cp))
+			start = nextPos
+		end
+
+		pos = nextPos
+	end
+
+	if expectStart then
+		error("Expected identifier at position " .. tostring(pos))
+	end
+
+	table.insert(parts, string.sub(s, start, pos - 1))
+	return table.concat(parts), pos
+end
+
+local function parseNumber(s: string, pos: number, options: DecodeOptions?): (number, number)
+	local start = pos
+	local positive = true
+	local json5Numbers = options and options.json5Numbers
+
+	-- optional minus or plus
+	if string.byte(s, pos) == 0x2D then
+		positive = false
+		pos += 1
+	elseif json5Numbers and string.byte(s, pos) == 0x2B then
+		pos += 1
+	end
+
+	if json5Numbers then
+		if string.byte(s, pos) == 0x49 then
+			if string.sub(s, pos, pos + 7) == "Infinity" then
+				if positive then
+					return math.huge, pos + 8
+				else
+					return -math.huge, pos + 8
+				end
+			end
+		end
+		if string.byte(s, pos) == 0x4E then
+			if string.sub(s, pos, pos + 2) == "NaN" then
+				return math.nan, pos + 3
+			end
+		end
+	end
+
+	if
+		json5Numbers
+		and string.byte(s, pos) == 0x30
+		and pos + 1 <= #s
+		and (string.byte(s, pos + 1) == 0x78 or string.byte(s, pos + 1) == 0x58)
+	then
+		local hexStart = pos + 2
+		pos = hexStart
+
+		while pos <= #s do
+			local b = string.byte(s, pos)
+			local isDigit = b >= 0x30 and b <= 0x39
+			local isLower = b >= 0x61 and b <= 0x66
+			local isUpper = b >= 0x41 and b <= 0x46
+
+			if not (isDigit or isLower or isUpper) then
+				break
+			end
+
+			pos += 1
+		end
+
+		if pos == hexStart then
+			error("Invalid number at position " .. tostring(start))
+		end
+
+		local n = tonumber(string.sub(s, hexStart, pos - 1), 16)
+		if n == nil then
+			error("Invalid number at position " .. tostring(start))
+		end
+
+		return if positive then n else -n, pos
+	end
+
 	-- integer part
-	if string.byte(s, pos) == 0x30 then
+	local sawInteger = false
+	if json5Numbers and string.byte(s, pos) == 0x2E then
+		-- JSON5 allows decimals like `.5`.
+	elseif string.byte(s, pos) == 0x30 then
+		sawInteger = true
 		pos += 1
 	else
 		if pos > #s or string.byte(s, pos) < 0x31 or string.byte(s, pos) > 0x39 then
 			error("Invalid number at position " .. tostring(start))
 		end
+		sawInteger = true
 		while pos <= #s and string.byte(s, pos) >= 0x30 and string.byte(s, pos) <= 0x39 do
 			pos += 1
 		end
 	end
+
 	-- fractional part
+	local sawFraction = false
 	if pos <= #s and string.byte(s, pos) == 0x2E then
 		pos += 1
 		local fracStart = pos
 		while pos <= #s and string.byte(s, pos) >= 0x30 and string.byte(s, pos) <= 0x39 do
 			pos += 1
 		end
-		if pos == fracStart then
+		sawFraction = pos > fracStart
+		if not sawFraction and (not json5Numbers or not sawInteger) then
 			error("Invalid number at position " .. tostring(start))
 		end
 	end
+
 	-- exponent
 	if pos <= #s and (string.byte(s, pos) == 0x65 or string.byte(s, pos) == 0x45) then
 		pos += 1
@@ -376,76 +764,100 @@ local function parseNumber(s: string, pos: number): (number, number)
 	return n, pos
 end
 
-local function parseArray(s: string, pos: number): ({ any }, number)
+local function parseArray(s: string, pos: number, options: DecodeOptions?): ({ any }, number)
 	pos += 1 -- skip [
-	pos = skipWhitespace(s, pos)
+	pos = skipWhitespace(s, pos, options)
 
 	local arr = {}
+
 	if pos <= #s and string.byte(s, pos) == 0x5D then
 		setmetatable(arr, JSON_ARRAY_MT)
 		return arr, pos + 1
 	end
 
 	while true do
-		pos = skipWhitespace(s, pos)
 		local value
-		value, pos = parseValue(s, pos)
+		value, pos = parseValue(s, pos, options)
 		table.insert(arr, value)
 
-		pos = skipWhitespace(s, pos)
+		pos = skipWhitespace(s, pos, options)
+
 		local b = string.byte(s, pos)
+
 		if b == 0x5D then
 			return arr, pos + 1
 		elseif b == 0x2C then
 			pos += 1
+			pos = skipWhitespace(s, pos, options)
+
+			-- trailing comma support
+			if options and options.trailingComma and string.byte(s, pos) == 0x5D then
+				return arr, pos + 1
+			end
 		else
 			error("Expected ',' or ']' at position " .. tostring(pos))
 		end
 	end
 end
 
-local function parseObject(s: string, pos: number): ({ [string]: any }, number)
+local function parseObject(s: string, pos: number, options: DecodeOptions?): ({ [string]: any }, number)
 	pos += 1 -- skip {
-	pos = skipWhitespace(s, pos)
+	pos = skipWhitespace(s, pos, options)
 
 	local obj: { [string]: any } = {}
+
 	if pos <= #s and string.byte(s, pos) == 0x7D then
 		return obj, pos + 1
 	end
 
 	while true do
-		pos = skipWhitespace(s, pos)
-		if string.byte(s, pos) ~= 0x22 then
+		pos = skipWhitespace(s, pos, options)
+
+		local ch = string.byte(s, pos)
+		local key
+		if ch == 0x22 or (options and options.singleQuotedStrings and ch == 0x27) then
+			key, pos = parseString(s, pos, ch, options)
+		elseif options and options.unquotedKeys then
+			key, pos = parseIdentifierName(s, pos)
+		else
 			error("Expected string key at position " .. tostring(pos))
 		end
-		local key
-		key, pos = parseString(s, pos)
 
-		pos = skipWhitespace(s, pos)
+		pos = skipWhitespace(s, pos, options)
+
 		if string.byte(s, pos) ~= 0x3A then
 			error("Expected ':' at position " .. tostring(pos))
 		end
-		pos += 1
 
-		pos = skipWhitespace(s, pos)
+		pos += 1
+		pos = skipWhitespace(s, pos, options)
+
 		local value
-		value, pos = parseValue(s, pos)
+		value, pos = parseValue(s, pos, options)
 		obj[key] = value
 
-		pos = skipWhitespace(s, pos)
+		pos = skipWhitespace(s, pos, options)
+
 		local b = string.byte(s, pos)
+
 		if b == 0x7D then
 			return obj, pos + 1
 		elseif b == 0x2C then
 			pos += 1
+			pos = skipWhitespace(s, pos, options)
+
+			-- trailing comma support
+			if options and options.trailingComma and string.byte(s, pos) == 0x7D then
+				return obj, pos + 1
+			end
 		else
 			error("Expected ',' or '}' at position " .. tostring(pos))
 		end
 	end
 end
 
-parseValue = function(s: string, pos: number): (any, number)
-	pos = skipWhitespace(s, pos)
+parseValue = function(s: string, pos: number, options: DecodeOptions?): (any, number)
+	pos = skipWhitespace(s, pos, options)
 	if pos > #s then
 		error("Unexpected end of JSON")
 	end
@@ -453,11 +865,13 @@ parseValue = function(s: string, pos: number): (any, number)
 	local b = string.byte(s, pos)
 
 	if b == 0x22 then
-		return parseString(s, pos)
+		return parseString(s, pos, 0x22, options)
+	elseif b == 0x27 and options and options.singleQuotedStrings then
+		return parseString(s, pos, 0x27, options)
 	elseif b == 0x7B then
-		return parseObject(s, pos)
+		return parseObject(s, pos, options)
 	elseif b == 0x5B then
-		return parseArray(s, pos)
+		return parseArray(s, pos, options)
 	elseif b == 0x74 then
 		-- true
 		if string.sub(s, pos, pos + 3) == "true" then
@@ -476,8 +890,12 @@ parseValue = function(s: string, pos: number): (any, number)
 			return nil, pos + 4
 		end
 		error("Invalid value at position " .. tostring(pos))
-	elseif b == 0x2D or (b >= 0x30 and b <= 0x39) then
-		return parseNumber(s, pos)
+	elseif
+		b == 0x2D
+		or (b >= 0x30 and b <= 0x39)
+		or (options and options.json5Numbers and (b == 0x2B or b == 0x2E or b == 0x49 or b == 0x4E))
+	then
+		return parseNumber(s, pos, options)
 	else
 		error("Unexpected character '" .. string.char(b) .. "' at position " .. tostring(pos))
 	end
@@ -501,12 +919,12 @@ end
 	@param str string -- A valid JSON string.
 	@return any -- The decoded Luau value.
 ]=]
-function json.decode(str: string): any
+function json.decode(str: string, options: DecodeOptions?): any
 	if #str == 0 then
 		error("Empty JSON string")
 	end
-	local value, pos = parseValue(str, 1)
-	pos = skipWhitespace(str, pos)
+	local value, pos = parseValue(str, 1, options)
+	pos = skipWhitespace(str, pos, options)
 	if pos <= #str then
 		error("Trailing data after JSON value at position " .. tostring(pos))
 	end
@@ -525,7 +943,7 @@ end
 	print(json.encode(t))  -- "[1,null,3]"
 	```
 ]=]
-json.null = newproxy(false)
+-- json.null = newproxy(false)
 
 --[=[
 	A Luau table with 0 entries could be a json object (`{}`) or a JSON

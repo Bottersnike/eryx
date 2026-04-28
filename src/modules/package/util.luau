@@ -1,3 +1,5 @@
+-- @ignore
+
 local fs = require("@eryx/fs")
 local regex = require("@eryx/regex")
 local semver = require("@eryx/semver")

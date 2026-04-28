@@ -1,3 +1,5 @@
+-- @ignore
+
 local project = require("@eryx/project")
 
 local types = require("./types")

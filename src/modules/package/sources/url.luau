@@ -1,4 +1,6 @@
 --!nolint LocalShadow
+-- @ignore
+
 local project = require("@eryx/project")
 local cycles = require("../cycles")
 local types = require("../types")

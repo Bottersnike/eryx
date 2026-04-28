@@ -301,6 +301,11 @@ local function getDbRecord(cp: number): { number }
 	return record
 end
 
+local function categoryName(cp: number): string
+	local categoryIndex = getDbRecord(cp)[1]
+	return tables.categoryNames[categoryIndex + 1] or "Cn"
+end
+
 local function combiningClass(cp: number): number
 	return getDbRecord(cp)[2]
 end
@@ -612,6 +617,15 @@ function unicode.toNumber(grapheme: string): number?
 		return nil
 	end
 	return ensureNumericMap()[cp]
+end
+
+--[=[
+Returns the Unicode general category for a codepoint.
+@param cp The Unicode codepoint to inspect
+@return The two-letter Unicode general category (for example `"Lu"` or `"Nd"`)
+]=]
+function unicode.category(cp: number): string
+	return categoryName(cp)
 end
 
 --[=[

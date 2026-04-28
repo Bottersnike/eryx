@@ -1,3 +1,5 @@
+-- @ignore
+
 local types = require("./types")
 
 local function dependencyKey(kind: types.RequirementKind, path: string): string
