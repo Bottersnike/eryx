@@ -87,6 +87,8 @@ add_luau_script_module(stream src/modules/stream.luau)
 add_luau_script_module(project src/modules/project.luau)
 add_luau_script_module(package/
     src/modules/package/cycles.luau
+    src/modules/package/lockfile.luau
+    src/modules/package/layout.luau
     src/modules/package/dependency.luau
     src/modules/package/execution.luau
     src/modules/package/init.luau
@@ -94,7 +96,6 @@ add_luau_script_module(package/
     src/modules/package/planning.luau
     src/modules/package/types.luau
     src/modules/package/util.luau
-    src/modules/package/luaurc.luau
 )
 add_luau_script_module(package/sources/
     src/modules/package/sources/git.luau

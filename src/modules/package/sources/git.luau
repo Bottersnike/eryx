@@ -50,7 +50,17 @@ local function callGit(cwd: string, args: { string }): (boolean, string, string)
 	return res.code == 0, res.stdout, res.stderr
 end
 
-local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (string, string?)
+local function trim(s: string): string
+	return s:match("^%s*(.-)%s*$") or ""
+end
+
+local function gitFolderPath(root: string, cloneUrl: string): string
+	local identity = canonicalGitIdentity(cloneUrl)
+	local dir = util.identityToDirName(identity) .. ".git"
+	return fs.path.join(root, util.PACKAGES_DIR, ".git-cache", dir)
+end
+
+local function ensureBareRepo(root: string, cloneUrl: string): string
 	local identity = canonicalGitIdentity(cloneUrl)
 	local dir = util.identityToDirName(identity) .. ".git"
 
@@ -71,6 +81,12 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (stri
 		end
 	end
 
+	return gitFolder
+end
+
+local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (string, string, string?)
+	local gitFolder = ensureBareRepo(root, cloneUrl)
+
 	local fetchRef: string
 	if ref.type == "branch" then
 		fetchRef = `refs/heads/{ref.value}`
@@ -90,16 +106,25 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (stri
 		})
 
 		if haveCommit then
+			local okCommit, commitOut = callGit(gitFolder, {
+				"rev-parse",
+				ref.value .. "^{commit}",
+			})
+			if not okCommit then
+				error(`Failed to resolve commit {ref.value}`)
+			end
+			local resolvedCommit = trim(commitOut)
+
 			local ok, out = callGit(gitFolder, {
 				"show",
-				ref.value .. ":eryx.toml",
+				resolvedCommit .. ":eryx.toml",
 			})
 
 			if ok then
-				return gitFolder, out
+				return gitFolder, resolvedCommit, out
 			end
 
-			return gitFolder, nil
+			return gitFolder, resolvedCommit, nil
 		end
 	end
 
@@ -113,16 +138,25 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (stri
 		error(`Failed to fetch {cloneUrl} {ref.type} {ref.value}`)
 	end
 
+	local okCommit, commitOut = callGit(gitFolder, {
+		"rev-parse",
+		"FETCH_HEAD^{commit}",
+	})
+	if not okCommit then
+		error(`Failed to resolve fetched commit for {cloneUrl}`)
+	end
+	local resolvedCommit = trim(commitOut)
+
 	local ok, out = callGit(gitFolder, {
 		"show",
-		"FETCH_HEAD:eryx.toml",
+		resolvedCommit .. ":eryx.toml",
 	})
 
 	if not ok then
-		return gitFolder, nil
+		return gitFolder, resolvedCommit, nil
 	end
 
-	return gitFolder, out
+	return gitFolder, resolvedCommit, out
 end
 local function getGitRef(dep: project.GitDependency): types.GitRef
 	local rev = (dep :: any).rev
@@ -181,14 +215,15 @@ local gitSource: types.Source = {
 		local dep = dep :: project.GitDependency
 
 		local ref = getGitRef(dep)
-		local gitFolder, config = prepare(root, dep.git, ref)
+		local gitFolder, resolvedCommit, config = prepare(root, dep.git, ref)
 
 		local r: types.Requirement = {
 			type = "git",
 			name = name,
 			path = canonicalGitIdentity(dep.git),
 			url = dep.git,
-			ref = ref,
+			ref = { type = "commit", value = resolvedCommit },
+			requestedRef = ref,
 			gitFolder = gitFolder,
 			tree = {},
 		}
@@ -211,16 +246,16 @@ local gitSource: types.Source = {
 		end
 
 		-- Re-fetch here so FETCH_HEAD definitely points at this exact dependency.
-		prepare(root, requirement.url, requirement.ref)
+		local gitFolder, resolvedCommit = prepare(root, requirement.url, requirement.ref)
 
 		local res, _stdout, stderr = callGit(".", {
 			"--git-dir",
-			requirement.gitFolder,
+			gitFolder,
 			"--work-tree",
 			dest,
 			"checkout",
 			"--force",
-			"FETCH_HEAD",
+			resolvedCommit,
 			"--",
 			".",
 		})
@@ -243,6 +278,31 @@ local gitSource: types.Source = {
 				type = requirement.ref.type,
 				value = requirement.ref.value,
 			},
+			requestedRef = {
+				type = requirement.requestedRef.type,
+				value = requirement.requestedRef.value,
+			},
+		}
+	end,
+
+	readLock = function(root: string, package: types.LockPackage): types.Requirement
+		local url = package.data.url
+		local requestedRefData = package.data.requestedRef or package.data.ref
+		return {
+			type = "git",
+			name = "",
+			path = canonicalGitIdentity(url),
+			url = url,
+			ref = {
+				type = package.data.ref.type,
+				value = package.data.ref.value,
+			},
+			requestedRef = {
+				type = requestedRefData.type,
+				value = requestedRefData.value,
+			},
+			gitFolder = gitFolderPath(root, url),
+			tree = {},
 		}
 	end,
 }

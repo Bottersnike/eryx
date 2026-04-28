@@ -284,7 +284,7 @@ end
 	@param options { name: string?, mode: string? }? Optional creation options.
 	@return T The callback return value.
 ]=]
-function tempfile.withTempFile<T>(fn: (file: TempFile) -> ...T, options: { name: string?, mode: string? }?): ...T
+function tempfile.withTempFile<T...>(fn: (file: TempFile) -> T..., options: { name: string?, mode: string? }?): T...
 	local opts = options or ({} :: { name: string?, mode: string? })
 	local file = createTempFile(opts.name, opts.mode)
 	local result = table.pack(pcall(fn, file))
@@ -305,7 +305,7 @@ end
 	@param name string? Optional name/template prefix.
 	@return T The callback return value.
 ]=]
-function tempfile.withTempDir<T>(fn: (path: string) -> ...T, name: string?): ...T
+function tempfile.withTempDir<T...>(fn: (path: string) -> T..., name: string?): T...
 	local dir = createTempDir(name)
 	local result = table.pack(pcall(fn, dir.path))
 	dir:close()

@@ -10,6 +10,10 @@ local stdio = require("@eryx/stdio")
 
 local parser = argparse.Parser.new("pkg", "Erxy package manager")
 parser:addSubCommand("install", "Install all packages")
+local update = parser:addSubCommand("update", "Re-resolve and update all packages, or selected dependencies")
+update:addPositional("package", "string", nil, false, "Dependencies to update", true)
+local upgrade = parser:addSubCommand("upgrade", "Update and rewrite repository dependency versions in eryx.toml")
+upgrade:addPositional("package", "string", nil, false, "Repository dependencies to upgrade", true)
 parser:addSubCommand("tree", "Show the dependency tree")
 parser:addSubCommand("ls", "List all top level dependencies")
 
@@ -30,6 +34,12 @@ remove:addFlag("dry", nil, "Do not perform an install after updating dependencie
 local args = parser:parse() :: {
 	help: boolean,
 	install: {}?,
+	update: {
+		package: { string }?,
+	}?,
+	upgrade: {
+		package: { string }?,
+	}?,
 	ls: {}?,
 	tree: {}?,
 	add: {
@@ -516,6 +526,16 @@ local function main()
 
 	if args.install then
 		pkg.doInstall()
+		return
+	end
+
+	if args.update then
+		pkg.doUpdate(args.update.package)
+		return
+	end
+
+	if args.upgrade then
+		pkg.doUpgrade(args.upgrade.package)
 		return
 	end
 

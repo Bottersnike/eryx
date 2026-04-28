@@ -1500,6 +1500,8 @@ static int l_parse(lua_State* L) {
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
+    eryx_enable_all_luau_flags();
+
     // Optional options table
     bool captureComments = false;
     bool collectSurroundingText = false;
@@ -1522,6 +1524,7 @@ static int l_parse(lua_State* L) {
         Allocator allocator;
         AstNameTable names(allocator);
         ParseOptions opts;
+        opts.allowDeclarationSyntax = true;
         opts.captureComments = captureComments || collectSurroundingText;
 
         const EryxTimingClock::time_point parseStart = EryxTimingClock::now();

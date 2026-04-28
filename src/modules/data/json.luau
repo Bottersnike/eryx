@@ -89,56 +89,32 @@ end
 
 export type EncodeOptions = {
 	--- Insert newlines and indentation for readability.
-	pretty: boolean?,
+	read pretty: boolean?,
 	--- Indentation string used when `pretty` is enabled (default `"  "` - two spaces).
-	indent: string?,
+	read indent: string?,
 	--- Sort object keys alphabetically.
-	sortKeys: boolean?,
+	read sortKeys: boolean?,
 }
 
 export type DecodeOptions = {
 	--- Allow comments using `//` or `/* ... */`
-	comments: boolean?,
+	read comments: boolean?,
 	--- Allow trailing commas, eg `[1, 2, 3, ]`
-	trailingComma: boolean?,
+	read trailingComma: boolean?,
 	--- Allow single quoted strings, eg `'foo'`
-	singleQuotedStrings: boolean?,
+	read singleQuotedStrings: boolean?,
 	--- Allow escaping a newline in a string with a backslash
-	multilineStrings: boolean?,
+	read multilineStrings: boolean?,
 
 	--- Allow unquoted keys, eg `{foo: "bar"}`
-	unquotedKeys: boolean?,
+	read unquotedKeys: boolean?,
 	--- Add support for JSON5's additional numbers (NaN, Infinity, 0xFF, +1, .5, 5.)
-	json5Numbers: boolean?,
+	read json5Numbers: boolean?,
 	--- Allow JSON5's additional whitespace characters such as NBSP, BOM, LS/PS, and other Zs characters.
-	json5Whitespace: boolean?,
+	read json5Whitespace: boolean?,
 	--- Allow JSON5 string escapes such as \xNN, \v, and \0.
-	json5Escapes: boolean?,
+	read json5Escapes: boolean?,
 }
-
---- Preset decode options for JSON5-style parsing.
-json.DECODE_JSON5 = {
-	comments = true,
-	trailingComma = true,
-	singleQuotedStrings = true,
-	multilineStrings = true,
-	unquotedKeys = true,
-	json5Numbers = true,
-	json5Whitespace = true,
-	json5Escapes = true,
-} :: DecodeOptions
-
---- Preset decode options for JSONC-style parsing.
-json.DECODE_JSONC = {
-	comments = true,
-	trailingComma = true,
-	singleQuotedStrings = false,
-	multilineStrings = false,
-	unquotedKeys = false,
-	json5Numbers = false,
-	json5Whitespace = false,
-	json5Escapes = false,
-} :: DecodeOptions
 
 local function encodeValue(v: any, opts: EncodeOptions, depth: number, buf: { string })
 	local pretty = opts.pretty or false

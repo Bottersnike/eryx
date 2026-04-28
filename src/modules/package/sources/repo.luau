@@ -99,6 +99,47 @@ local function chooseRepositoryVersion(
 	error(`No version of {repository}:{key} satisfies {range}`)
 end
 
+local function pathReaches(
+	plan: types.InstallPlan,
+	startId: string,
+	targetId: string,
+	seen: { [string]: boolean }
+): boolean
+	if startId == targetId then
+		return true
+	end
+
+	if seen[startId] then
+		return false
+	end
+	seen[startId] = true
+
+	local node = plan.nodes[startId]
+	if not node then
+		return false
+	end
+
+	for _, edge in node.dependencies do
+		if pathReaches(plan, edge.target, targetId, seen) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function addPlanEdge(ctx: types.ResolveContext, parent: types.InstallNode?, alias: string, targetId: string)
+	if parent then
+		if pathReaches(ctx.plan, targetId, parent.id, {}) then
+			error(`Cyclic dependency detected while resolving {alias}`)
+		end
+
+		planning.addEdge(parent.dependencies, alias, targetId)
+	else
+		planning.addEdge(ctx.plan.roots, alias, targetId)
+	end
+end
+
 local repo: types.Source = {
 	type = "repository",
 
@@ -138,8 +179,8 @@ local repo: types.Source = {
 			type = "repository",
 			repository = repository,
 			name = name,
-			key = dep.packageName or name,
-			path = repository .. "\0" .. (dep.packageName or name),
+			key = dep.package or name,
+			path = repository .. "\0" .. (dep.package or name),
 			range = dep.version,
 			version = nil,
 			tree = {},
@@ -200,7 +241,10 @@ local repo: types.Source = {
 	): types.InstallNode
 		assert(requirement.type == "repository")
 
-		local version = chooseRepositoryVersion(ctx, requirement.repository, requirement.key, requirement.range)
+		local version = requirement.version
+		if not version then
+			version = chooseRepositoryVersion(ctx, requirement.repository, requirement.key, requirement.range)
+		end
 
 		local resolved: types.Requirement = {
 			type = "repository",
@@ -230,11 +274,7 @@ local repo: types.Source = {
 			table.insert(ctx.repositorySelections[baseId], node)
 		end
 
-		if parent then
-			planning.addEdge(parent.dependencies, requirement.name, node.id)
-		else
-			planning.addEdge(ctx.plan.roots, requirement.name, node.id)
-		end
+		addPlanEdge(ctx, parent, requirement.name, node.id)
 
 		if #node.dependencies == 0 and not ctx.resolving[node.id] then
 			local manifest = getManifestFromRepository(requirement.repository, requirement.key, version)
@@ -257,6 +297,19 @@ local repo: types.Source = {
 			repository = requirement.repository,
 			key = requirement.key,
 			version = semver.format(requirement.version),
+		}
+	end,
+
+	readLock = function(_root: string, package: types.LockPackage): types.Requirement
+		return {
+			type = "repository",
+			name = "",
+			key = package.data.key,
+			repository = package.data.repository,
+			path = package.data.repository .. "\0" .. package.data.key,
+			range = nil,
+			version = semver.parse(package.data.version),
+			tree = {},
 		}
 	end,
 }

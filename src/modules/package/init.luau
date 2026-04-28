@@ -1,7 +1,7 @@
-local toml = require("@eryx/data/toml")
-local fs = require("@eryx/fs")
 local project = require("@eryx/project")
+local semver = require("@eryx/semver")
 
+local lockfile = require("@self/lockfile")
 local planner = require("@self/planner")
 local types = require("@self/types")
 local dependency = require("@self/dependency")
@@ -9,15 +9,160 @@ local execution = require("@self/execution")
 
 local pkg = {}
 
-function pkg.computeInstallPlan(): types.InstallPlan?
-	local prj = project.loadNearest()
-	if not prj then
-		print("No project")
-		return nil
+local function isHexString(s: string): boolean
+	return s:match("^[0-9a-fA-F]+$") ~= nil
+end
+
+local function resolveRepositoryName(manifest: project.Manifest, dep: project.RepositoryDependency): string
+	if dep.repo:find("://") then
+		return dep.repo
 	end
 
+	if not manifest.repositories then
+		error("eryx.toml does not specify repositories")
+	end
+	local repository = manifest.repositories[dep.repo]
+	if not repository then
+		error(`Attempted to use unspecified repository: {dep.repo}`)
+	end
+	return repository
+end
+
+local function dependencyMatchesLock(
+	alias: string,
+	dep: project.Dependency,
+	locked: types.LockPackage,
+	manifest: project.Manifest
+): boolean
+	if type(dep) == "string" then
+		return false
+	end
+
+	if (dep :: any)["local"] then
+		return locked.type == "local" and locked.data.path == (dep :: any)["local"]
+	end
+
+	if (dep :: any).path then
+		return locked.type == "path" and locked.data.path == (dep :: any).path
+	end
+
+	if (dep :: any).url then
+		return locked.type == "file"
+			and locked.data.url == (dep :: any).url
+			and locked.data.sha256 == (dep :: any).sha256
+	end
+
+	if (dep :: any).git then
+		if locked.type ~= "git" or locked.data.url ~= (dep :: any).git then
+			return false
+		end
+
+		local requestedRef = locked.data.requestedRef or locked.data.ref
+		if (dep :: any).rev then
+			local requestedRev = (dep :: any).rev
+			if locked.data.ref.type ~= "commit" or not isHexString(requestedRev) then
+				return false
+			end
+
+			local lockedCommit = string.lower(locked.data.ref.value)
+			local requestedCommit = string.lower(requestedRev)
+			return lockedCommit:sub(1, #requestedCommit) == requestedCommit
+		elseif (dep :: any).tag then
+			return requestedRef.type == "tag" and requestedRef.value == (dep :: any).tag
+		elseif (dep :: any).branch then
+			return requestedRef.type == "branch" and requestedRef.value == (dep :: any).branch
+		end
+		return false
+	end
+
+	if (dep :: any).repo then
+		if locked.type ~= "repository" then
+			return false
+		end
+
+		local repoDep = dep :: project.RepositoryDependency
+		if locked.data.repository ~= resolveRepositoryName(manifest, repoDep) then
+			return false
+		end
+
+		if locked.data.key ~= (repoDep.package or alias) then
+			return false
+		end
+
+		if repoDep.version then
+			local lockedVersion = semver.parse(locked.data.version)
+			return semver.satisfies(lockedVersion, repoDep.version)
+		end
+
+		return true
+	end
+
+	return false
+end
+
+local function manifestMatchesLock(prj: project.ManifestDocument, lock: types.LockFile): boolean
+	local manifestDeps = prj.manifest.dependencies or {}
+
+	local rootCount = 0
+	for _ in manifestDeps do
+		rootCount += 1
+	end
+	if rootCount ~= #lock.roots then
+		return false
+	end
+
+	for alias, dep in manifestDeps do
+		local lockedTarget: string? = nil
+		for _, edge in lock.roots do
+			if edge.alias == alias then
+				lockedTarget = edge.target
+				break
+			end
+		end
+
+		if not lockedTarget then
+			return false
+		end
+
+		local lockedPackage = lock.packages[lockedTarget]
+		if not lockedPackage then
+			return false
+		end
+
+		if not dependencyMatchesLock(alias, dep, lockedPackage, prj.manifest) then
+			return false
+		end
+	end
+
+	return true
+end
+
+local function lockedTargetForAlias(lock: types.LockFile, alias: string): string?
+	for _, edge in lock.roots do
+		if edge.alias == alias then
+			return edge.target
+		end
+	end
+
+	return nil
+end
+
+local function planNodeForRootAlias(plan: types.InstallPlan, alias: string): types.InstallNode?
+	for _, edge in plan.roots do
+		if edge.alias == alias then
+			return plan.nodes[edge.target]
+		end
+	end
+
+	return nil
+end
+
+local function computeInstallPlanFromManifest(prj: project.ManifestDocument): types.InstallPlan?
 	if not prj.manifest.dependencies then
-		return nil
+		return {
+			nodes = {},
+			roots = {},
+		}
 	end
 
 	if not prj.root then
@@ -34,29 +179,176 @@ function pkg.computeInstallPlan(): types.InstallPlan?
 	return plan
 end
 
-function pkg.doInstall()
+local function computeInstallPlanForUpdate(prj: project.ManifestDocument, aliases: { string }): types.InstallPlan?
+	if not prj.root then
+		print("Failed to identify project root")
+		return nil
+	end
+
+	local selected: { [string]: boolean } = {}
+	for _, alias in aliases do
+		selected[alias] = true
+	end
+
+	local manifestDeps = prj.manifest.dependencies or {}
+	for alias in selected do
+		if manifestDeps[alias] == nil then
+			error(`Package {alias} not installed`)
+		end
+	end
+
+	local previousLock = lockfile.load(prj.root)
+	if not previousLock then
+		error("Cannot update specific dependencies without an existing eryx.lock")
+	end
+
+	local requirements: { types.Requirement } = {}
+	local visiting: types.Visiting = { order = {}, set = {} }
+
+	for alias, dep in manifestDeps do
+		if selected[alias] then
+			local partialManifest = table.clone(prj.manifest)
+			partialManifest.dependencies = {
+				[alias] = dep,
+			}
+			dependency.collect(prj.root, prj.root, partialManifest, requirements, visiting, true)
+		else
+			local lockedTarget = lockedTargetForAlias(previousLock, alias)
+			if not lockedTarget then
+				error(`Dependency "{alias}" is not present in eryx.lock; run pkg update without arguments`)
+			end
+
+			table.insert(
+				requirements,
+				planner.buildRequirementTreeFromLock(prj.root, previousLock, lockedTarget, alias)
+			)
+		end
+	end
+
+	return planner.produceInstallPlan(requirements)
+end
+
+function pkg.computeInstallPlan(): types.InstallPlan?
 	local prj = project.loadNearest()
 	if not prj then
 		print("No project")
-		return
+		return nil
+	end
+
+	return computeInstallPlanFromManifest(prj)
+end
+
+local function installWithMode(
+	forceRefresh: boolean,
+	updateAliases: { string }?
+): (project.ManifestDocument?, types.InstallPlan?)
+	local prj = project.loadNearest()
+	if not prj then
+		print("No project")
+		return nil, nil
 	end
 
 	if not prj.root then
 		print("Failed to identify project root")
-		return
+		return nil, nil
 	end
 
-	local plan = pkg.computeInstallPlan()
+	local previousLock = lockfile.load(prj.root)
+	local plan: types.InstallPlan?
+
+	if updateAliases and #updateAliases > 0 then
+		print(`Updating selected dependencies: {table.concat(updateAliases, ", ")}`)
+		plan = computeInstallPlanForUpdate(prj, updateAliases)
+	elseif not forceRefresh and previousLock and manifestMatchesLock(prj, previousLock) then
+		print("Using lock file")
+		plan = planner.produceInstallPlanFromLock(prj.root, previousLock)
+	else
+		if forceRefresh then
+			print("Refreshing dependency lock")
+		end
+		plan = computeInstallPlanFromManifest(prj)
+	end
+
 	if not plan then
-		return
+		return prj, nil
 	end
 
-	execution.execute(prj.root, plan)
+	execution.execute(prj.root, plan, previousLock)
 
 	local lock = planner.generateLockFile(plan)
-	local f = fs.open(fs.path.join(prj.root, "eryx.lock"), "w")
-	f:write(toml.encode(lock))
-	f:close()
+	lockfile.save(prj.root, lock)
+
+	return prj, plan
+end
+
+function pkg.doInstall()
+	installWithMode(false, nil)
+end
+
+function pkg.doUpdate(updateAliases: { string }?)
+	installWithMode(true, updateAliases)
+end
+
+function pkg.doUpgrade(updateAliases: { string }?)
+	local prj, plan = installWithMode(true, updateAliases)
+	if not prj or not plan then
+		return
+	end
+
+	local manifestDeps = prj.manifest.dependencies or {}
+	local aliasesToUpgrade: { string } = {}
+
+	if updateAliases and #updateAliases > 0 then
+		for _, alias in updateAliases do
+			table.insert(aliasesToUpgrade, alias)
+		end
+	else
+		for alias, dep in manifestDeps do
+			if type(dep) ~= "string" and (dep :: any).repo then
+				table.insert(aliasesToUpgrade, alias)
+			end
+		end
+	end
+
+	table.sort(aliasesToUpgrade)
+
+	local changed = false
+	for _, alias in aliasesToUpgrade do
+		local dep = manifestDeps[alias]
+		if type(dep) == "string" or not (dep :: any).repo then
+			print(`Skipping upgrade for {alias}: only repository dependencies rewrite manifest versions`)
+			continue
+		end
+
+		local node = planNodeForRootAlias(plan, alias)
+		if not node or node.requirement.type ~= "repository" or not node.requirement.version then
+			error(`Failed to resolve repository version for {alias}`)
+		end
+
+		local depTable = prj.cst.eryx.dependencies[alias]
+		if type(depTable) ~= "table" then
+			error(`Cannot rewrite manifest entry for {alias}`)
+		end
+
+		local versionText = semver.format(node.requirement.version)
+		if depTable.version ~= versionText then
+			local replacement = {
+				repo = depTable.repo,
+				version = versionText,
+			}
+
+			if depTable.package ~= nil then
+				replacement.package = depTable.package
+			end
+
+			prj.cst.eryx.dependencies[alias] = replacement
+			changed = true
+		end
+	end
+
+	if changed then
+		project.save(prj)
+	end
 end
 
 return table.freeze(pkg)

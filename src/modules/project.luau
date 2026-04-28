@@ -87,7 +87,7 @@ export type UrlDependency = {
 export type RepositoryDependency = {
 	repo: string,
 	version: semver.Range?,
-	packageName: string?,
+	package: string?,
 }
 
 export type Dependency = string | GitDependency | PathDependency | LocalDependency | UrlDependency | RepositoryDependency
@@ -306,6 +306,9 @@ local function parseDependency(value: any, context: string): Dependency
 		return value
 	end
 	local raw = expectTable(value, context)
+	if raw.alias ~= nil then
+		fail(`{context}.alias is not supported; the dependency table key is the alias`)
+	end
 	if raw.git then
 		if raw.rev then
 			return {
@@ -329,12 +332,10 @@ local function parseDependency(value: any, context: string): Dependency
 	elseif raw["local"] then
 		return {
 			["local"] = expectString(raw["local"], at(context, "local")),
-			alias = expectOptionalString(raw.alias, at(context, "alias")),
 		}
 	elseif raw.path then
 		return {
 			path = expectString(raw.path, at(context, "path")),
-			alias = expectOptionalString(raw.alias, at(context, "alias")),
 		}
 	elseif raw.url then
 		return {
@@ -342,6 +343,9 @@ local function parseDependency(value: any, context: string): Dependency
 			sha256 = expectOptionalString(raw.sha256, at(context, "sha256")),
 		}
 	elseif raw.repo then
+		if raw.packageName ~= nil then
+			fail(`{context}.packageName is not supported; use {context}.package instead`)
+		end
 		local ver: semver.Range? = nil
 		local verStr = expectOptionalString(raw.version, at(context, "version"))
 		if verStr then
@@ -350,6 +354,7 @@ local function parseDependency(value: any, context: string): Dependency
 		return {
 			repo = expectString(raw.repo, at(context, "repo")),
 			version = ver,
+			package = expectOptionalString(raw.package, at(context, "package")),
 		}
 	end
 	return fail(`expected {context} to be a version string or dependency source table`)

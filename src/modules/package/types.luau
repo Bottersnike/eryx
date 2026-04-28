@@ -35,6 +35,7 @@ export type Requirement =
 		path: string,
 		url: string,
 		ref: GitRef,
+		requestedRef: GitRef,
 		gitFolder: string,
 		tree: { Requirement },
 	}
@@ -49,7 +50,7 @@ export type Requirement =
 		type: "repository",
 		-- The dep key from the manifest; used as the .luaurc alias
 		name: string,
-		-- The package name in the repository (= packageName if specified in toml, else name)
+		-- The package name in the repository (= package if specified in toml, else name)
 		key: string,
 		repository: string,
 		path: string,
@@ -74,6 +75,24 @@ export type InstallNode = {
 export type InstallPlan = {
 	nodes: { [string]: InstallNode },
 	roots: { InstallEdge },
+}
+
+export type AliasMap = { [string]: string }
+
+export type LockPackage = {
+	id: string,
+	installName: string?,
+	type: RequirementKind,
+	dependencies: { InstallEdge },
+	aliases: AliasMap,
+	data: { [string]: any },
+}
+
+export type LockFile = {
+	version: number,
+	roots: { InstallEdge },
+	rootAliases: AliasMap,
+	packages: { [string]: LockPackage },
 }
 
 export type ResolveContext = {
@@ -134,6 +153,8 @@ export type Source = {
 	) -> InstallNode)?,
 
 	read generateLock: (requirement: Requirement) -> { [string]: any },
+
+	read readLock: ((root: string, package: LockPackage) -> Requirement)?,
 }
 
 return table.freeze({})

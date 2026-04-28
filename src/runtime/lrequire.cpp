@@ -436,6 +436,11 @@ static void eryx_cache_registry_cache(lua_State* L, const char* cacheKey) {
     lua_pop(L, 1);  // pop _LOADED table
 }
 
+static void eryx_require_reset_load_state(lua_State* L, const char* cacheKey) {
+    eryx_cache_registry_clear_loader_thread(L, cacheKey);
+    eryx_cache_registry_set_status(L, cacheKey, CACHE_STATUS_UNSEEN);
+}
+
 ERYX_API bool eryx_require_maybe_finalize_loader(lua_State* GL, lua_State* L, int status) {
     if (status == LUA_YIELD) return false;
 
@@ -854,6 +859,123 @@ static int eryx_require_native(lua_State* L, const char* szLibrary) {
 }
 #endif
 
+static int eryx_lua_require_resolved(lua_State* L) {
+    int moduleType = (int)luaL_checkinteger(L, 1);
+    std::string modulePath = luaL_checkstring(L, 2);
+    std::string cacheKey = luaL_checkstring(L, 3);
+
+    int nret = 0;
+    std::string chunkName;
+
+    switch (moduleType) {
+        case LocatedModule::TYPE_FILE: {
+            // Native modules silently shadow a lua script.
+            // Windows: [module].dll, Linux: lib[module].so, macOS: lib[module].dylib
+            fs::path basePath = fs::path(modulePath);
+            fs::path nativePath;
+#if defined(_WIN32)
+            nativePath = basePath.parent_path() / (basePath.stem().string() + ".dll");
+#elif defined(__APPLE__)
+            nativePath = basePath.parent_path() / ("lib" + basePath.stem().string() + ".dylib");
+#else
+            nativePath = basePath.parent_path() / ("lib" + basePath.stem().string() + ".so");
+#endif
+
+            if (fs::exists(nativePath)) {
+                chunkName = "@" + nativePath.string();
+                nret = eryx_require_native(L, nativePath.string().c_str());
+            } else {
+                std::ifstream f(modulePath, std::ios::binary);
+                if (!f) {
+                    luaL_error(L, "Failed to read %s", modulePath.c_str());
+                }
+                std::string source((std::istreambuf_iterator<char>(f)),
+                                   std::istreambuf_iterator<char>());
+
+                chunkName = "@" + modulePath;
+                nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
+            }
+            break;
+        }
+
+        case LocatedModule::TYPE_VFS: {
+            auto data = vfs_read_file(modulePath);
+            if (data.empty()) {
+                luaL_error(L, "VFS file %s vanished during require", modulePath.c_str());
+            }
+            std::string source(reinterpret_cast<const char*>(data.data()), data.size());
+            chunkName = CHUNK_PREFIX_VFS + modulePath;
+            nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
+            break;
+        }
+
+        case LocatedModule::TYPE_EMBEDDED_SCRIPT: {
+            chunkName = CHUNK_PREFIX_ERYX + modulePath;
+            auto* scripts = eryx_get_embedded_script_modules();
+            bool found = false;
+            if (scripts) {
+                for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
+                    if (strcmp(m->modulePath, modulePath.c_str()) == 0) {
+                        nret = eryx_execute_module_script(L, m->source, chunkName, cacheKey);
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found)
+                luaL_error(L, "Embedded script %s vanished during require", modulePath.c_str());
+            break;
+        }
+        case LocatedModule::TYPE_EMBEDDED_NATIVE: {
+            chunkName = CHUNK_PREFIX_ERYX + modulePath;
+            auto* natives = eryx_get_embedded_native_modules();
+            bool found = false;
+            if (natives) {
+                for (auto m = natives; m->modulePath; ++m) {
+                    if (strcmp(m->modulePath, modulePath.c_str()) == 0) {
+                        if (!m->entry) {
+                            luaL_error(L, "Improperly defined native module %s (no entry)",
+                                       modulePath.c_str());
+                        }
+
+                        lua_checkstack(L, 1);
+                        lua_State* ML = lua_newthread(L);
+                        int nresults = m->entry(ML);
+                        if (nresults > 0) {
+                            lua_xmove(ML, L, nresults);
+                        }
+                        lua_remove(L, -nresults - 1);  // remove ML thread
+                        nret = nresults;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found)
+                luaL_error(L, "Embedded native module %s vanished during require",
+                           modulePath.c_str());
+            break;
+        }
+
+        default: {
+            luaL_error(L, "Unsupported module type: %d", moduleType);
+        }
+    }
+
+    if (nret == -1) {
+        lua_pushinteger(L, CACHE_STATUS_YIELDED);
+        return 1;
+    }
+
+    if (nret != 1) {
+        luaL_error(L, "%s didn't return exactly one value (%d)", chunkName.c_str(), nret);
+    }
+
+    lua_pushinteger(L, CACHE_STATUS_LOADED);
+    lua_insert(L, -2);
+    return 2;
+}
+
 ERYX_API int eryx_lua_require(lua_State* L) {
     // auto __start = lua_clock();
     std::string path_str = luaL_checkstring(L, 1);
@@ -881,119 +1003,32 @@ ERYX_API int eryx_lua_require(lua_State* L) {
     }
     // Finally, mark it as loading
     eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_LOADING);
+    int topBeforeLoad = lua_gettop(L);
+    lua_pushcfunction(L, eryx_lua_require_resolved, nullptr);
+    lua_pushinteger(L, resolved->type);
+    lua_pushstring(L, resolved->path.c_str());
+    lua_pushstring(L, cacheKey.c_str());
 
-    int nret = 0;
-    std::string chunkName;
-
-    switch (resolved->type) {
-        case LocatedModule::TYPE_FILE: {
-            // Native modules silently shadow a lua script.
-            // Windows: [module].dll, Linux: lib[module].so, macOS: lib[module].dylib
-            fs::path basePath = fs::path(resolved->path);
-            fs::path nativePath;
-#if defined(_WIN32)
-            nativePath = basePath.parent_path() / (basePath.stem().string() + ".dll");
-#elif defined(__APPLE__)
-            nativePath = basePath.parent_path() / ("lib" + basePath.stem().string() + ".dylib");
-#else
-            nativePath = basePath.parent_path() / ("lib" + basePath.stem().string() + ".so");
-#endif
-
-            if (fs::exists(nativePath)) {
-                chunkName = "@" + nativePath.string();
-                nret = eryx_require_native(L, nativePath.string().c_str());
-            } else {
-                std::ifstream f(resolved->path, std::ios::binary);
-                if (!f) {
-                    luaL_error(L, "Failed to read %s", resolved->path.c_str());
-                }
-                std::string source((std::istreambuf_iterator<char>(f)),
-                                   std::istreambuf_iterator<char>());
-
-                chunkName = "@" + resolved->path;
-                nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
-            }
-            break;
-        }
-
-        case LocatedModule::TYPE_VFS: {
-            auto data = vfs_read_file(resolved->path);
-            if (data.empty()) {
-                luaL_error(L, "VFS file %s vanished during require", resolved->path.c_str());
-            }
-            std::string source(reinterpret_cast<const char*>(data.data()), data.size());
-            chunkName = CHUNK_PREFIX_VFS + resolved->path;
-            nret = eryx_execute_module_script(L, source, chunkName, cacheKey);
-            break;
-        }
-
-        case LocatedModule::TYPE_EMBEDDED_SCRIPT: {
-            chunkName = CHUNK_PREFIX_ERYX + resolved->path;
-            auto* scripts = eryx_get_embedded_script_modules();
-            bool found = false;
-            if (scripts) {
-                for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
-                    if (strcmp(m->modulePath, resolved->path.c_str()) == 0) {
-                        nret = eryx_execute_module_script(L, m->source, chunkName, cacheKey);
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found)
-                luaL_error(L, "Embedded script %s vanished during require", resolved->path.c_str());
-            break;
-        }
-        case LocatedModule::TYPE_EMBEDDED_NATIVE: {
-            chunkName = CHUNK_PREFIX_ERYX + resolved->path;
-            auto* natives = eryx_get_embedded_native_modules();
-            bool found = false;
-            if (natives) {
-                for (auto m = natives; m->modulePath; ++m) {
-                    if (strcmp(m->modulePath, resolved->path.c_str()) == 0) {
-                        if (!m->entry) {
-                            luaL_error(L, "Improperly defined native module %s (no entry)",
-                                       resolved->path.c_str());
-                        }
-
-                        lua_checkstack(L, 1);
-                        lua_State* ML = lua_newthread(L);
-                        int nresults = m->entry(ML);
-                        if (nresults > 0) {
-                            lua_xmove(ML, L, nresults);
-                        }
-                        lua_remove(L, -nresults - 1);  // remove ML thread
-                        nret = nresults;
-                        found = true;
-                        break;
-                    }
-                }
-            }
-            if (!found)
-                luaL_error(L, "Embedded native module %s vanished during require",
-                           resolved->path.c_str());
-            break;
-        }
-
-        default: {
-            luaL_error(L, "Unsupported module type: %d", resolved->type);
-        }
+    if (lua_pcall(L, 3, LUA_MULTRET, 0) != LUA_OK) {
+        eryx_require_reset_load_state(L, cacheKey.c_str());
+        lua_error(L);
+        return 0;
     }
 
-    if (nret != 1) {
-        // If the module yielded during loading, the executor returned -1 as
-        // a sentinel. In that case, register the current coroutine as a
-        // waiter and yield; it will be resumed when the module finishes.
-        if (nret == -1) {
-            eryx_cache_registry_add_waiter(L, cacheKey.c_str());
-            return lua_yield(L, 0);
-        }
-
-        luaL_error(L, "%s didn't return exactly one value (%d)", chunkName.c_str(), nret);
+    int resultCount = lua_gettop(L) - topBeforeLoad;
+    if (resultCount == 1 && lua_isnumber(L, -1) && lua_tointeger(L, -1) == CACHE_STATUS_YIELDED) {
+        lua_pop(L, 1);
+        eryx_cache_registry_add_waiter(L, cacheKey.c_str());
+        return lua_yield(L, 0);
     }
 
+    if (resultCount != 2 || !lua_isnumber(L, -2) || lua_tointeger(L, -2) != CACHE_STATUS_LOADED) {
+        eryx_require_reset_load_state(L, cacheKey.c_str());
+        luaL_error(L, "require loader returned an unexpected result");
+    }
+
+    lua_remove(L, -2);  // remove status marker, leave module result on top
     eryx_cache_registry_cache(L, cacheKey.c_str());
-    eryx_cache_registry_set_status(L, cacheKey.c_str(), CACHE_STATUS_LOADED);
 
-    return nret;
+    return 1;
 }

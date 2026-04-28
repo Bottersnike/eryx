@@ -1,12 +1,119 @@
 --!nolint LocalShadow
 -- @ignore
 
+local zip = require("@eryx/compression/zip")
+local hash = require("@eryx/crypto/hazmat/hash")
+local hex = require("@eryx/encoding/hex")
+local fs = require("@eryx/fs")
+local http = require("@eryx/http")
 local project = require("@eryx/project")
 local cycles = require("../cycles")
 local types = require("../types")
 
-local function getDependenciesFromUrl(url: string, sha256: string?): project.Dependencies?
-	error("TODO: fetch URL dependency, verify sha256 if present, and read eryx.toml")
+local function fetchArchive(url: string, sha256: string?): buffer
+	local res = http.get(url)
+	if res.status ~= 200 then
+		error(`Failed to download URL dependency {url}`)
+	end
+
+	local archive = buffer.fromstring(res.body)
+
+	if sha256 then
+		local actual = hex.encode(hash.sha256(archive))
+		if actual ~= string.lower(sha256) then
+			error(`Downloaded file for {url} did not match expected sha256`)
+		end
+	end
+
+	if not zip.isZip(archive) then
+		error(`URL dependency {url} is not a valid zip archive`)
+	end
+
+	return archive
+end
+
+local function archiveRoot(entries: { zip.EntryInfo }): string?
+	local root: string? = nil
+
+	for _, entry in entries do
+		local name = entry.name
+		if name == "" then
+			continue
+		end
+
+		local slash = name:find("/", 1, true)
+		if not slash then
+			return nil
+		end
+
+		local segment = name:sub(1, slash)
+		if root == nil then
+			root = segment
+		elseif root ~= segment then
+			return nil
+		end
+	end
+
+	return root
+end
+
+local function manifestFromArchive(archive: buffer): project.Manifest?
+	local entries = zip.list(archive)
+	local root = archiveRoot(entries)
+
+	local manifestPath = if root then root .. "eryx.toml" else "eryx.toml"
+	local manifestData = zip.read(archive, manifestPath)
+	if not manifestData then
+		return nil
+	end
+
+	return project.parse(buffer.tostring(manifestData)).manifest
+end
+
+local function getManifestFromUrl(url: string, sha256: string?): project.Manifest?
+	local archive = fetchArchive(url, sha256)
+	return manifestFromArchive(archive)
+end
+
+local function ensureDirRecursive(path: string)
+	if path == "" or fs.exists(path) then
+		return
+	end
+
+	local parent = fs.path.dirname(path)
+	if parent and parent ~= path and parent ~= "" then
+		ensureDirRecursive(parent)
+	end
+
+	if not fs.exists(path) then
+		fs.mkdir(path)
+	end
+end
+
+local function extractArchiveTo(archive: buffer, dest: string)
+	local entries = zip.list(archive)
+	local root = archiveRoot(entries)
+
+	for path, data in zip.unpack(archive) do
+		local relative = path
+		if root and relative:sub(1, #root) == root then
+			relative = relative:sub(#root + 1)
+		end
+
+		if relative == "" then
+			continue
+		end
+
+		local fullyQualified = fs.path.join(dest, relative)
+		local parent = fs.path.dirname(fullyQualified)
+		if parent then
+			ensureDirRecursive(parent)
+		end
+
+		local f = fs.open(fullyQualified, "w")
+		f:write(data)
+		f:close()
+	end
 end
 
 local urlSource: types.Source = {
@@ -43,11 +150,10 @@ local urlSource: types.Source = {
 			tree = {},
 		}
 
-		-- TODO: This needs to be "get manifest!"
-		local deps = getDependenciesFromUrl(url, sha256)
-		if deps then
+		local childManifest = getManifestFromUrl(url, sha256)
+		if childManifest and childManifest.dependencies then
 			local visitingKey = cycles.pushVisiting(r, visiting, name)
-			recurse(root, path, deps, r.tree, visiting, false)
+			recurse(root, path, childManifest, r.tree, visiting, false)
 			cycles.popVisiting(visitingKey, visiting)
 		end
 
@@ -59,7 +165,8 @@ local urlSource: types.Source = {
 			error("Internal error: expected file requirement")
 		end
 
-		error(`TODO: download/extract file dependency {requirement.path} into {dest}`)
+		local archive = fetchArchive(requirement.path, requirement.sha256)
+		extractArchiveTo(archive, dest)
 	end,
 
 	identity = function(requirement: types.Requirement): string
@@ -72,6 +179,16 @@ local urlSource: types.Source = {
 		return {
 			url = requirement.path,
 			sha256 = requirement.sha256,
+		}
+	end,
+
+	readLock = function(_root: string, package: types.LockPackage): types.Requirement
+		return {
+			type = "file",
+			name = "",
+			path = package.data.url,
+			sha256 = package.data.sha256,
+			tree = {},
 		}
 	end,
 }

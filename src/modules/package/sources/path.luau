@@ -51,6 +51,15 @@ local repo: types.Source = {
 			path = requirement.path,
 		}
 	end,
+
+	readLock = function(_root: string, package: types.LockPackage): types.Requirement
+		return {
+			type = "path",
+			name = "",
+			path = package.data.path,
+			tree = {},
+		}
+	end,
 }
 
 return table.freeze(repo)

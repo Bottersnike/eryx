@@ -200,7 +200,7 @@ end)
 
 suite:test("basic statement nodes", function()
 	local cases = {
-		{ src = "do break end", node = "StatBreak" },
+		{ src = "while true do break end", node = "StatBreak" },
 		{ src = "return 1", node = "StatReturn" },
 		{ src = "print(1)", node = "StatExpr" },
 		{ src = "local x = 1", node = "StatLocal" },
@@ -213,15 +213,13 @@ suite:test("basic statement nodes", function()
 	}
 
 	for _, c in cases do
-		local result = luauParse.parse(c.src)
-		test.skipIf(#result.errors > 0, `statement syntax not enabled for: {c.node}`)
+		local result = parseOk(c.src)
 		test.expect(findNode(result.root, c.node)):toNotBeNil()
 	end
 end)
 
-suite:test("StatContinue (when enabled)", function()
-	local result = luauParse.parse("while true do continue end")
-	test.skipIf(#result.errors > 0, "continue syntax not enabled in this Luau build")
+suite:test("StatContinue", function()
+	local result = parseOk("while true do continue end")
 	test.expect(findNode(result.root, "StatContinue")):toNotBeNil()
 end)
 
@@ -233,23 +231,19 @@ end)
 
 suite:test("type statement nodes", function()
 	assertNode("type X = number", "StatTypeAlias")
-	local dg = luauParse.parse("declare global g: number")
-	test.skipIf(#dg.errors > 0, "declare global syntax not enabled in this Luau build")
+	local dg = parseOk("declare g: number")
 	test.expect(findNode(dg.root, "StatDeclareGlobal")):toNotBeNil()
 
-	local df = luauParse.parse("declare function id(x: number): number")
-	test.skipIf(#df.errors > 0, "declare function syntax not enabled in this Luau build")
+	local df = parseOk("declare function id(x: number): number")
 	test.expect(findNode(df.root, "StatDeclareFunction")):toNotBeNil()
 
-	local dc = luauParse.parse("declare class C end")
-	test.skipIf(#dc.errors > 0, "declare class syntax not enabled in this Luau build")
+	local dc = parseOk("declare class C end")
 	test.expect(findNode(dc.root, "StatDeclareExternType")):toNotBeNil()
 end)
 
-suite:test("StatTypeFunction (when supported by parser)", function()
+suite:test("StatTypeFunction", function()
 	local src = "type function id<T>(x: T): T return x end"
-	local result = luauParse.parse(src)
-	test.skipIf(#result.errors > 0, "type function syntax not enabled in this Luau build")
+	local result = parseOk(src)
 	test.expect(findNode(result.root, "StatTypeFunction")):toNotBeNil()
 end)
 
@@ -262,8 +256,7 @@ suite:test("StatTypeAlias exposes name/generic locations", function()
 end)
 
 suite:test("StatDeclareFunction exposes parameters", function()
-	local result = luauParse.parse("declare function f(x: number): number")
-	test.skipIf(#result.errors > 0, "declare function syntax not enabled in this Luau build")
+	local result = parseOk("declare function f(x: number): number")
 	local stat = findNode(result.root, "StatDeclareFunction")
 	expectLocation(stat.nameLocation)
 	test.expect(stat.params):toBeType("table")
@@ -272,17 +265,15 @@ suite:test("StatDeclareFunction exposes parameters", function()
 end)
 
 suite:test("StatDeclareExternType exposes props/super/indexer shape", function()
-	local result = luauParse.parse("declare class Child extends Parent\n\tx: number\nend")
-	test.skipIf(#result.errors > 0, "declare class syntax not enabled in this Luau build")
+	local result = parseOk("declare class Child extends Parent\n\tx: number\nend")
 	local stat = findNode(result.root, "StatDeclareExternType")
 	test.expect(stat.superName):toBe("Parent")
 	test.expect(type(stat.props)):toBe("table")
 end)
 
 suite:test("StatError appears on invalid statement", function()
-	local result = luauParse.parse("if true then local")
+	local result = luauParse.parse("game:")
 	test.expect(#result.errors):toBeGreaterThan(0)
-	test.skipIf(findNode(result.root, "StatError") == nil, "parser did not emit StatError node for this syntax error")
 	test.expect(findNode(result.root, "StatError")):toNotBeNil()
 end)
 
@@ -337,16 +328,13 @@ suite:test("TypeError appears on invalid type syntax", function()
 end)
 
 suite:test("typepacks: explicit/variadic/generic", function()
-	local v = luauParse.parse("type F = (...number) -> ...number")
-	test.skipIf(#v.errors > 0, "variadic typepack syntax not enabled in this Luau build")
+	local v = parseOk("type Foo = (string, number, ...number) -> ...boolean")
 	test.expect(findNode(v.root, "TypePackVariadic")):toNotBeNil()
 
-	local g = luauParse.parse("type F = <U...>(...U...) -> ...U...")
-	test.skipIf(#g.errors > 0, "generic typepack syntax not enabled in this Luau build")
+	local g = parseOk("type A = (a...) -> b...")
 	test.expect(findNode(g.root, "TypePackGeneric")):toNotBeNil()
 
-	local e = luauParse.parse("type F = (...number) -> (number, ...number)")
-	test.skipIf(#e.errors > 0, "explicit typepack syntax not enabled in this Luau build")
+	local e = parseOk("type Bar = () -> (number, ...boolean)")
 	test.expect(findNode(e.root, "TypePackExplicit")):toNotBeNil()
 end)
 
