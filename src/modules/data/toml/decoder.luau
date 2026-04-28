@@ -2,25 +2,16 @@ local shared = require("@self/shared")
 
 local TOML_ARRAY_MT = shared.TOML_ARRAY_MT
 local TOML_AOT_MT = shared.TOML_AOT_MT
-local BARE_KEY_RE = shared.BARE_KEY_RE
-local DEC_INT_RE = shared.DEC_INT_RE
-local HEX_INT_RE = shared.HEX_INT_RE
-local OCT_INT_RE = shared.OCT_INT_RE
-local BIN_INT_RE = shared.BIN_INT_RE
 local FLOAT_RE = shared.FLOAT_RE
-local OFFSET_DT_RE = shared.OFFSET_DT_RE
-local LOCAL_DT_RE = shared.LOCAL_DT_RE
-local LOCAL_DATE_RE = shared.LOCAL_DATE_RE
-local LOCAL_TIME_RE = shared.LOCAL_TIME_RE
 local OFFSET_DT_MINUTE_RE = shared.OFFSET_DT_MINUTE_RE
 local LOCAL_DT_MINUTE_RE = shared.LOCAL_DT_MINUTE_RE
 local LOCAL_TIME_MINUTE_RE = shared.LOCAL_TIME_MINUTE_RE
 
 local isSpaceByte = shared.isSpaceByte
 local isInlineSpaceByte = shared.isInlineSpaceByte
-local tableIsArray = shared.tableIsArray
-local isArrayOfTables = shared.isArrayOfTables
 local parseIntegerToken = shared.parseIntegerToken
+local classifyIntegerToken = shared.classifyIntegerToken
+local classifyDateTimeToken = shared.classifyDateTimeToken
 local joinDottedPath = shared.joinDottedPath
 
 local decoder = {}
@@ -49,7 +40,6 @@ type Parser = {
 	root: { [string]: any },
 	currentTable: { [string]: any },
 	currentPath: { string },
-	explicitHeaders: { [string]: boolean },
 	explicitTables: { [any]: boolean },
 	inlineTables: { [any]: boolean },
 	dottedTables: { [any]: boolean },
@@ -88,6 +78,14 @@ end
 
 local function isBareCR(parser: Parser, byte: number): boolean
 	return byte == 0x0D and string.byte(parser.source, parser.pos + 1) ~= 0x0A
+end
+
+local function isTomlArray(value: any): boolean
+	return type(value) == "table" and getmetatable(value) == TOML_ARRAY_MT
+end
+
+local function isTomlArrayOfTables(value: any): boolean
+	return type(value) == "table" and getmetatable(value) == TOML_AOT_MT
 end
 
 local function skipWhitespaceAndComments(parser: Parser)
@@ -235,7 +233,8 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 		end
 	end
 
-	local out: { string } = {}
+	local out: { string }? = nil
+	local chunkStart = parser.pos
 	while true do
 		local byte = peek(parser)
 		if byte == nil then
@@ -251,6 +250,22 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 
 				if run >= 3 then
 					local extra = math.min(run - 3, 2)
+					local chunk = string.sub(parser.source, chunkStart, parser.pos - 1)
+					if out == nil then
+						consume(parser)
+						consume(parser)
+						consume(parser)
+						for _ = 1, extra do
+							consume(parser)
+						end
+						if extra == 0 then
+							return chunk
+						end
+						return chunk .. string.rep('"', extra)
+					end
+					if #chunk > 0 then
+						table.insert(out, chunk)
+					end
 					for _ = 1, extra do
 						table.insert(out, '"')
 					end
@@ -258,16 +273,28 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 						consume(parser)
 					end
 					return table.concat(out)
-				else
-					table.insert(out, '"')
-					consume(parser)
-					continue
 				end
-			else
+
 				consume(parser)
+				continue
+			else
+				local chunk = string.sub(parser.source, chunkStart, parser.pos - 1)
+				consume(parser)
+				if out == nil then
+					return chunk
+				end
+				if #chunk > 0 then
+					table.insert(out, chunk)
+				end
 				return table.concat(out)
 			end
 		elseif byte == 0x5C then
+			if out == nil then
+				out = {}
+			end
+			if parser.pos > chunkStart then
+				table.insert(out :: { string }, string.sub(parser.source, chunkStart, parser.pos - 1))
+			end
 			consume(parser)
 			local esc = peek(parser)
 			if esc == nil then
@@ -296,12 +323,14 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 				end
 				if sawNewline then
 					parser.pos = scanPos
+					chunkStart = scanPos
 					continue
 				end
 			end
 
 			consume(parser)
-			table.insert(out, parseEscapedCodePoint(parser, esc :: number))
+			table.insert(out :: { string }, parseEscapedCodePoint(parser, esc :: number))
+			chunkStart = parser.pos
 		else
 			if
 				(byte == 0x0D and string.byte(parser.source, parser.pos + 1) ~= 0x0A)
@@ -310,7 +339,7 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 			then
 				parserError(parser, "control characters are not allowed in strings")
 			end
-			table.insert(out, string.char(consume(parser)))
+			consume(parser)
 		end
 	end
 end
@@ -417,18 +446,16 @@ local function parseKeyPart(parser: Parser): string
 		parserError(parser, "invalid bare key")
 	end
 
-	local token = string.sub(parser.source, start, parser.pos - 1)
-	if not BARE_KEY_RE:isMatch(token) then
-		parserError(parser, "invalid bare key")
-	end
-	return token
+	return string.sub(parser.source, start, parser.pos - 1)
 end
 
 local function parseDottedKey(parser: Parser, terminators: { [number]: boolean }): { string }
 	local parts: { string } = {}
+	local count = 0
 	while true do
 		local part = parseKeyPart(parser)
-		table.insert(parts, part)
+		count += 1
+		parts[count] = part
 		skipInlineWhitespace(parser)
 		local byte = peek(parser)
 		if byte == 0x2E then
@@ -510,21 +537,26 @@ end
 
 local parseValue: (parser: Parser) -> any
 
-local function markInlineTableRecursive(parser: Parser, value: { [any]: any })
-	parser.inlineTables[value] = true
-	for _, child in value do
-		if type(child) == "table" then
-			parser.inlineTables[child] = true
-			if tableIsArray(child :: any) then
-				for i = 1, #(child :: any) do
-					local entry = (child :: any)[i]
-					if type(entry) == "table" then
-						markInlineTableRecursive(parser, entry)
-					end
-				end
-			else
-				markInlineTableRecursive(parser, child :: any)
+local function markInlineValue(parser: Parser, value: any)
+	if type(value) ~= "table" then
+		return
+	end
+
+	if isTomlArray(value) then
+		for i = 1, #(value :: any) do
+			local entry = (value :: any)[i]
+			if type(entry) == "table" then
+				markInlineValue(parser, entry)
 			end
+		end
+		return
+	end
+
+	local valueTable = value :: { [any]: any }
+	parser.inlineTables[valueTable] = true
+	for _, child in valueTable do
+		if type(child) == "table" then
+			markInlineValue(parser, child)
 		end
 	end
 end
@@ -542,7 +574,7 @@ local function parseInlineTable(parser: Parser): { [string]: any }
 			parserError(parser, "unterminated inline table")
 		elseif nextByte == 0x7D then
 			consume(parser)
-			markInlineTableRecursive(parser, value :: any)
+			markInlineValue(parser, value)
 			return value
 		end
 
@@ -561,6 +593,8 @@ local function parseInlineTable(parser: Parser): { [string]: any }
 				local created = {}
 				cursor[key] = created
 				cursor = created
+			elseif isTomlArrayOfTables(existing) or isTomlArray(existing) then
+				parserError(parser, "cannot redefine non-table as table in inline table")
 			elseif type(existing) == "table" then
 				if parser.inlineTables[existing] then
 					parserError(parser, "cannot extend inline table")
@@ -576,16 +610,14 @@ local function parseInlineTable(parser: Parser): { [string]: any }
 			parserError(parser, "duplicate key in inline table")
 		end
 		cursor[leaf] = parsed
-		if type(parsed) == "table" then
-			markInlineTableRecursive(parser, parsed :: any)
-		end
+		markInlineValue(parser, parsed)
 
 		skipWhitespaceAndComments(parser)
 		local sep = peek(parser)
 		if sep == 0x2C then
 			consume(parser)
 		elseif sep == 0x7D then
-			markInlineTableRecursive(parser, value :: any)
+			markInlineValue(parser, value)
 			continue
 		else
 			parserError(parser, "expected ',' or '}' in inline table")
@@ -599,6 +631,7 @@ local function parseArray(parser: Parser): { any }
 	end
 
 	local value = {}
+	local count = 0
 	setmetatable(value, TOML_ARRAY_MT)
 	while true do
 		skipWhitespaceAndComments(parser)
@@ -610,7 +643,8 @@ local function parseArray(parser: Parser): { any }
 			return value
 		end
 
-		table.insert(value, parseValue(parser))
+		count += 1
+		value[count] = parseValue(parser)
 		skipWhitespaceAndComments(parser)
 		local sep = peek(parser)
 		if sep == 0x2C then
@@ -624,7 +658,8 @@ local function parseArray(parser: Parser): { any }
 end
 
 local function normalizeDateTimeLikeToken(token: string): string
-	if OFFSET_DT_RE:isMatch(token) then
+	local kind = classifyDateTimeToken(token)
+	if kind == "offset-datetime" then
 		local out = token
 		if string.sub(out, 11, 11) == " " or string.sub(out, 11, 11) == "t" then
 			out = string.sub(out, 1, 10) .. "T" .. string.sub(out, 12)
@@ -638,7 +673,7 @@ local function normalizeDateTimeLikeToken(token: string): string
 			out = head .. ":00" .. tail
 		end
 		return out
-	elseif LOCAL_DT_RE:isMatch(token) then
+	elseif kind == "local-datetime" then
 		local out = token
 		if string.sub(out, 11, 11) == " " or string.sub(out, 11, 11) == "t" then
 			out = string.sub(out, 1, 10) .. "T" .. string.sub(out, 12)
@@ -647,7 +682,7 @@ local function normalizeDateTimeLikeToken(token: string): string
 			out ..= ":00"
 		end
 		return out
-	elseif LOCAL_TIME_RE:isMatch(token) then
+	elseif kind == "time" then
 		if LOCAL_TIME_MINUTE_RE:isMatch(token) then
 			return token .. ":00"
 		end
@@ -794,18 +829,17 @@ parseValue = function(parser: Parser): any
 	local isLocalTime = false
 
 	if tokenLooksNumeric(token) then
-		isDecInt = DEC_INT_RE:isMatch(token)
-		if not isDecInt then
-			isHexInt = HEX_INT_RE:isMatch(token)
-			if not isHexInt then
-				isOctInt = OCT_INT_RE:isMatch(token)
-				if not isOctInt then
-					isBinInt = BIN_INT_RE:isMatch(token)
-					if not isBinInt then
-						isFloat = FLOAT_RE:isMatch(token)
-					end
-				end
-			end
+		local intKind = classifyIntegerToken(token)
+		if intKind == "dec" then
+			isDecInt = true
+		elseif intKind == "hex" then
+			isHexInt = true
+		elseif intKind == "oct" then
+			isOctInt = true
+		elseif intKind == "bin" then
+			isBinInt = true
+		else
+			isFloat = FLOAT_RE:isMatch(token)
 		end
 	end
 
@@ -817,15 +851,15 @@ parseValue = function(parser: Parser): any
 		and not isFloat
 		and tokenLooksDateLike(token)
 	then
-		isOffsetDateTime = OFFSET_DT_RE:isMatch(token)
-		if not isOffsetDateTime then
-			isLocalDateTime = LOCAL_DT_RE:isMatch(token)
-			if not isLocalDateTime then
-				isLocalDate = LOCAL_DATE_RE:isMatch(token)
-				if not isLocalDate then
-					isLocalTime = LOCAL_TIME_RE:isMatch(token)
-				end
-			end
+		local dtKind = classifyDateTimeToken(token)
+		if dtKind == "offset-datetime" then
+			isOffsetDateTime = true
+		elseif dtKind == "local-datetime" then
+			isLocalDateTime = true
+		elseif dtKind == "date" then
+			isLocalDate = true
+		elseif dtKind == "time" then
+			isLocalTime = true
 		end
 	end
 
@@ -836,8 +870,9 @@ parseValue = function(parser: Parser): any
 		if not isTokenDelimiter(nextByte) then
 			local rest = parseToken(parser)
 			local merged = token .. " " .. rest
-			local mergedIsOffsetDateTime = OFFSET_DT_RE:isMatch(merged)
-			local mergedIsLocalDateTime = if not mergedIsOffsetDateTime then LOCAL_DT_RE:isMatch(merged) else false
+			local mergedKind = classifyDateTimeToken(merged)
+			local mergedIsOffsetDateTime = mergedKind == "offset-datetime"
+			local mergedIsLocalDateTime = mergedKind == "local-datetime"
 			if mergedIsOffsetDateTime or mergedIsLocalDateTime then
 				token = merged
 				isOffsetDateTime = mergedIsOffsetDateTime
@@ -875,9 +910,9 @@ local function ensureSubtable(parser: Parser, container: { [string]: any }, key:
 		local created = {}
 		container[key] = created
 		return created
-	elseif isArrayOfTables(existing) then
+	elseif isTomlArrayOfTables(existing) then
 		parserError(parser, `cannot use key '{key}' as a table because it is already an array-of-tables`)
-	elseif tableIsArray(existing :: any) then
+	elseif isTomlArray(existing) then
 		parserError(parser, `cannot use key '{key}' as a table because it is already an array`)
 	elseif type(existing) == "table" then
 		if parser.inlineTables[existing] then
@@ -895,16 +930,13 @@ local function ensureSubtableForHeader(parser: Parser, container: { [string]: an
 		local created = {}
 		container[key] = created
 		return created
-	elseif isArrayOfTables(existing) then
-		if getmetatable(existing :: any) ~= TOML_AOT_MT then
-			parserError(parser, `cannot define child table under inline array '{key}'`)
-		end
+	elseif isTomlArrayOfTables(existing) then
 		local arr = existing :: { [number]: { [string]: any } }
 		if #arr == 0 then
 			parserError(parser, `cannot define child table under array '{key}' before any array entries`)
 		end
 		return arr[#arr]
-	elseif tableIsArray(existing :: any) then
+	elseif isTomlArray(existing) then
 		parserError(parser, `cannot use key '{key}' as a table because it is already an array`)
 	elseif type(existing) == "table" then
 		if parser.inlineTables[existing] then
@@ -917,8 +949,19 @@ local function ensureSubtableForHeader(parser: Parser, container: { [string]: an
 end
 
 local function assignValue(parser: Parser, container: { [string]: any }, path: { string }, value: any)
+	local pathLen = #path
+	if pathLen == 1 then
+		local leaf = path[1]
+		if container[leaf] ~= nil then
+			parserError(parser, `duplicate key '{leaf}'`)
+		end
+		container[leaf] = value
+		markInlineValue(parser, value)
+		return
+	end
+
 	local cursor = container
-	for i = 1, #path - 1 do
+	for i = 1, pathLen - 1 do
 		cursor = ensureSubtable(parser, cursor, path[i])
 		if parser.explicitTables[cursor] then
 			parserError(parser, "cannot append to explicitly declared table using dotted keys")
@@ -926,27 +969,15 @@ local function assignValue(parser: Parser, container: { [string]: any }, path: {
 		parser.dottedTables[cursor] = true
 	end
 
-	local leaf = path[#path]
+	local leaf = path[pathLen]
 	if cursor[leaf] ~= nil then
 		parserError(parser, `duplicate key '{leaf}'`)
 	end
 	cursor[leaf] = value
-	if type(value) == "table" then
-		if tableIsArray(value) then
-			for i = 1, #(value :: any) do
-				local entry = (value :: any)[i]
-				if type(entry) == "table" then
-					markInlineTableRecursive(parser, entry :: any)
-				end
-			end
-		else
-			markInlineTableRecursive(parser, value :: any)
-		end
-	end
+	markInlineValue(parser, value)
 end
 
 local function parseHeader(parser: Parser)
-	local lineStart = if parser.captureCST then parser.pos else nil
 	if consume(parser) ~= 0x5B then
 		parserError(parser, "expected '['")
 	end
@@ -989,13 +1020,14 @@ local function parseHeader(parser: Parser)
 		parserError(parser, "unexpected characters after table header")
 	end
 
+	local pathLen = #path
 	if isArrayHeader then
 		local parent = parser.root
-		for i = 1, #path - 1 do
+		for i = 1, pathLen - 1 do
 			parent = ensureSubtableForHeader(parser, parent, path[i])
 		end
 
-		local leaf = path[#path]
+		local leaf = path[pathLen]
 		local existing = parent[leaf]
 		local arrayContainer: { [number]: { [string]: any } }
 		if existing == nil then
@@ -1003,14 +1035,8 @@ local function parseHeader(parser: Parser)
 			setmetatable(created :: any, TOML_AOT_MT)
 			parent[leaf] = created
 			arrayContainer = created
-		elseif isArrayOfTables(existing) then
-			if getmetatable(existing :: any) ~= TOML_AOT_MT then
-				parserError(parser, "array-of-tables conflicts with existing inline array: " .. joinDottedPath(path))
-			end
+		elseif isTomlArrayOfTables(existing) then
 			arrayContainer = existing :: any
-			if getmetatable(arrayContainer :: any) ~= TOML_AOT_MT then
-				setmetatable(arrayContainer :: any, TOML_AOT_MT)
-			end
 		elseif type(existing) == "table" then
 			parserError(parser, "array-of-tables conflicts with existing table: " .. joinDottedPath(path))
 		else
@@ -1020,32 +1046,34 @@ local function parseHeader(parser: Parser)
 		local newEntry = {}
 		table.insert(arrayContainer, newEntry)
 		parser.currentTable = newEntry
-		parser.currentPath = table.clone(path)
+		parser.currentPath = path
 	else
 		local cursor = parser.root
-		for i, part in path do
-			if i < #path then
-				cursor = ensureSubtableForHeader(parser, cursor, part)
-			else
-				local existing = cursor[part]
-				if existing == nil then
-					local created = {}
-					cursor[part] = created
-					cursor = created
-				elseif isArrayOfTables(existing) then
-					parserError(parser, "table conflicts with existing array-of-tables: " .. joinDottedPath(path))
-				elseif tableIsArray(existing :: any) then
-					parserError(parser, "table conflicts with existing array: " .. joinDottedPath(path))
-				elseif type(existing) == "table" then
-					if parser.inlineTables[existing] then
-						parserError(parser, "cannot redefine inline table as table header: " .. joinDottedPath(path))
-					end
-					cursor = existing
-				else
-					parserError(parser, "table conflicts with existing scalar: " .. joinDottedPath(path))
-				end
+		if pathLen > 1 then
+			for i = 1, pathLen - 1 do
+				cursor = ensureSubtableForHeader(parser, cursor, path[i])
 			end
 		end
+
+		local leaf = path[pathLen]
+		local existing = cursor[leaf]
+		if existing == nil then
+			local created = {}
+			cursor[leaf] = created
+			cursor = created
+		elseif isTomlArrayOfTables(existing) then
+			parserError(parser, "table conflicts with existing array-of-tables: " .. joinDottedPath(path))
+		elseif isTomlArray(existing) then
+			parserError(parser, "table conflicts with existing array: " .. joinDottedPath(path))
+		elseif type(existing) == "table" then
+			if parser.inlineTables[existing] then
+				parserError(parser, "cannot redefine inline table as table header: " .. joinDottedPath(path))
+			end
+			cursor = existing
+		else
+			parserError(parser, "table conflicts with existing scalar: " .. joinDottedPath(path))
+		end
+
 		if parser.explicitTables[cursor] then
 			parserError(parser, "table header redefined: " .. joinDottedPath(path))
 		end
@@ -1054,51 +1082,85 @@ local function parseHeader(parser: Parser)
 		end
 		parser.explicitTables[cursor] = true
 		parser.currentTable = cursor
-		parser.currentPath = table.clone(path)
-	end
-
-	if parser.captureCST then
-		local newline = ""
-		local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
-		if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
-			newline = "\r\n"
-		elseif b == 0x0A then
-			newline = "\n"
-		end
-
-		local headerByPath = parser.headerByPath :: { [string]: HeaderRecord }
-		headerByPath[pathKey(path)] = {
-			path = table.clone(path),
-			lineStart = lineStart :: number,
-			lineEndExclusive = parser.pos + #newline,
-			newline = newline,
-		}
+		parser.currentPath = path
 	end
 end
 
-local function parseKeyValue(parser: Parser)
-	local lineStart = if parser.captureCST then parser.pos else nil
-	local path = parseDottedKey(parser, { [0x3D] = true })
-	local fullPath = nil
-	local keySegment = nil
-	if parser.captureCST then
-		fullPath = table.clone(parser.currentPath)
-		for i = 1, #path do
-			table.insert(fullPath, path[i])
-		end
+local function parseHeaderCST(parser: Parser)
+	local lineStart = parser.pos
+	parseHeader(parser)
 
-		keySegment = string.sub(parser.source, lineStart :: number, parser.pos - 1)
+	local newline = ""
+	local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
+	if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
+		newline = "\r\n"
+	elseif b == 0x0A then
+		newline = "\n"
 	end
+
+	local path = parser.currentPath
+	local headerByPath = parser.headerByPath :: { [string]: HeaderRecord }
+	headerByPath[pathKey(path)] = {
+		path = table.clone(path),
+		lineStart = lineStart,
+		lineEndExclusive = parser.pos + #newline,
+		newline = newline,
+	}
+end
+
+local function parseKeyValue(parser: Parser)
+	local path = parseDottedKey(parser, { [0x3D] = true })
 
 	if consume(parser) ~= 0x3D then
 		parserError(parser, "expected '='")
 	end
 
-	local postEqStart = if parser.captureCST then parser.pos else nil
 	skipInlineWhitespace(parser)
-	local postEqWhitespace = if parser.captureCST
-		then string.sub(parser.source, postEqStart :: number, parser.pos - 1)
-		else nil
+	local firstValueByte = peek(parser)
+	if firstValueByte == nil or firstValueByte == 0x0A or firstValueByte == 0x0D or firstValueByte == 0x23 then
+		parserError(parser, "expected value on same line after '='")
+	end
+
+	local value = parseValue(parser)
+	assignValue(parser, parser.currentTable, path, value)
+
+	local suffixStart = parser.pos
+	skipInlineWhitespace(parser)
+	local byte = peek(parser)
+	if byte == 0x23 then
+		while parser.pos <= parser.len do
+			local c = consume(parser)
+			if c == 0x0D and string.byte(parser.source, parser.pos) ~= 0x0A then
+				parserError(parser, "bare CR is not allowed")
+			end
+			if (c < 0x20 and c ~= 0x09 and c ~= 0x0A and c ~= 0x0D) or c == 0x7F then
+				parserError(parser, "invalid control character in comment")
+			end
+			if c == 0x0A then
+				break
+			end
+		end
+	elseif byte ~= nil and byte ~= 0x0A and byte ~= 0x0D then
+		parserError(parser, "unexpected trailing characters")
+	end
+end
+
+local function parseKeyValueCST(parser: Parser)
+	local lineStart = parser.pos
+	local path = parseDottedKey(parser, { [0x3D] = true })
+	local fullPath = table.clone(parser.currentPath)
+	for i = 1, #path do
+		table.insert(fullPath, path[i])
+	end
+	local keySegment = string.sub(parser.source, lineStart, parser.pos - 1)
+
+	if consume(parser) ~= 0x3D then
+		parserError(parser, "expected '='")
+	end
+
+	local postEqStart = parser.pos
+	skipInlineWhitespace(parser)
+	local postEqWhitespace = string.sub(parser.source, postEqStart, parser.pos - 1)
 	local firstValueByte = peek(parser)
 	if firstValueByte == nil or firstValueByte == 0x0A or firstValueByte == 0x0D or firstValueByte == 0x23 then
 		parserError(parser, "expected value on same line after '='")
@@ -1127,35 +1189,33 @@ local function parseKeyValue(parser: Parser)
 		parserError(parser, "unexpected trailing characters")
 	end
 
-	if parser.captureCST then
-		local preTrailing = string.sub(parser.source, lineStart :: number, suffixStart - 1)
+	local preTrailing = string.sub(parser.source, lineStart, suffixStart - 1)
 
-		-- Only preserve single-line assignments.
-		-- This includes scalars, inline tables, and single-line arrays.
-		if not string.find(preTrailing, "[\r\n]") then
-			local suffixEndExclusive = parser.pos
-			local newline = ""
-			local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
+	-- Only preserve single-line assignments.
+	-- This includes scalars, inline tables, and single-line arrays.
+	if not string.find(preTrailing, "[\r\n]") then
+		local suffixEndExclusive = parser.pos
+		local newline = ""
+		local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
 
-			if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
-				newline = "\r\n"
-			elseif b == 0x0A then
-				newline = "\n"
-			end
-
-			local lineSuffix = string.sub(parser.source, suffixStart, suffixEndExclusive - 1)
-			local assignmentByPath = parser.assignmentByPath :: { [string]: AssignmentRecord }
-			assignmentByPath[pathKey(fullPath :: { string })] = {
-				path = fullPath :: { string },
-				sectionPathKey = pathKey(parser.currentPath),
-				lineStart = lineStart :: number,
-				lineEndExclusive = parser.pos + #newline,
-				keySegment = keySegment :: string,
-				postEqWhitespace = postEqWhitespace :: string,
-				lineSuffix = lineSuffix,
-				newline = newline,
-			}
+		if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
+			newline = "\r\n"
+		elseif b == 0x0A then
+			newline = "\n"
 		end
+
+		local lineSuffix = string.sub(parser.source, suffixStart, suffixEndExclusive - 1)
+		local assignmentByPath = parser.assignmentByPath :: { [string]: AssignmentRecord }
+		assignmentByPath[pathKey(fullPath)] = {
+			path = fullPath,
+			sectionPathKey = pathKey(parser.currentPath),
+			lineStart = lineStart,
+			lineEndExclusive = parser.pos + #newline,
+			keySegment = keySegment,
+			postEqWhitespace = postEqWhitespace,
+			lineSuffix = lineSuffix,
+			newline = newline,
+		}
 	end
 end
 
@@ -1169,7 +1229,6 @@ local function decodeInternal(source: string, captureCST: boolean): ({ [string]:
 		root = {},
 		currentTable = {},
 		currentPath = {},
-		explicitHeaders = {},
 		explicitTables = {},
 		inlineTables = {},
 		dottedTables = {},
@@ -1179,6 +1238,8 @@ local function decodeInternal(source: string, captureCST: boolean): ({ [string]:
 	}
 	parser.currentTable = parser.root
 	parser.currentPath = {}
+	local parseHeaderImpl = if captureCST then parseHeaderCST else parseHeader
+	local parseKeyValueImpl = if captureCST then parseKeyValueCST else parseKeyValue
 
 	while true do
 		skipWhitespaceAndComments(parser)
@@ -1188,9 +1249,9 @@ local function decodeInternal(source: string, captureCST: boolean): ({ [string]:
 
 		local byte = peek(parser)
 		if byte == 0x5B then
-			parseHeader(parser)
+			parseHeaderImpl(parser)
 		else
-			parseKeyValue(parser)
+			parseKeyValueImpl(parser)
 		end
 	end
 

@@ -6,6 +6,12 @@ param(
 $ErrorActionPreference = 'Stop'
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
+# Git may emit non-fatal warnings on stderr (for example line-ending notices).
+# In PowerShell 7+, those can become terminating errors when ErrorActionPreference is Stop.
+if ($PSVersionTable.PSVersion.Major -ge 7) {
+    $PSNativeCommandUseErrorActionPreference = $false
+}
+
 try {
     $repoRoot = git rev-parse --show-toplevel 2>$null
     if ($LASTEXITCODE -ne 0) { throw 'not a git repo' }
@@ -15,8 +21,22 @@ try {
     exit 1
 }
 
-$cpp = git ls-files '*.c' '*.cpp' '*.cc' '*.cxx' '*.h' '*.hpp' 2>$null | Where-Object { $_ -ne '' }
-$luau = git ls-files '*.luau' 2>$null | Where-Object { $_ -ne '' -and $_ -notlike 'src/modules/unicode/_data/*' }
+# Only operate on files that are already staged for this commit.
+$stagedPaths = git diff --cached --name-only --diff-filter=ACMR 2>$null | Where-Object { $_ -ne '' }
+
+$cpp = @(
+    $stagedPaths | Where-Object {
+        $_ -match '\.(c|cc|cpp|cxx|h|hpp)$'
+    }
+)
+
+$luau = @(
+    $stagedPaths | Where-Object {
+        $_ -like '*.luau' -and $_ -notlike 'src/modules/unicode/_data/*'
+    }
+)
+
+$formattedPaths = @($cpp + $luau)
 
 $formattingChanged = $false
 
@@ -65,17 +85,25 @@ if ($DryRun) {
         exit 0
     }
 } else {
-    $modified = git ls-files -m 2>$null
+    $modified = @()
+    if ($formattedPaths) {
+        $modified = @(
+            git diff --name-only -- $formattedPaths 2>$null |
+                Where-Object { $_ -ne '' -and $formattedPaths -contains $_ }
+        )
+    }
     if ($modified) {
         Write-Host "Modified files from formatting:"
         $modified | ForEach-Object { Write-Host "  $_" }
         if ($ApplyAndAbort) {
-            git add $modified
+            git add -- $modified
             Write-Host "Staged formatted files. Aborting commit so you can review." -ForegroundColor Yellow
             exit 1
         } else {
             Write-Host "Run 'git add' to stage changes, or run this script with -ApplyAndAbort from a hook." -ForegroundColor Yellow
         }
+    } elseif (-not $cpp -and -not $luau) {
+        Write-Host "No staged C/C++ or .luau files to format."
     } else {
         Write-Host "No changes from formatting."
     }
