@@ -57,6 +57,13 @@ std::unique_ptr<LuaExceptionSnapshot> eryx_copy_exception(const LuaException* ex
     return copy;
 }
 
+static std::string get_frame_line_context(const LuaFrame& frame) {
+    if (!frame.lineContext.empty()) {
+        return frame.lineContext;
+    }
+    return getSourceLine(frame.source.c_str(), frame.line);
+}
+
 static void push_exception_snapshot(lua_State* L, const LuaExceptionSnapshot* snapshot) {
     if (!snapshot) {
         lua_pushnil(L);
@@ -75,7 +82,7 @@ static void push_exception_snapshot(lua_State* L, const LuaExceptionSnapshot* sn
     for (size_t i = 0; i < snapshot->traceback.size(); i++) {
         const LuaFrame& f = snapshot->traceback[i];
 
-        lua_createtable(L, 0, 5);
+        lua_createtable(L, 0, 4);
         lua_pushlstring(L, f.source.c_str(), f.source.size());
         lua_setfield(L, -2, "source");
         lua_pushlstring(L, f.short_src.c_str(), f.short_src.size());
@@ -84,8 +91,6 @@ static void push_exception_snapshot(lua_State* L, const LuaExceptionSnapshot* sn
         lua_setfield(L, -2, "line");
         lua_pushlstring(L, f.function.c_str(), f.function.size());
         lua_setfield(L, -2, "functionName");
-        lua_pushlstring(L, f.lineContext.c_str(), f.lineContext.size());
-        lua_setfield(L, -2, "lineContext");
 
         lua_rawseti(L, -2, (lua_Integer)i + 1);
     }
@@ -183,9 +188,9 @@ static void format_exception_into(std::ostringstream& ss, const char* type,
             if (!traceback[i + 1].source.empty() && traceback[i + 1].source[0] == '@') {
                 ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
                    << std::endl;
+                std::string lineContext = get_frame_line_context(traceback[i + 1]);
                 ss << " " << style.yellow() << traceback[i + 1].line << style.reset() << " "
-                   << style.dim() << "|" << style.reset() << " " << traceback[i + 1].lineContext
-                   << std::endl;
+                   << style.dim() << "|" << style.reset() << " " << lineContext << std::endl;
                 ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
                    << std::endl;
             }
@@ -212,8 +217,9 @@ static void format_exception_into(std::ostringstream& ss, const char* type,
     if (!traceback[0].source.empty() && traceback[0].source[0] == '@') {
         ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
            << std::endl;
+        std::string lineContext = get_frame_line_context(traceback[0]);
         ss << " " << style.yellow() << traceback[0].line << style.reset() << " " << style.dim()
-           << "|" << style.reset() << " " << traceback[0].lineContext << std::endl;
+           << "|" << style.reset() << " " << lineContext << std::endl;
         ss << style.dim() << " " << std::string(gutterWidth, ' ') << " |" << style.reset()
            << std::endl;
     }
@@ -268,7 +274,7 @@ int exception_index(lua_State* L) {
             const LuaFrame& f = exception->traceback[i];
 
             // frame table
-            lua_createtable(L, 0, 5);
+            lua_createtable(L, 0, 4);
 
             // source
             lua_pushlstring(L, f.source.c_str(), f.source.size());
@@ -285,10 +291,6 @@ int exception_index(lua_State* L) {
             // function
             lua_pushlstring(L, f.function.c_str(), f.function.size());
             lua_setfield(L, -2, "functionName");
-
-            // lineContext
-            lua_pushlstring(L, f.lineContext.c_str(), f.lineContext.size());
-            lua_setfield(L, -2, "lineContext");
 
             // traceback[i+1] = frame
             lua_rawseti(L, -2, (lua_Integer)i + 1);
@@ -422,7 +424,7 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
             std::string(arShortSource),
             ar.currentline,
             arName ? std::string(arName) : "<top level>",
-            getSourceLine(arSource, ar.currentline),
+            "",
         };
         newFrames.push_back(frame);
     }

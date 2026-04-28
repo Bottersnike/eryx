@@ -1,6 +1,5 @@
 local shared = require("@self/shared")
 
-local regex = shared.regex
 local TOML_ARRAY_MT = shared.TOML_ARRAY_MT
 local TOML_AOT_MT = shared.TOML_AOT_MT
 local BARE_KEY_RE = shared.BARE_KEY_RE
@@ -13,6 +12,9 @@ local OFFSET_DT_RE = shared.OFFSET_DT_RE
 local LOCAL_DT_RE = shared.LOCAL_DT_RE
 local LOCAL_DATE_RE = shared.LOCAL_DATE_RE
 local LOCAL_TIME_RE = shared.LOCAL_TIME_RE
+local OFFSET_DT_MINUTE_RE = shared.OFFSET_DT_MINUTE_RE
+local LOCAL_DT_MINUTE_RE = shared.LOCAL_DT_MINUTE_RE
+local LOCAL_TIME_MINUTE_RE = shared.LOCAL_TIME_MINUTE_RE
 
 local isSpaceByte = shared.isSpaceByte
 local isInlineSpaceByte = shared.isInlineSpaceByte
@@ -52,8 +54,8 @@ type Parser = {
 	inlineTables: { [any]: boolean },
 	dottedTables: { [any]: boolean },
 	captureCST: boolean,
-	assignmentByPath: { [string]: AssignmentRecord },
-	headerByPath: { [string]: HeaderRecord },
+	assignmentByPath: { [string]: AssignmentRecord }?,
+	headerByPath: { [string]: HeaderRecord }?,
 }
 
 local function pathKey(path: { string }): string
@@ -64,25 +66,9 @@ local function parserError(parser: Parser, message: string): never
 	error(`TOML parse error at {parser.pos}: {message}`)
 end
 
-local function validateSourceEncoding(source: string)
+local function validateSourceUtf8(source: string)
 	if utf8.len(source) == nil then
 		error("TOML parse error at 1: source is not valid UTF-8")
-	end
-
-	local i = 1
-	while i <= #source do
-		local b = string.byte(source, i)
-		if b == 0x0D then
-			if string.byte(source, i + 1) ~= 0x0A then
-				error(`TOML parse error at {i}: bare CR is not allowed`)
-			end
-			i += 2
-		else
-			if (b < 0x20 and b ~= 0x09 and b ~= 0x0A) or b == 0x7F then
-				error(`TOML parse error at {i}: invalid control character`)
-			end
-			i += 1
-		end
 	end
 end
 
@@ -100,14 +86,24 @@ local function consume(parser: Parser): number
 	return byte
 end
 
+local function isBareCR(parser: Parser, byte: number): boolean
+	return byte == 0x0D and string.byte(parser.source, parser.pos + 1) ~= 0x0A
+end
+
 local function skipWhitespaceAndComments(parser: Parser)
 	while parser.pos <= parser.len do
 		local byte = string.byte(parser.source, parser.pos)
+		if isBareCR(parser, byte) then
+			parserError(parser, "bare CR is not allowed")
+		end
 		if isSpaceByte(byte) then
 			parser.pos += 1
 		elseif byte == 0x23 then
 			while parser.pos <= parser.len do
 				local c = string.byte(parser.source, parser.pos)
+				if isBareCR(parser, c) then
+					parserError(parser, "bare CR is not allowed")
+				end
 				if (c < 0x20 and c ~= 0x09 and c ~= 0x0A and c ~= 0x0D) or c == 0x7F then
 					parserError(parser, "invalid control character in comment")
 				end
@@ -140,21 +136,28 @@ local function parseHexCode(parser: Parser, digits: number): number
 		parserError(parser, "unterminated unicode escape")
 	end
 
-	local hex = string.sub(parser.source, parser.pos, parser.pos + digits - 1)
-	if not string.match(hex, "^[0-9A-Fa-f]+$") then
-		parserError(parser, "invalid unicode escape")
-	end
-	local code = tonumber(hex, 16)
-	if code == nil then
-		parserError(parser, "invalid unicode escape")
+	local code = 0
+	for offset = 0, digits - 1 do
+		local byte = string.byte(parser.source, parser.pos + offset)
+		local digit: number
+		if byte >= 0x30 and byte <= 0x39 then
+			digit = byte - 0x30
+		elseif byte >= 0x41 and byte <= 0x46 then
+			digit = byte - 0x41 + 10
+		elseif byte >= 0x61 and byte <= 0x66 then
+			digit = byte - 0x61 + 10
+		else
+			parserError(parser, "invalid unicode escape")
+		end
+		code = code * 16 + digit
 	end
 	parser.pos += digits
-	return code :: number
+	return code
 end
 
-local function utf8FromCodePoint(code: number): string
+local function utf8FromCodePoint(parser: Parser, code: number): string
 	if code < 0 or code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF) then
-		error("invalid unicode codepoint")
+		parserError(parser, "invalid unicode escape")
 	end
 
 	if code <= 0x7F then
@@ -194,29 +197,11 @@ local function parseEscapedCodePoint(parser: Parser, esc: number): string
 	elseif esc == 0x65 then
 		return string.char(0x1B)
 	elseif esc == 0x78 then
-		local ok, out = pcall(function()
-			return utf8FromCodePoint(parseHexCode(parser, 2))
-		end)
-		if not ok then
-			parserError(parser, "invalid unicode escape")
-		end
-		return out :: string
+		return utf8FromCodePoint(parser, parseHexCode(parser, 2))
 	elseif esc == 0x75 then
-		local ok, out = pcall(function()
-			return utf8FromCodePoint(parseHexCode(parser, 4))
-		end)
-		if not ok then
-			parserError(parser, "invalid unicode escape")
-		end
-		return out :: string
+		return utf8FromCodePoint(parser, parseHexCode(parser, 4))
 	elseif esc == 0x55 then
-		local ok, out = pcall(function()
-			return utf8FromCodePoint(parseHexCode(parser, 8))
-		end)
-		if not ok then
-			parserError(parser, "invalid unicode escape")
-		end
-		return out :: string
+		return utf8FromCodePoint(parser, parseHexCode(parser, 8))
 	end
 
 	parserError(parser, "invalid string escape")
@@ -319,7 +304,8 @@ local function parseBasicString(parser: Parser, allowMultiline: boolean): string
 			table.insert(out, parseEscapedCodePoint(parser, esc :: number))
 		else
 			if
-				(byte < 0x20 and byte ~= 0x09 and (not multiline or (byte ~= 0x0A and byte ~= 0x0D)))
+				(byte == 0x0D and string.byte(parser.source, parser.pos + 1) ~= 0x0A)
+				or (byte < 0x20 and byte ~= 0x09 and (not multiline or (byte ~= 0x0A and byte ~= 0x0D)))
 				or byte == 0x7F
 			then
 				parserError(parser, "control characters are not allowed in strings")
@@ -393,6 +379,9 @@ local function parseLiteralString(parser: Parser, allowMultiline: boolean): stri
 		if (byte < 0x20 and byte ~= 0x09 and (not multiline or (byte ~= 0x0A and byte ~= 0x0D))) or byte == 0x7F then
 			parserError(parser, "control characters are not allowed in literal strings")
 		end
+		if byte == 0x0D and string.byte(parser.source, parser.pos + 1) ~= 0x0A then
+			parserError(parser, "bare CR is not allowed")
+		end
 		consume(parser)
 	end
 end
@@ -410,14 +399,29 @@ local function parseKeyPart(parser: Parser): string
 		return parseLiteralString(parser, false)
 	end
 
-	local rest = string.sub(parser.source, parser.pos)
-	local maybeMatch = BARE_KEY_RE:find(rest)
-	if not maybeMatch or maybeMatch.start ~= 1 then
+	local start = parser.pos
+	while parser.pos <= parser.len do
+		local b = string.byte(parser.source, parser.pos)
+		local isBareKeyByte = (b >= 0x30 and b <= 0x39)
+			or (b >= 0x41 and b <= 0x5A)
+			or (b >= 0x61 and b <= 0x7A)
+			or b == 0x5F
+			or b == 0x2D
+		if not isBareKeyByte then
+			break
+		end
+		parser.pos += 1
+	end
+
+	if parser.pos == start then
 		parserError(parser, "invalid bare key")
 	end
-	local match = maybeMatch :: any
-	parser.pos += #match.match
-	return match.match
+
+	local token = string.sub(parser.source, start, parser.pos - 1)
+	if not BARE_KEY_RE:isMatch(token) then
+		parserError(parser, "invalid bare key")
+	end
+	return token
 end
 
 local function parseDottedKey(parser: Parser, terminators: { [number]: boolean }): { string }
@@ -443,6 +447,9 @@ local function parseToken(parser: Parser): string
 	local start = parser.pos
 	while parser.pos <= parser.len do
 		local byte = string.byte(parser.source, parser.pos)
+		if isBareCR(parser, byte) then
+			parserError(parser, "bare CR is not allowed")
+		end
 		if (byte < 0x20 and byte ~= 0x09 and byte ~= 0x0A and byte ~= 0x0D) or byte == 0x7F then
 			parserError(parser, "invalid control character in value")
 		end
@@ -479,6 +486,26 @@ local function isTokenDelimiter(byte: number?): boolean
 		or byte == 0x5D
 		or byte == 0x7D
 		or byte == 0x23
+end
+
+local function tokenLooksNumeric(token: string): boolean
+	local first = string.byte(token, 1)
+	if first == nil then
+		return false
+	end
+
+	if first == 0x2B or first == 0x2D then
+		first = string.byte(token, 2)
+		if first == nil then
+			return false
+		end
+	end
+
+	return (first >= 0x30 and first <= 0x39) or first == 0x2E
+end
+
+local function tokenLooksDateLike(token: string): boolean
+	return string.find(token, "-", 1, true) ~= nil or string.find(token, ":", 1, true) ~= nil
 end
 
 local parseValue: (parser: Parser) -> any
@@ -605,7 +632,7 @@ local function normalizeDateTimeLikeToken(token: string): string
 		if string.sub(out, -1) == "z" then
 			out = string.sub(out, 1, -2) .. "Z"
 		end
-		if regex.isMatch("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$", out) then
+		if OFFSET_DT_MINUTE_RE:isMatch(out) then
 			local head = string.sub(out, 1, 16)
 			local tail = string.sub(out, 17)
 			out = head .. ":00" .. tail
@@ -616,12 +643,12 @@ local function normalizeDateTimeLikeToken(token: string): string
 		if string.sub(out, 11, 11) == " " or string.sub(out, 11, 11) == "t" then
 			out = string.sub(out, 1, 10) .. "T" .. string.sub(out, 12)
 		end
-		if regex.isMatch("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$", out) then
+		if LOCAL_DT_MINUTE_RE:isMatch(out) then
 			out ..= ":00"
 		end
 		return out
 	elseif LOCAL_TIME_RE:isMatch(token) then
-		if regex.isMatch("^[0-9]{2}:[0-9]{2}$", token) then
+		if LOCAL_TIME_MINUTE_RE:isMatch(token) then
 			return token .. ":00"
 		end
 		return token
@@ -743,22 +770,6 @@ parseValue = function(parser: Parser): any
 	end
 
 	local token = parseToken(parser)
-	if LOCAL_DATE_RE:isMatch(token) and peek(parser) == 0x20 then
-		local before = parser.pos
-		consume(parser)
-		local nextByte = peek(parser)
-		if not isTokenDelimiter(nextByte) then
-			local rest = parseToken(parser)
-			local merged = token .. " " .. rest
-			if OFFSET_DT_RE:isMatch(merged) or LOCAL_DT_RE:isMatch(merged) then
-				token = merged
-			else
-				parser.pos = before
-			end
-		else
-			parser.pos = before
-		end
-	end
 
 	if token == "true" then
 		return true
@@ -770,22 +781,83 @@ parseValue = function(parser: Parser): any
 		return -math.huge
 	elseif token == "nan" or token == "+nan" or token == "-nan" then
 		return 0 / 0
-	elseif
-		DEC_INT_RE:isMatch(token)
-		or HEX_INT_RE:isMatch(token)
-		or OCT_INT_RE:isMatch(token)
-		or BIN_INT_RE:isMatch(token)
+	end
+
+	local isDecInt = false
+	local isHexInt = false
+	local isOctInt = false
+	local isBinInt = false
+	local isFloat = false
+	local isOffsetDateTime = false
+	local isLocalDateTime = false
+	local isLocalDate = false
+	local isLocalTime = false
+
+	if tokenLooksNumeric(token) then
+		isDecInt = DEC_INT_RE:isMatch(token)
+		if not isDecInt then
+			isHexInt = HEX_INT_RE:isMatch(token)
+			if not isHexInt then
+				isOctInt = OCT_INT_RE:isMatch(token)
+				if not isOctInt then
+					isBinInt = BIN_INT_RE:isMatch(token)
+					if not isBinInt then
+						isFloat = FLOAT_RE:isMatch(token)
+					end
+				end
+			end
+		end
+	end
+
+	if
+		not isDecInt
+		and not isHexInt
+		and not isOctInt
+		and not isBinInt
+		and not isFloat
+		and tokenLooksDateLike(token)
 	then
-		return parseIntegerToken(token)
-	elseif FLOAT_RE:isMatch(token) then
+		isOffsetDateTime = OFFSET_DT_RE:isMatch(token)
+		if not isOffsetDateTime then
+			isLocalDateTime = LOCAL_DT_RE:isMatch(token)
+			if not isLocalDateTime then
+				isLocalDate = LOCAL_DATE_RE:isMatch(token)
+				if not isLocalDate then
+					isLocalTime = LOCAL_TIME_RE:isMatch(token)
+				end
+			end
+		end
+	end
+
+	if isLocalDate and peek(parser) == 0x20 then
+		local before = parser.pos
+		consume(parser)
+		local nextByte = peek(parser)
+		if not isTokenDelimiter(nextByte) then
+			local rest = parseToken(parser)
+			local merged = token .. " " .. rest
+			local mergedIsOffsetDateTime = OFFSET_DT_RE:isMatch(merged)
+			local mergedIsLocalDateTime = if not mergedIsOffsetDateTime then LOCAL_DT_RE:isMatch(merged) else false
+			if mergedIsOffsetDateTime or mergedIsLocalDateTime then
+				token = merged
+				isOffsetDateTime = mergedIsOffsetDateTime
+				isLocalDateTime = mergedIsLocalDateTime
+				isLocalDate = false
+			else
+				parser.pos = before
+			end
+		else
+			parser.pos = before
+		end
+	end
+
+	if isDecInt or isHexInt or isOctInt or isBinInt then
+		local intKind = if isHexInt then "hex" elseif isOctInt then "oct" elseif isBinInt then "bin" else "dec"
+		return parseIntegerToken(token, intKind)
+	elseif isFloat then
 		local cleaned = string.gsub(token, "_", "")
 		return tonumber(cleaned) :: number
-	elseif
-		OFFSET_DT_RE:isMatch(token)
-		or LOCAL_DT_RE:isMatch(token)
-		or LOCAL_DATE_RE:isMatch(token)
-		or LOCAL_TIME_RE:isMatch(token)
-	then
+	elseif isOffsetDateTime or isLocalDateTime or isLocalDate or isLocalTime then
 		local normalized = normalizeDateTimeLikeToken(token)
 		if not validateTemporalToken(normalized) then
 			parserError(parser, "invalid date/time value")
@@ -874,7 +946,7 @@ local function assignValue(parser: Parser, container: { [string]: any }, path: {
 end
 
 local function parseHeader(parser: Parser)
-	local lineStart = parser.pos
+	local lineStart = if parser.captureCST then parser.pos else nil
 	if consume(parser) ~= 0x5B then
 		parserError(parser, "expected '['")
 	end
@@ -903,6 +975,9 @@ local function parseHeader(parser: Parser)
 	if byte == 0x23 then
 		while parser.pos <= parser.len do
 			local c = consume(parser)
+			if c == 0x0D and string.byte(parser.source, parser.pos) ~= 0x0A then
+				parserError(parser, "bare CR is not allowed")
+			end
 			if (c < 0x20 and c ~= 0x09 and c ~= 0x0A and c ~= 0x0D) or c == 0x7F then
 				parserError(parser, "invalid control character in comment")
 			end
@@ -913,15 +988,6 @@ local function parseHeader(parser: Parser)
 	elseif byte ~= nil and byte ~= 0x0A and byte ~= 0x0D then
 		parserError(parser, "unexpected characters after table header")
 	end
-
-	local newline = ""
-	local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
-	if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
-		newline = "\r\n"
-	elseif b == 0x0A then
-		newline = "\n"
-	end
-	local lineEndExclusive = parser.pos + #newline
 
 	if isArrayHeader then
 		local parent = parser.root
@@ -992,34 +1058,47 @@ local function parseHeader(parser: Parser)
 	end
 
 	if parser.captureCST then
-		parser.headerByPath[pathKey(path)] = {
+		local newline = ""
+		local b = if parser.pos <= parser.len then string.byte(parser.source, parser.pos) else nil
+		if b == 0x0D and string.byte(parser.source, parser.pos + 1) == 0x0A then
+			newline = "\r\n"
+		elseif b == 0x0A then
+			newline = "\n"
+		end
+
+		local headerByPath = parser.headerByPath :: { [string]: HeaderRecord }
+		headerByPath[pathKey(path)] = {
 			path = table.clone(path),
-			lineStart = lineStart,
-			lineEndExclusive = lineEndExclusive,
+			lineStart = lineStart :: number,
+			lineEndExclusive = parser.pos + #newline,
 			newline = newline,
 		}
 	end
 end
 
 local function parseKeyValue(parser: Parser)
-	local lineStart = parser.pos
+	local lineStart = if parser.captureCST then parser.pos else nil
 	local path = parseDottedKey(parser, { [0x3D] = true })
-	local fullPath = table.clone(parser.currentPath)
-	for i = 1, #path do
-		table.insert(fullPath, path[i])
-	end
+	local fullPath = nil
+	local keySegment = nil
+	if parser.captureCST then
+		fullPath = table.clone(parser.currentPath)
+		for i = 1, #path do
+			table.insert(fullPath, path[i])
+		end
 
-	local eqPos = parser.pos
-	local keySegment = string.sub(parser.source, lineStart, eqPos - 1)
+		keySegment = string.sub(parser.source, lineStart :: number, parser.pos - 1)
+	end
 
 	if consume(parser) ~= 0x3D then
 		parserError(parser, "expected '='")
 	end
 
-	local postEqStart = parser.pos
+	local postEqStart = if parser.captureCST then parser.pos else nil
 	skipInlineWhitespace(parser)
-	local valueStart = parser.pos
-	local postEqWhitespace = string.sub(parser.source, postEqStart, valueStart - 1)
+	local postEqWhitespace = if parser.captureCST
+		then string.sub(parser.source, postEqStart :: number, parser.pos - 1)
+		else nil
 	local firstValueByte = peek(parser)
 	if firstValueByte == nil or firstValueByte == 0x0A or firstValueByte == 0x0D or firstValueByte == 0x23 then
 		parserError(parser, "expected value on same line after '='")
@@ -1034,6 +1113,9 @@ local function parseKeyValue(parser: Parser)
 	if byte == 0x23 then
 		while parser.pos <= parser.len do
 			local c = consume(parser)
+			if c == 0x0D and string.byte(parser.source, parser.pos) ~= 0x0A then
+				parserError(parser, "bare CR is not allowed")
+			end
 			if (c < 0x20 and c ~= 0x09 and c ~= 0x0A and c ~= 0x0D) or c == 0x7F then
 				parserError(parser, "invalid control character in comment")
 			end
@@ -1046,7 +1128,7 @@ local function parseKeyValue(parser: Parser)
 	end
 
 	if parser.captureCST then
-		local preTrailing = string.sub(parser.source, lineStart, suffixStart - 1)
+		local preTrailing = string.sub(parser.source, lineStart :: number, suffixStart - 1)
 
 		-- Only preserve single-line assignments.
 		-- This includes scalars, inline tables, and single-line arrays.
@@ -1061,16 +1143,15 @@ local function parseKeyValue(parser: Parser)
 				newline = "\n"
 			end
 
-			local lineEndExclusive = parser.pos + #newline
 			local lineSuffix = string.sub(parser.source, suffixStart, suffixEndExclusive - 1)
-
-			parser.assignmentByPath[pathKey(fullPath)] = {
-				path = fullPath,
+			local assignmentByPath = parser.assignmentByPath :: { [string]: AssignmentRecord }
+			assignmentByPath[pathKey(fullPath :: { string })] = {
+				path = fullPath :: { string },
 				sectionPathKey = pathKey(parser.currentPath),
-				lineStart = lineStart,
-				lineEndExclusive = lineEndExclusive,
-				keySegment = keySegment,
-				postEqWhitespace = postEqWhitespace,
+				lineStart = lineStart :: number,
+				lineEndExclusive = parser.pos + #newline,
+				keySegment = keySegment :: string,
+				postEqWhitespace = postEqWhitespace :: string,
 				lineSuffix = lineSuffix,
 				newline = newline,
 			}
@@ -1079,7 +1160,7 @@ local function parseKeyValue(parser: Parser)
 end
 
 local function decodeInternal(source: string, captureCST: boolean): ({ [string]: any }, any)
-	validateSourceEncoding(source)
+	validateSourceUtf8(source)
 
 	local parser: Parser = {
 		source = source,
@@ -1093,8 +1174,8 @@ local function decodeInternal(source: string, captureCST: boolean): ({ [string]:
 		inlineTables = {},
 		dottedTables = {},
 		captureCST = captureCST,
-		assignmentByPath = {},
-		headerByPath = {},
+		assignmentByPath = if captureCST then {} else nil,
+		headerByPath = if captureCST then {} else nil,
 	}
 	parser.currentTable = parser.root
 	parser.currentPath = {}
@@ -1113,10 +1194,11 @@ local function decodeInternal(source: string, captureCST: boolean): ({ [string]:
 		end
 	end
 
-	return parser.root, {
-		assignmentByPath = parser.assignmentByPath,
-		headerByPath = parser.headerByPath,
-	}
+	return parser.root,
+		{
+			assignmentByPath = parser.assignmentByPath or {},
+			headerByPath = parser.headerByPath or {},
+		}
 end
 
 function decoder.decode(source: string): { [string]: any }

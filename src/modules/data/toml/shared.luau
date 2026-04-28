@@ -21,6 +21,9 @@ shared.OFFSET_DT_RE = regex.new(
 shared.LOCAL_DT_RE = regex.new("^[0-9]{4}-[0-9]{2}-[0-9]{2}[Tt ][0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\\.[0-9]+)?)?$")
 shared.LOCAL_DATE_RE = regex.new("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 shared.LOCAL_TIME_RE = regex.new("^[0-9]{2}:[0-9]{2}(?::[0-9]{2}(?:\\.[0-9]+)?)?$")
+shared.OFFSET_DT_MINUTE_RE = regex.new("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}(?:[Zz]|[+-][0-9]{2}:[0-9]{2})$")
+shared.LOCAL_DT_MINUTE_RE = regex.new("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}$")
+shared.LOCAL_TIME_MINUTE_RE = regex.new("^[0-9]{2}:[0-9]{2}$")
 
 function shared.isSpaceByte(byte: number): boolean
 	return byte == 0x20 or byte == 0x09 or byte == 0x0D or byte == 0x0A
@@ -84,14 +87,14 @@ function shared.isArrayOfTables(value: any): boolean
 	return true
 end
 
-function shared.parseIntegerToken(token: string): number
-	if shared.HEX_INT_RE:isMatch(token) then
+function shared.parseIntegerToken(token: string, kind: string?): number
+	if kind == "hex" or (kind == nil and shared.HEX_INT_RE:isMatch(token)) then
 		local cleaned = string.gsub(string.sub(token, 3), "_", "")
 		return tonumber(cleaned, 16) :: number
-	elseif shared.OCT_INT_RE:isMatch(token) then
+	elseif kind == "oct" or (kind == nil and shared.OCT_INT_RE:isMatch(token)) then
 		local cleaned = string.gsub(string.sub(token, 3), "_", "")
 		return tonumber(cleaned, 8) :: number
-	elseif shared.BIN_INT_RE:isMatch(token) then
+	elseif kind == "bin" or (kind == nil and shared.BIN_INT_RE:isMatch(token)) then
 		local digits = string.gsub(string.sub(token, 3), "_", "")
 		local value = 0
 		for i = 1, #digits do

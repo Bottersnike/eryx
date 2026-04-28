@@ -5,7 +5,6 @@ type ExceptionFrame = {
 	short_src: string,
 	line: number,
 	functionName: string,
-	lineContext: string,
 }
 
 export type ExceptionType = "runtime" | "assert" | "thrown" | "syntax" | "require" | "user" | "interrupt" | "system exit"
