@@ -51,6 +51,9 @@ local function formatValue(val: any, depth: number, seen: { [any]: boolean }): s
 	if t == "number" then
 		return `{val}`
 	end
+	if t == "integer" then
+		return `{val}i`
+	end
 	if t == "vector" then
 		-- TODO: Can we do something nicer?
 		return `{val}`
@@ -105,7 +108,8 @@ formatTable = function(val: { [any]: any }, depth: number, seen: { [any]: boolea
 
 	-- Print hash part
 	for k, v in val do
-		if type(k) == "number" and k <= #val then
+		local kt = type(k)
+		if (kt == "number" or kt == "integer") and k <= #val then
 			continue
 		end
 

@@ -15,6 +15,7 @@ else()
 endif()
 set(DYNCALL_SRCS
     # For now we just support x64, so that's all we pull in
+    "${dyncall_SOURCE_DIR}/dyncall/dyncall_aggregate.c"
     "${dyncall_SOURCE_DIR}/dyncall/dyncall_api.c"
     "${dyncall_SOURCE_DIR}/dyncall/dyncall_callf.c"
     "${dyncall_SOURCE_DIR}/dyncall/dyncall_callvm_base.c"
