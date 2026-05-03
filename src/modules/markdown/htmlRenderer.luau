@@ -93,6 +93,98 @@ function html.renderURL(url: string): string
 	end
 	return table.concat(buf)
 end
+
+local function renderConfiguredURL(url: string, config: types.RenderConfig): string
+	if config.transformURL then
+		url = config.transformURL(url)
+	end
+	return html.renderURL(url)
+end
+
+local function trim(text: string): string
+	return text:match("^%s*(.-)%s*$") or ""
+end
+
+local function sanitizeImageDimension(value: string): (string?, boolean)
+	value = trim(value)
+	if value == "" then
+		return nil, false
+	end
+	if value:match("^%d+$") then
+		return value, true
+	end
+	if value == "auto" then
+		return value, false
+	end
+
+	local number, suffix = value:match("^(%d+%.?%d*)([%a%%]+)$")
+	if not number then
+		return nil, false
+	end
+
+	local allowedSuffixes = {
+		px = true,
+		em = true,
+		rem = true,
+		["%"] = true,
+		vw = true,
+		vh = true,
+	}
+	if not allowedSuffixes[suffix] then
+		return nil, false
+	end
+	return number .. suffix, false
+end
+
+local function parseImageAttributeList(text: string): (string?, string?)
+	if text:sub(1, 1) ~= "{" then
+		return nil
+	end
+
+	local closeAt = text:find("}", 1, true)
+	if not closeAt then
+		return nil
+	end
+
+	local raw = text:sub(2, closeAt - 1)
+	local rest = text:sub(closeAt + 1)
+	local styleParts: { string } = {}
+	local attrs = ""
+
+	local function readValue(name: string): string?
+		return raw:match(name .. '%s*=%s*"([^"]+)"')
+			or raw:match(name .. "%s*=%s*'([^']+)'")
+			or raw:match(name .. "%s*=%s*([^%s]+)")
+	end
+
+	local width, widthIsAttribute = sanitizeImageDimension(readValue("width") or "")
+	if width then
+		if widthIsAttribute then
+			attrs ..= ` width="{html.renderLiteral(width)}"`
+		else
+			table.insert(styleParts, `width: {width}`)
+		end
+	end
+
+	local height, heightIsAttribute = sanitizeImageDimension(readValue("height") or "")
+	if height then
+		if heightIsAttribute then
+			attrs ..= ` height="{html.renderLiteral(height)}"`
+		else
+			table.insert(styleParts, `height: {height}`)
+		end
+	end
+
+	if #styleParts > 0 then
+		attrs ..= ` style="{html.renderLiteral(table.concat(styleParts, "; ") .. ";")}"`
+	end
+
+	if attrs == "" then
+		return nil
+	end
+	return attrs, rest
+end
+
 --- Extract plain text from inline nodes (for image alt text per CommonMark spec).
 function html.extractPlainText(nodes: { types.InlineNode }, config: types.RenderConfig): string
 	return util.getPlainText(nodes)
@@ -121,7 +213,9 @@ end
 
 function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, config: types.RenderConfig): string
 	local chunks = {}
-	for _, i in node do
+	local idx = 1
+	while idx <= #node do
+		local i = node[idx]
 		if i.type == "text" then
 			table.insert(chunks, html.renderLiteral(i.content))
 		elseif i.type == "code_span" then
@@ -137,7 +231,7 @@ function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, 
 			end
 			table.insert(
 				chunks,
-				`<a href="{html.renderURL(i.destination)}"{title}>{html.renderInline(i.children, rules, config)}</a>`
+				`<a href="{renderConfiguredURL(i.destination, config)}"{title}>{html.renderInline(i.children, rules, config)}</a>`
 			)
 		elseif i.type == "image" then
 			local title = ""
@@ -146,7 +240,20 @@ function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, 
 			end
 			-- alt text is the plain-text content of the children (not HTML)
 			local alt = html.renderLiteral(html.extractPlainText(i.children, config))
-			table.insert(chunks, `<img src="{html.renderURL(i.destination)}" alt="{alt}"{title} />`)
+			local attrs = ""
+			local nextNode = node[idx + 1]
+			if nextNode and nextNode.type == "text" then
+				local parsedAttrs, rest = parseImageAttributeList(nextNode.content)
+				if parsedAttrs then
+					attrs = parsedAttrs
+					if rest == "" then
+						idx += 1
+					else
+						(nextNode :: types.InlineText).content = rest
+					end
+				end
+			end
+			table.insert(chunks, `<img src="{renderConfiguredURL(i.destination, config)}" alt="{alt}"{title}{attrs} />`)
 		elseif i.type == "hard_line_break" then
 			table.insert(chunks, "<br />" .. (if config.useCrlf then "\r\n" else "\n"))
 		elseif i.type == "soft_line_break" then
@@ -178,6 +285,7 @@ function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, 
 				error(`Unknown inline {i.type}`)
 			end
 		end
+		idx += 1
 	end
 	return table.concat(chunks)
 end

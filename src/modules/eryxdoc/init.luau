@@ -24,6 +24,7 @@ local modulesApi = require("@self/content/modules")
 local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")
 local buildWarnings = require("@self/warnings")
+local assets = require("@self/assets")
 
 local log = logging.getLogger("eryxdoc.build")
 
@@ -58,6 +59,11 @@ export type OpenGraphConfig = {
 	locale: string?, -- og:locale (e.g. "en_US")
 }
 
+export type HeadTag = {
+	tag: "link" | "meta",
+	[string]: string,
+}
+
 export type Config = {
 	-- Required
 	output: string,
@@ -77,9 +83,11 @@ export type Config = {
 	-- Theming
 	theme: string?, -- path to theme dir (must contain templates/ and style.css)
 	static: string?, -- path to static assets dir
+	staticMount: string?, -- site-relative mount path for static assets, defaults to "static"
 
 	-- HTML injections
 	favicon: string?,
+	head: { HeadTag }?,
 	extraHead: string?,
 	extraScripts: string?,
 	announcement: string?, -- HTML string shown as a dismissible banner at the top
@@ -343,6 +351,15 @@ local function copyDirRecursive(src: string, dest: string)
 	end
 end
 
+local function normalizeMountPath(path: string?): string
+	if not path or path == "" or path == "/" then
+		return ""
+	end
+	local normalized = path:gsub("\\", "/")
+	normalized = normalized:gsub("^/+", ""):gsub("/+$", "")
+	return normalized
+end
+
 -- ── Build ─────────────────────────────────────────────────────────────────
 
 local eryxdoc = {}
@@ -363,6 +380,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	local SITE_TITLE = cfg.title or "API Docs"
 	local THEME_DIR = cfg.theme or (fs.path.join(_DIR, "/theme"))
 	local STATIC_DIR = cfg.static
+	local STATIC_MOUNT = normalizeMountPath(cfg.staticMount or "static")
 	local NO_MODULES = cfg.noModules or false
 
 	if SITE_ROOT:sub(-1) ~= "/" then
@@ -406,14 +424,15 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		return content
 	end
 
-	-- Copy styles
-	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(fs.openSync(STYLE_PATH):readSync())
-
 	-- Copy static assets
 	if STATIC_DIR and fs.isDirectory(STATIC_DIR) then
-		log:info(string.format("  Copying static assets from %s", STATIC_DIR))
-		copyDirRecursive(STATIC_DIR, OUTPUT_DIR .. "/static")
+		local staticOutput = if STATIC_MOUNT == "" then OUTPUT_DIR else OUTPUT_DIR .. "/" .. STATIC_MOUNT
+		log:info(string.format("  Copying static assets from %s to /%s", STATIC_DIR, STATIC_MOUNT))
+		copyDirRecursive(STATIC_DIR, staticOutput)
 	end
+
+	-- Copy styles
+	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(fs.openSync(STYLE_PATH):readSync())
 
 	-- Collect content
 	local allModules = if NO_MODULES or not MODULES_DIR
@@ -457,6 +476,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		exportMode = EXPORT_MODE,
 		modulePrefix = MODULE_PREFIX,
 		favicon = faviconHref,
+		head = cfg.head,
 		extraHead = cfg.extraHead,
 		extraScripts = cfg.extraScripts,
 		announcement = cfg.announcement,
@@ -470,6 +490,10 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
 		folderOrder = folderOrder,
+		assetResolver = function(article: Article.Article, url: string): string
+			assets.copyArticleAsset(ARTICLES_DIR, article.sourceFilename, OUTPUT_DIR, url)
+			return assets.rewriteArticleAssetUrl(ARTICLES_DIR, article.sourceFilename, SITE_ROOT, url)
+		end,
 	})
 
 	for _, article in allArticles do

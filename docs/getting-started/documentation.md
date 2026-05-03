@@ -115,8 +115,11 @@ return {
 	exportMode = "directory",
 
 	static = "./docs/static",
+	staticMount = "static",
 }
 ```
+
+Set `staticMount = "/"` to copy and serve files from `static` at the site root instead of under `/static/`.
 
 Once our project is configured, we can start the development server using `eryx doc --dev`. The development server supports live-reload as you make changes to your project.
 

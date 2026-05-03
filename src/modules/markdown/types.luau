@@ -186,6 +186,7 @@ export type RenderConfig = {
 	useCrlf: boolean?,
 	annotateHtml: boolean?,
 	codeLanguages: { [string]: (string) -> string }?,
+	transformURL: ((url: string) -> string)?,
 	inlineExtensions: { InlineRule }?,
 	extraInlineExtensions: { InlineRule }?,
 	inlineEmphasisExtensions: { InlineEmphasisRule }?,

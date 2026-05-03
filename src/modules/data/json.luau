@@ -939,13 +939,14 @@ end
 	Use this function on a value being passed to [[encode]] to
 	explicitly mark it as an array
 ]=]
-function json.tableAsArray(table: { [number]: any })
+function json.tableAsArray<T>(table: { [number]: T }): { [number]: T }
 	-- For non-empty tables, only allow tagging if they're already valid arrays.
 	-- This prevents accidental data loss such as { a = 1 } being encoded as [].
 	if next(table) ~= nil and not isArray(table :: any) then
 		error("json.tableAsArray expects an empty table or an existing array table")
 	end
-	return setmetatable(table, JSON_ARRAY_MT)
+	-- We're going to hide the metatable from the type system!
+	return setmetatable(table, JSON_ARRAY_MT) :: any
 end
 
 return json

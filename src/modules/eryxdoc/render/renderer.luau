@@ -29,6 +29,36 @@ local function htmlEscapeFilter(s: string): string
 	return (s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;"):gsub('"', "&quot;"))
 end
 
+local function renderHeadTags(tags: { HeadTag }?): string
+	if not tags or #tags == 0 then
+		return ""
+	end
+
+	local chunks: { string } = {}
+	for _, tag in tags do
+		if tag.tag ~= "link" and tag.tag ~= "meta" then
+			continue
+		end
+
+		local attrs: { string } = {}
+		for name, value in tag do
+			if name == "tag" or value == nil then
+				continue
+			end
+			if not name:match("^[%a_:][%w:_.-]*$") then
+				continue
+			end
+			table.insert(attrs, `{name}="{htmlEscapeFilter(value)}"`)
+		end
+		if #attrs == 0 then
+			continue
+		end
+		table.insert(chunks, `<{tag.tag} {table.concat(attrs, " ")} />`)
+	end
+
+	return table.concat(chunks, "\n")
+end
+
 local function functionAnchor(owner: string?, isMethod: boolean, name: string): string
 	if owner and owner ~= "" then
 		local sep = if isMethod then ":" else "."
@@ -71,6 +101,10 @@ type PageMeta = {
 	locale: string?,
 	[string]: string?,
 }
+type HeadTag = {
+	tag: "link" | "meta",
+	[string]: string,
+}
 
 type RendererFields = {
 	siteTitle: string,
@@ -81,6 +115,7 @@ type RendererFields = {
 	articles: { { name: string, article: Article.Article } },
 	stylesPath: string,
 	favicon: string?,
+	head: { HeadTag }?,
 	extraHead: string?,
 	extraScripts: string?,
 	announcement: string?,
@@ -94,6 +129,7 @@ type RendererFields = {
 	sectionTitles: { [string]: string }?,
 	folderTitles: { [string]: string }?,
 	folderOrder: { [string]: number }?,
+	assetResolver: ((article: Article.Article, url: string) -> string)?,
 
 	templates: {
 		article: template.Template,
@@ -105,6 +141,7 @@ type RendererFields = {
 	markdown: markdown.Markdown,
 	hoverMarkdown: markdown.Markdown,
 	currentMod: modules.ModuleInfo?,
+	currentArticle: Article.Article?,
 }
 export type Renderer = setmetatable<RendererFields, typeof(Renderer)>
 
@@ -122,6 +159,7 @@ function Renderer.new(
 		exportMode: ("flat" | "directory")?,
 		modulePrefix: string?,
 		favicon: string?,
+		head: { HeadTag }?,
 		extraHead: string?,
 		extraScripts: string?,
 		announcement: string?,
@@ -135,6 +173,7 @@ function Renderer.new(
 		sectionTitles: { [string]: string }?,
 		folderTitles: { [string]: string }?,
 		folderOrder: { [string]: number }?,
+		assetResolver: ((article: Article.Article, url: string) -> string)?,
 	}?
 ): Renderer
 	local siteRoot = (if options then options.siteRoot else nil) or "/"
@@ -153,6 +192,7 @@ function Renderer.new(
 
 		stylesPath = stylesPath,
 		favicon = if options then options.favicon else nil,
+		head = if options then options.head else nil,
 		extraHead = if options then options.extraHead else nil,
 		extraScripts = if options then options.extraScripts else nil,
 		announcement = if options then options.announcement else nil,
@@ -166,6 +206,7 @@ function Renderer.new(
 		sectionTitles = if options then options.sectionTitles else nil,
 		folderTitles = if options then options.folderTitles else nil,
 		folderOrder = if options then options.folderOrder else nil,
+		assetResolver = if options then options.assetResolver else nil,
 		templates = {
 			article = template.compile(fs.openSync(templates.article):readSync(), templates.article),
 			api = template.compile(fs.openSync(templates.api):readSync(), templates.api),
@@ -176,8 +217,15 @@ function Renderer.new(
 		},
 
 		currentMod = nil,
+		currentArticle = nil,
 	}
 	setmetatable(this, Renderer)
+	local function transformURL(url: string): string
+		if this.currentArticle and this.assetResolver then
+			return this.assetResolver(this.currentArticle, url)
+		end
+		return url
+	end
 	this.markdown = markdown.Markdown.new({
 		extraInlineExtensions = {
 			wikilinkRuleBuilder(function(link: string): any
@@ -187,6 +235,7 @@ function Renderer.new(
 		codeLanguages = highlight,
 		useCrlf = false,
 		annotateHtml = true,
+		transformURL = transformURL,
 	})
 	this.hoverMarkdown = markdown.Markdown.new({
 		extraInlineExtensions = {
@@ -513,6 +562,7 @@ function Renderer.renderPage(
 			pageName = displayName,
 			siteRoot = self.siteRoot,
 			favicon = self.favicon,
+			headTags = renderHeadTags(self.head),
 			extraHead = self.extraHead,
 			extraScripts = self.extraScripts,
 			announcement = self.announcement,
@@ -718,6 +768,7 @@ function Renderer.renderPage(
 end
 
 function Renderer.renderModule(self: Renderer, name: string): string
+	self.currentArticle = nil
 	local module = self.modules[name]
 	if not module then
 		error("Unknown module " .. name)
@@ -1038,6 +1089,7 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 	end
 
 	local articlePath = self:getLink(article)
+	self.currentArticle = article
 	return self:renderPage(
 		self.templates.article,
 		if #toc > 0 then { { label = "On this page", children = toc } } else {},
@@ -1065,6 +1117,7 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 end
 
 function Renderer.renderIndex(self: Renderer): string
+	self.currentArticle = nil
 	local moduleSummaries = {}
 
 	for _, mod in self.modules do
@@ -1083,6 +1136,7 @@ function Renderer.renderIndex(self: Renderer): string
 end
 
 function Renderer.render404(self: Renderer): string?
+	self.currentArticle = nil
 	if not self.templates.notFound then
 		return nil
 	end

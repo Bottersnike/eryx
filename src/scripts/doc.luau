@@ -39,6 +39,7 @@ parser:addOption(
 	"Path to custom theme directory (must contain templates/ and style.css)"
 )
 parser:addOption("static", nil, "string", nil, false, "Static assets directory to copy into output")
+parser:addOption("static-mount", nil, "string", nil, false, "Site-relative mount path for static assets")
 parser:addOption("base-url", nil, "string", nil, false, "Absolute base URL for sitemap (e.g. https://docs.example.com)")
 parser:addOption("version", nil, "string", nil, false, "Version name for versioned builds (e.g. v2.0, latest)")
 parser:addOption("version-label", nil, "string", nil, false, "Display label for the version (defaults to version name)")
@@ -90,6 +91,7 @@ local cfg: eryxdoc.Config = {
 	exportMode = resolve("export-mode", fileConfig.exportMode),
 	theme = resolve("theme", fileConfig.theme) or eryxdoc.getDefaultTheme(),
 	static = resolve("static", fileConfig.static),
+	staticMount = resolve("static-mount", fileConfig.staticMount),
 	noModules = args["no-modules"] or fileConfig.noModules,
 	clean = args["clean"] or fileConfig.clean,
 	showLastUpdated = args["last-updated"] or (fileConfig :: any).showLastUpdated,
@@ -103,6 +105,7 @@ local cfg: eryxdoc.Config = {
 		elseif (fileConfig :: any).version then (fileConfig :: any).version
 		else nil,
 	favicon = fileConfig.favicon,
+	head = fileConfig.head,
 	extraHead = fileConfig.extraHead,
 	extraScripts = fileConfig.extraScripts,
 }

@@ -21,6 +21,7 @@ local modulesApi = require("./content/modules")
 local Article = require("./content/article")
 local Renderer = require("./render/renderer")
 local buildWarnings = require("./warnings")
+local assets = require("./assets")
 
 local eryxdoc = require("@eryx/eryxdoc")
 local exception = require("@eryx/exception")
@@ -51,6 +52,23 @@ local MIME: { [string]: string } = {
 	[".xml"] = "application/xml; charset=utf-8",
 	[".webmanifest"] = "application/manifest+json",
 }
+
+local function mimeForPath(path: string): string
+	local ext = string.lower(pathlib.extension(path) or "")
+	if ext ~= "" and ext:sub(1, 1) ~= "." then
+		ext = "." .. ext
+	end
+	return MIME[ext] or "application/octet-stream"
+end
+
+local function normalizeMountPath(path: string?): string
+	if not path or path == "" or path == "/" then
+		return ""
+	end
+	local normalized = path:gsub("\\", "/")
+	normalized = normalized:gsub("^/+", ""):gsub("/+$", "")
+	return normalized
+end
 
 -- ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -252,6 +270,7 @@ type DevState = {
 	cfg: Config,
 	themeDir: string,
 	staticDir: string?,
+	staticMount: string,
 	siteRoot: string,
 	exportMode: "flat" | "directory",
 }
@@ -263,6 +282,7 @@ local function buildState(cfg: Config): DevState
 	local SITE_TITLE = cfg.title or "API Docs"
 	local THEME_DIR = cfg.theme or tostring(pathlib.join(_DIR, "/theme"))
 	local STATIC_DIR = cfg.static
+	local STATIC_MOUNT = normalizeMountPath(cfg.staticMount or "static")
 	local NO_MODULES = cfg.noModules or false
 
 	if SITE_ROOT:sub(-1) ~= "/" then
@@ -320,6 +340,7 @@ local function buildState(cfg: Config): DevState
 		exportMode = EXPORT_MODE,
 		modulePrefix = MODULE_PREFIX,
 		favicon = faviconHref,
+		head = cfg.head,
 		extraHead = cfg.extraHead,
 		extraScripts = (cfg.extraScripts or "") .. devScriptTag,
 		announcement = cfg.announcement,
@@ -331,6 +352,9 @@ local function buildState(cfg: Config): DevState
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
 		folderOrder = folderOrder,
+		assetResolver = function(article: Article.Article, url: string): string
+			return assets.rewriteArticleAssetUrl(cfg.articles, article.sourceFilename, SITE_ROOT, url)
+		end,
 	})
 
 	for _, article in allArticles do
@@ -367,6 +391,7 @@ local function buildState(cfg: Config): DevState
 		cfg = cfg,
 		themeDir = THEME_DIR,
 		staticDir = STATIC_DIR,
+		staticMount = STATIC_MOUNT,
 		siteRoot = SITE_ROOT,
 		exportMode = EXPORT_MODE,
 	}
@@ -374,7 +399,7 @@ end
 
 -- ── Routing ──────────────────────────────────────────────────────────────
 
-local function tryServeStatic(state: DevState, safePath: string): (number?, string?, string?)
+local function tryServeStatic(state: DevState, safePath: string, includeRootMount: boolean?): (number?, string?, string?)
 	-- style.css
 	if safePath == "style.css" then
 		local stylePath = state.themeDir .. "/style.css"
@@ -387,19 +412,35 @@ local function tryServeStatic(state: DevState, safePath: string): (number?, stri
 	if state.cfg.favicon and fs.isFile(state.cfg.favicon) then
 		local faviconName = state.cfg.favicon:match("[^/\\]+$") or "favicon.ico"
 		if safePath == faviconName then
-			local ext = string.lower(pathlib.extension(state.cfg.favicon) or "")
-			local mime = MIME[ext] or "application/octet-stream"
-			return 200, fs.openSync(state.cfg.favicon):readSync(), mime
+			return 200, fs.openSync(state.cfg.favicon):readSync(), mimeForPath(state.cfg.favicon)
 		end
 	end
 
 	-- Static assets directory
-	if state.staticDir and safePath:sub(1, 7) == "static/" then
-		local assetPath = state.staticDir .. "/" .. safePath:sub(8)
+	if state.staticDir then
+		if state.staticMount == "" then
+			if includeRootMount and safePath ~= "" then
+				local assetPath = state.staticDir .. "/" .. safePath
+				if fs.isFile(assetPath) then
+					return 200, fs.openSync(assetPath):readSync(), mimeForPath(assetPath)
+				end
+			end
+		else
+			local prefix = state.staticMount .. "/"
+			if safePath:sub(1, #prefix) == prefix then
+				local assetPath = state.staticDir .. "/" .. safePath:sub(#prefix + 1)
+				if fs.isFile(assetPath) then
+					return 200, fs.openSync(assetPath):readSync(), mimeForPath(assetPath)
+				end
+			end
+		end
+	end
+
+	-- Article-local assets referenced from markdown are exposed under /assets.
+	if state.cfg.articles and safePath:sub(1, 7) == "assets/" then
+		local assetPath = state.cfg.articles .. "/" .. safePath:sub(8)
 		if fs.isFile(assetPath) then
-			local ext = string.lower(pathlib.extension(assetPath) or "")
-			local mime = MIME[ext] or "application/octet-stream"
-			return 200, fs.openSync(assetPath):readSync(), mime
+			return 200, fs.openSync(assetPath):readSync(), mimeForPath(assetPath)
 		end
 	end
 
@@ -434,7 +475,7 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 	end
 
 	-- Try static assets first
-	local staticStatus, staticBody, staticMime = tryServeStatic(state, safePath)
+	local staticStatus, staticBody, staticMime = tryServeStatic(state, safePath, false)
 	if staticStatus then
 		return staticStatus, staticBody :: string, staticMime :: string
 	end
@@ -534,6 +575,12 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 	end
 
 	-- Nothing matched — try 404 page
+	-- Root-mounted static is a fallback so generated pages keep priority.
+	local rootStaticStatus, rootStaticBody, rootStaticMime = tryServeStatic(state, safePath, true)
+	if rootStaticStatus then
+		return rootStaticStatus, rootStaticBody :: string, rootStaticMime :: string
+	end
+
 	local ok404, page404 = pcall(renderer.render404, renderer)
 	if ok404 and page404 then
 		return 404, page404, "text/html; charset=utf-8"
