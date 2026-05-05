@@ -87,17 +87,29 @@ if ($DryRun) {
 } else {
     $modified = @()
     if ($formattedPaths) {
-        $modified = @(
-            git diff --name-only -- $formattedPaths 2>$null |
-                Where-Object { $_ -ne '' -and $formattedPaths -contains $_ }
-        )
+        $oldErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            $modified = @(
+                git diff --name-only -- $formattedPaths 2>$null |
+                    Where-Object { $_ -ne '' -and $formattedPaths -contains $_ }
+            )
+        } finally {
+            $ErrorActionPreference = $oldErrorActionPreference
+        }
     }
     if ($modified) {
         Write-Host "Modified files from formatting:"
         $modified | ForEach-Object { Write-Host "  $_" }
         if ($ApplyAndAbort) {
-            git add -- $modified
-            Write-Host "Staged formatted files. Aborting commit so you can review." -ForegroundColor Yellow
+            $oldErrorActionPreference = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = 'Continue'
+                git add -- $modified
+            } finally {
+                $ErrorActionPreference = $oldErrorActionPreference
+            }
+            Write-Host "Staged formatted files. Commit aborted so you can review." -ForegroundColor Yellow
             exit 1
         } else {
             Write-Host "Run 'git add' to stage changes, or run this script with -ApplyAndAbort from a hook." -ForegroundColor Yellow
