@@ -794,7 +794,23 @@ static int os_chdir(lua_State* L) {
     return 0;
 }
 
+static bool os_push_runtime_cliargs(lua_State* L) {
+    auto* rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
+    if (!rt || !rt->hasCliArgs) return false;
+
+    lua_createtable(L, (int)rt->cliArgs.size(), 0);
+    for (size_t i = 0; i < rt->cliArgs.size(); i++) {
+        const std::string& arg = rt->cliArgs[i];
+        lua_pushlstring(L, arg.data(), arg.size());
+        lua_rawseti(L, -2, (int)i + 1);
+    }
+
+    return true;
+}
+
 static int os_cliargs(lua_State* L) {
+    if (os_push_runtime_cliargs(L)) return 1;
+
     int offset = eryx_get_cliargs_offset();
 
 #ifdef _WIN32

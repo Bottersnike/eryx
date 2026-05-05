@@ -20,6 +20,7 @@
 #include <unordered_set>
 
 #include "Luau/AstQuery.h"
+#include "Luau/BytecodeUtils.h"
 #include "Luau/Autocomplete.h"
 #include "Luau/AutocompleteTypes.h"
 #include "Luau/BuiltinDefinitions.h"
@@ -36,6 +37,18 @@
 #include "lprint.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
+
+#include "lstate.h"
+#ifndef ERYX_EMBED
+extern "C" {
+#endif
+#include "lapi.h"
+#include "ldebug.h"
+#include "lfunc.h"
+#include "lgc.h"
+#ifndef ERYX_EMBED
+}
+#endif
 
 // CLI args offset – default 1 (skip just the exe name)
 static int g_cliargs_offset = 1;
@@ -57,6 +70,91 @@ ERYX_API Luau::CodeGen::CodeGenCompilationResult lua_codegen_compile(
     Luau::CodeGen::CompilationResult res = Luau::CodeGen::compile(L, idx, flags, stats);
 
     return res.result;
+}
+
+static Proto* eryx_debug_lua_proto_for_frame(lua_State* L, int frameLevel) {
+    if (!L || frameLevel < 0 || unsigned(frameLevel) >= unsigned(L->ci - L->base_ci)) {
+        return nullptr;
+    }
+
+    CallInfo* ci = L->ci - frameLevel;
+    if (!isLua(ci) || (ci->flags & LUA_CALLINFO_NATIVE)) {
+        return nullptr;
+    }
+
+    return ci_func(ci)->l.p;
+}
+
+static int eryx_debug_currentpc_for_frame(lua_State* L, int frameLevel) {
+    Proto* proto = eryx_debug_lua_proto_for_frame(L, frameLevel);
+    if (!proto) {
+        return 0;
+    }
+
+    CallInfo* ci = L->ci - frameLevel;
+    return pcRel(ci->savedpc, proto);
+}
+
+ERYX_API int eryx_debug_currentpc(lua_State* L, int frameLevel) {
+    return eryx_debug_currentpc_for_frame(L, frameLevel);
+}
+
+ERYX_API int eryx_debug_current_instructionpc(lua_State* L, int frameLevel) {
+    Proto* proto = eryx_debug_lua_proto_for_frame(L, frameLevel);
+    if (!proto) {
+        return 0;
+    }
+
+    int rawPc = eryx_debug_currentpc_for_frame(L, frameLevel);
+    if (rawPc > 0) {
+        rawPc--;
+    }
+
+    int instructionPc = 0;
+    for (int pc = 0; pc < proto->sizecode && pc < rawPc;) {
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(proto->code[pc]));
+        int length = Luau::getOpLength(op);
+        if (pc + length > rawPc) {
+            break;
+        }
+
+        pc += length;
+        instructionPc++;
+    }
+
+    return instructionPc;
+}
+
+ERYX_API int eryx_debug_register_count(lua_State* L, int frameLevel) {
+    Proto* proto = eryx_debug_lua_proto_for_frame(L, frameLevel);
+    return proto ? proto->maxstacksize : 0;
+}
+
+ERYX_API int eryx_debug_get_register(lua_State* L, int frameLevel, int reg) {
+    Proto* proto = eryx_debug_lua_proto_for_frame(L, frameLevel);
+    if (!proto || reg < 0 || reg >= proto->maxstacksize) {
+        return 0;
+    }
+
+    CallInfo* ci = L->ci - frameLevel;
+    if (ci->base + reg >= ci->top) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    luaC_threadbarrier(L);
+    luaA_pushobject(L, ci->base + reg);
+    return 1;
+}
+
+ERYX_API const char* eryx_debug_get_register_local_name(lua_State* L, int frameLevel, int reg) {
+    Proto* proto = eryx_debug_lua_proto_for_frame(L, frameLevel);
+    if (!proto || reg < 0 || reg >= proto->maxstacksize) {
+        return nullptr;
+    }
+
+    const LocVar* var = luaF_findlocal(proto, reg, eryx_debug_currentpc_for_frame(L, frameLevel));
+    return var && var->varname ? getstr(var->varname) : nullptr;
 }
 
 ERYX_API void eryx_register_interrupt_callback(EryxRuntime* rt, EryxInterruptCallback cb,
@@ -1727,11 +1825,23 @@ ERYX_API int eryx_luau_typeofModule(lua_State* L) {
     return 1;
 }
 
-#ifdef ERYX_EMBED
-int luaG_isnative(lua_State* L, int level);
-#else
-LUA_API int luaG_isnative(lua_State* L, int level);
-#endif
+static int lua_collectgarbage(lua_State* L) {
+    const char* option = luaL_optstring(L, 1, "collect");
+
+    if (strcmp(option, "collect") == 0) {
+        lua_gc(L, LUA_GCCOLLECT, 0);
+        return 0;
+    }
+
+    if (strcmp(option, "count") == 0) {
+        int c = lua_gc(L, LUA_GCCOUNT, 0);
+        lua_pushnumber(L, c);
+        return 1;
+    }
+
+    luaL_error(L, "collectgarbage must be called with 'count' or 'collect'");
+}
+
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     eryx_enable_all_luau_flags();
 
@@ -1741,6 +1851,8 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
         std::cerr << "Failed to create Lua state" << std::endl;
         return NULL;
     }
+
+    // lua_gc(L, LUA_GCSETGOAL, 100);
 
     // Register the handler for an Exception being raised in a pcall
     lua_callbacks(L)->debugprotectederror = [](lua_State* L) {
@@ -1761,6 +1873,17 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
 
     // Open standard libraries
     luaL_openlibs(L);
+
+    static const luaL_Reg funcs[] = {
+        // { "loadstring", lua_loadstring },
+        { "collectgarbage", lua_collectgarbage },
+        // { "callgrind", lua_callgrind },
+        { NULL, NULL },
+    };
+
+    lua_pushvalue(L, LUA_GLOBALSINDEX);
+    luaL_register(L, NULL, funcs);
+    lua_pop(L, 1);
 
     // Install Ctrl+C handler + Luau VM interrupt so scripts can be stopped
     // SetConsoleCtrlHandler(main_ctrl_handler, TRUE);

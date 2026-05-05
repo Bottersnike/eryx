@@ -399,7 +399,11 @@ end
 
 -- ── Routing ──────────────────────────────────────────────────────────────
 
-local function tryServeStatic(state: DevState, safePath: string, includeRootMount: boolean?): (number?, string?, string?)
+local function tryServeStatic(
+	state: DevState,
+	safePath: string,
+	includeRootMount: boolean?
+): (number?, string?, string?)
 	-- style.css
 	if safePath == "style.css" then
 		local stylePath = state.themeDir .. "/style.css"

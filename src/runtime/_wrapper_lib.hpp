@@ -4,7 +4,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <deque>
+#include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "../pch.hpp"
 #include "Luau/CodeGen.h"
@@ -19,6 +21,8 @@ typedef struct {
 } EryxThreadInfo;
 
 typedef void (*EryxInterruptCallback)(struct EryxRuntime* rt, void* ctx);
+typedef void (*EryxDebugFunctionLoadedCallback)(lua_State* L, int funcIndex,
+                                                const char* chunkName, void* ctx);
 typedef struct EryxRuntime {
     lua_State* GL;  // main thread (for deref'ing refs in timer callbacks)
     uv_loop_t* loop;
@@ -27,6 +31,17 @@ typedef struct EryxRuntime {
     std::unordered_map<int, uv_timer_t*> pendingTimers;  // threadRef -> timer (for cancel)
     uv_signal_t* sigint;                                 // optional signal handle for interrupt
     std::vector<std::pair<EryxInterruptCallback, void*>> interruptCallbacks;
+
+    bool hasCliArgs = false;
+    std::vector<std::string> cliArgs;
+
+    bool nativeCodegenEnabled = true;
+    int luauOptimizationLevel = 2;
+    int luauDebugLevel = 1;
+    int luauTypeInfoLevel = 1;
+
+    EryxDebugFunctionLoadedCallback debugFunctionLoaded = nullptr;
+    void* debugFunctionLoadedContext = nullptr;
 } EryxRuntime;
 static EryxRuntime* eryx_get_runtime(lua_State* L) {
     auto rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
@@ -68,6 +83,14 @@ ERYX_API int eryx_get_cliargs_argc();
 ERYX_API const char** eryx_get_cliargs_argv();
 
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename);
+
+// Debug helpers that need VM-private stack/proto access. Native modules call
+// these through EryxShared instead of including VM internals directly.
+ERYX_API int eryx_debug_register_count(lua_State* L, int frameLevel);
+ERYX_API int eryx_debug_get_register(lua_State* L, int frameLevel, int reg);
+ERYX_API const char* eryx_debug_get_register_local_name(lua_State* L, int frameLevel, int reg);
+ERYX_API int eryx_debug_currentpc(lua_State* L, int frameLevel);
+ERYX_API int eryx_debug_current_instructionpc(lua_State* L, int frameLevel);
 
 using EryxTimingClock = std::chrono::steady_clock;
 

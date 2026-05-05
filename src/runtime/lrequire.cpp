@@ -517,6 +517,23 @@ static int lua_push_exception(lua_State* L, const char* message) {
     return 1;
 }
 
+static EryxRuntime* eryx_runtime_or_null(lua_State* L) {
+    return (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
+}
+
+static void eryx_apply_runtime_compile_options(lua_State* L, Luau::CompileOptions& opts) {
+    if (EryxRuntime* rt = eryx_runtime_or_null(L)) {
+        opts.optimizationLevel = rt->luauOptimizationLevel;
+        opts.debugLevel = rt->luauDebugLevel;
+        opts.typeInfoLevel = rt->luauTypeInfoLevel;
+    }
+}
+
+static bool eryx_runtime_native_codegen_enabled(lua_State* L) {
+    EryxRuntime* rt = eryx_runtime_or_null(L);
+    return !rt || rt->nativeCodegenEnabled;
+}
+
 ERYX_API bool eryx_load_and_prepare_bytecode(lua_State* L, const std::string& bytecode,
                                              const std::string& chunkName) {
     // Load bytecode into VM
@@ -550,10 +567,16 @@ ERYX_API bool eryx_load_and_prepare_bytecode(lua_State* L, const std::string& by
     }
 
     // Attempt native codegen if we can
-    if (lua_codegen_isSupported()) {
+    if (eryx_runtime_native_codegen_enabled(L) && lua_codegen_isSupported()) {
         Luau::CodeGen::CompilationStats stats = {};
         Luau::CodeGen::CodeGenCompilationResult res =
             lua_codegen_compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions, &stats);
+    }
+
+    if (EryxRuntime* rt = eryx_runtime_or_null(L)) {
+        if (rt->debugFunctionLoaded) {
+            rt->debugFunctionLoaded(L, -1, chunkName.c_str(), rt->debugFunctionLoadedContext);
+        }
     }
 
     return true;
@@ -566,6 +589,7 @@ ERYX_API bool eryx_load_and_prepare_script(lua_State* L, const std::string sourc
     opts.optimizationLevel = 2;
     opts.debugLevel = 1;
     opts.typeInfoLevel = 1;
+    eryx_apply_runtime_compile_options(L, opts);
 
     std::string bytecode = Luau::compile(source, opts);
 
@@ -753,6 +777,7 @@ ERYX_API int eryx_execute_module_script(lua_State* L, const std::string source,
     opts.optimizationLevel = 2;
     opts.debugLevel = 1;
     opts.typeInfoLevel = 1;
+    eryx_apply_runtime_compile_options(L, opts);
 
     std::string bytecode = Luau::compile(source, opts);
 

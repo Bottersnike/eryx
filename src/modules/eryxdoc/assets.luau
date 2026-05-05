@@ -85,7 +85,12 @@ function assets.resolveArticleAsset(
 	}
 end
 
-function assets.rewriteArticleAssetUrl(articlesRoot: string?, sourceFilename: string?, siteRoot: string, url: string): string
+function assets.rewriteArticleAssetUrl(
+	articlesRoot: string?,
+	sourceFilename: string?,
+	siteRoot: string,
+	url: string
+): string
 	local resolved = assets.resolveArticleAsset(articlesRoot, sourceFilename, url)
 	if not resolved then
 		return url

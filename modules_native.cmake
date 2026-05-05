@@ -189,7 +189,12 @@ add_luau_module(_fs_watch src/modules/_fs_watch.cpp src/modules/_fs_watch.luau
     EXTRA_LIBS uv_a
 )
 add_luau_module(image src/modules/image.cpp src/modules/image.luau
+    EXTRA_LIBS png_static webp turbojpeg_external
     EXTRA_INCLUDES "${VENDOR_DIR}/stb"  # for stb_image.h
+                   "${PNG_DIR}"
+                   "${CMAKE_BINARY_DIR}/vendor/libpng"
+                   "${WEBP_DIR}/src"
+                   "${JPEGTURBO_DIR}/src"
 )
 
 if(ERYX_USE_PCRE2)

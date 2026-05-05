@@ -231,7 +231,11 @@ function html.renderInline(node: { types.InlineNode }, rules: types.MagicRules, 
 			end
 			table.insert(
 				chunks,
-				`<a href="{renderConfiguredURL(i.destination, config)}"{title}>{html.renderInline(i.children, rules, config)}</a>`
+				`<a href="{renderConfiguredURL(i.destination, config)}"{title}>{html.renderInline(
+					i.children,
+					rules,
+					config
+				)}</a>`
 			)
 		elseif i.type == "image" then
 			local title = ""

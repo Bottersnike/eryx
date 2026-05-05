@@ -12,6 +12,8 @@ eryx.lock
 /src/modules/data/toml_spec.test.luau
 /src/temp_projects/
 
+/src/modules-dev/
+
 # clangd
 /.cache/
 

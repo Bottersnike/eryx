@@ -32,6 +32,23 @@ export type TtyInfo = {
 	stderr: boolean,
 }
 
+export type TerminalSize = {
+	columns: number,
+	rows: number,
+}
+
+export type StandardStreamControl = {
+	--[=[
+		Sets whether this standard stream uses binary mode.
+
+		On Windows this controls CRT newline translation. On other platforms
+		text and binary mode are equivalent, so this returns the requested state.
+	]=]
+	setBinaryMode: (self: StandardStreamControl, enabled: boolean) -> boolean,
+
+	flush: (self: StandardStreamControl) -> (),
+}
+
 export type ReadLineOptions = {
 	--- Line terminator sequence to stop at. Defaults to `"\n"`.
 	terminator: string?,
@@ -137,6 +154,13 @@ function stdio.isatty(): TtyInfo
 end
 
 --[=[
+	Returns the visible terminal size for stdout, when available.
+]=]
+function stdio.terminalSize(): TerminalSize?
+	return nil :: any
+end
+
+--[=[
 	Enables or disables terminal raw mode for stdin.
 
 	Raw mode is only available when stdin is a TTY.
@@ -156,21 +180,21 @@ end
 	Process stdin exposed as a stream object.
 	Use `stdio.stdin:read(...)` style calls.
 ]=]
-local stdinStream: stream.ReadOnlyStream = nil :: any
+local stdinStream: stream.ReadOnlyStream & StandardStreamControl = nil :: any
 stdio.stdin = stdinStream
 
 --[=[
 	Process stdout exposed as a stream object.
 	Use `stdio.stdout:write(...)` style calls.
 ]=]
-local stdoutStream: stream.WriteOnlyStream = nil :: any
+local stdoutStream: stream.WriteOnlyStream & StandardStreamControl = nil :: any
 stdio.stdout = stdoutStream
 
 --[=[
 	Process stderr exposed as a stream object.
 	Use `stdio.stderr:write(...)` style calls.
 ]=]
-local stderrStream: stream.WriteOnlyStream = nil :: any
+local stderrStream: stream.WriteOnlyStream & StandardStreamControl = nil :: any
 stdio.stderr = stderrStream
 
 return table.freeze(stdio)

@@ -10,9 +10,22 @@
     "cSpell.words": ["eryx"],
     "search.useIgnoreFiles": false,
     "files.exclude": {
-        "vendor/**": true,
-        "build*/**": true,
-        ".cache/**": true,
+        ".cache/**": true
     },
     "luau-lsp.inlayHints.typeHintMaxLength": 500,
+    "luau-lsp.fflags": {
+        "LuauSubtypingIterationLimit": "40000",
+        "LuauSubtypingRecursionLimit": "200",
+        "LuauTypeInferIterationLimit": "40000",
+        "LuauTypeInferRecursionLimit": "330",
+        "LuauTypeInferTypePackLoopLimit": "10000",
+        "LuauSolverConstraintLimit": "2000",
+        "LuauSolverRecursionLimit": "1000",
+        "LuauSimplificationComplexityLimit": "16",
+        "LuauTypeSimplificationIterationLimit": "256",
+        "LuauUnifierRecursionLimit": "200",
+        "LuauCheckRecursionLimit": "600",
+        "LuauConstraintGeneratorRecursionLimit": "600",
+        "LuauVisitRecursionLimit": "1000"
+    }
 }

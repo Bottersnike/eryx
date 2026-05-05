@@ -37,3 +37,12 @@
 [submodule "vendor/phc-winner-argon2"]
 	path = vendor/phc-winner-argon2
 	url = https://github.com/P-H-C/phc-winner-argon2
+[submodule "vendor/libjpeg-turbo"]
+	path = vendor/libjpeg-turbo
+	url = https://github.com/libjpeg-turbo/libjpeg-turbo
+[submodule "vendor/libpng"]
+	path = vendor/libpng
+	url = https://github.com/pnggroup/libpng
+[submodule "vendor/libwebp"]
+	path = vendor/libwebp
+	url = https://github.com/webmproject/libwebp

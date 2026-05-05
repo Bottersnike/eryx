@@ -10,8 +10,11 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #else
+#include <sys/ioctl.h>
 #include <termios.h>
 #include <unistd.h>
 #endif
@@ -33,14 +36,19 @@ LUAU_MODULE_INFO()
 struct AsyncReadData {
     EryxRuntime* rt;
     uv_pipe_t pipe;
+    uv_tty_t tty;
+    uv_stream_t* stream;
     int threadRef;
     size_t maxBytes;
     bool returnBuffer;
     bool initialized;
+    bool isTty;
 };
 
 // Module-level async stdin state (one per process)
 static AsyncReadData g_asyncStdin = {};
+
+static void stdio_init_async_stdin(lua_State* L, EryxRuntime* rt);
 
 struct AsyncWriteData {
     EryxRuntime* rt;
@@ -104,12 +112,25 @@ static void stdio_set_raw_mode_impl(lua_State* L, bool enabled) {
         luaL_error(L, "raw mode is unavailable because stdin is not a TTY");
     }
 
+    auto rt = eryx_get_runtime(L);
+    stdio_init_async_stdin(L, rt);
+    if (g_asyncStdin.isTty) {
+        int modeRc = uv_tty_set_mode(
+            &g_asyncStdin.tty, enabled ? UV_TTY_MODE_RAW_VT : UV_TTY_MODE_NORMAL);
+        if (modeRc != 0) {
+            luaL_error(L, "failed to %s raw mode: %s", enabled ? "enable" : "disable",
+                uv_strerror(modeRc));
+        }
+        g_rawMode.enabled = enabled;
+        return;
+    }
+
     if (enabled) {
         if (g_rawMode.enabled) return;
 #ifdef _WIN32
         DWORD mode = g_rawMode.originalMode;
         mode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
-        mode |= ENABLE_EXTENDED_FLAGS;
+        mode |= ENABLE_EXTENDED_FLAGS | ENABLE_VIRTUAL_TERMINAL_INPUT;
         if (!SetConsoleMode(g_rawMode.stdinHandle, mode)) {
             luaL_error(L, "failed to enable raw mode");
         }
@@ -234,6 +255,51 @@ static std::string stdio_error_message(const char* prefix, int errNo) {
     if (errNo == 0) return std::string(prefix) + ": unknown error";
     int uvErr = uv_translate_sys_error(errNo);
     return std::string(prefix) + ": " + uv_strerror(uvErr);
+}
+
+static int stdio_stdin_fd() {
+#ifdef _WIN32
+    return _fileno(stdin);
+#else
+    return fileno(stdin);
+#endif
+}
+
+static void stdio_init_async_stdin(lua_State* L, EryxRuntime* rt) {
+    if (g_asyncStdin.initialized) return;
+
+    int fd = stdio_stdin_fd();
+    if (fd < 0) {
+        luaL_error(L, "failed to get stdin file descriptor");
+    }
+
+    uv_handle_type type = uv_guess_handle(fd);
+    if (type == UV_TTY) {
+        int initRc = uv_tty_init(rt->loop, &g_asyncStdin.tty, fd, 1);
+        if (initRc != 0) {
+            luaL_error(L, "failed to initialize stdin tty: %s", uv_strerror(initRc));
+        }
+        g_asyncStdin.stream = (uv_stream_t*)&g_asyncStdin.tty;
+        g_asyncStdin.isTty = true;
+    } else if (type == UV_NAMED_PIPE) {
+        int initRc = uv_pipe_init(rt->loop, &g_asyncStdin.pipe, 0);
+        if (initRc != 0) {
+            luaL_error(L, "failed to initialize stdin pipe: %s", uv_strerror(initRc));
+        }
+
+        int openRc = uv_pipe_open(&g_asyncStdin.pipe, fd);
+        if (openRc != 0) {
+            luaL_error(L, "failed to open stdin pipe: %s", uv_strerror(openRc));
+        }
+        g_asyncStdin.stream = (uv_stream_t*)&g_asyncStdin.pipe;
+        g_asyncStdin.isTty = false;
+    } else {
+        luaL_error(L, "async stdin read is unsupported for this stdin handle type");
+    }
+
+    g_asyncStdin.stream->data = &g_asyncStdin;
+    g_asyncStdin.threadRef = LUA_NOREF;
+    g_asyncStdin.initialized = true;
 }
 
 struct ReadLineOptions {
@@ -424,6 +490,65 @@ static int stdio_isRawMode(lua_State* L) {
     return 1;
 }
 
+static int stdio_set_binary_mode(lua_State* L, const char* streamName, bool enabled) {
+#ifdef _WIN32
+    FILE* stream = nullptr;
+    if (strcmp(streamName, "stdin") == 0) {
+        stream = stdin;
+    } else if (strcmp(streamName, "stdout") == 0) {
+        stream = stdout;
+    } else if (strcmp(streamName, "stderr") == 0) {
+        stream = stderr;
+    } else {
+        luaL_error(L, "expected stream to be 'stdin', 'stdout', or 'stderr'");
+    }
+
+    if (fflush(stream) != 0) {
+        luaL_error(L, "%s flush failed before mode change: %s", streamName, strerror(errno));
+    }
+
+    int fd = _fileno(stream);
+    if (fd < 0) {
+        luaL_error(L, "failed to get %s file descriptor", streamName);
+    }
+
+    int mode = enabled ? _O_BINARY : _O_TEXT;
+    if (_setmode(fd, mode) == -1) {
+        luaL_error(L, "failed to set %s binary mode: %s", streamName, strerror(errno));
+    }
+#else
+    if (strcmp(streamName, "stdin") != 0 && strcmp(streamName, "stdout") != 0 &&
+        strcmp(streamName, "stderr") != 0) {
+        luaL_error(L, "expected stream to be 'stdin', 'stdout', or 'stderr'");
+    }
+#endif
+
+    lua_pushboolean(L, enabled);
+    return 1;
+}
+
+static bool stdio_stream_bool_arg(lua_State* L) {
+    if (lua_gettop(L) >= 2 && lua_istable(L, 1)) {
+        luaL_checktype(L, 2, LUA_TBOOLEAN);
+        return lua_toboolean(L, 2);
+    }
+
+    luaL_checktype(L, 1, LUA_TBOOLEAN);
+    return lua_toboolean(L, 1);
+}
+
+static int stdio_stdin_setBinaryMode(lua_State* L) {
+    return stdio_set_binary_mode(L, "stdin", stdio_stream_bool_arg(L));
+}
+
+static int stdio_stdout_setBinaryMode(lua_State* L) {
+    return stdio_set_binary_mode(L, "stdout", stdio_stream_bool_arg(L));
+}
+
+static int stdio_stderr_setBinaryMode(lua_State* L) {
+    return stdio_set_binary_mode(L, "stderr", stdio_stream_bool_arg(L));
+}
+
 // stdio.writeSync(data: string) -> number
 static int stdio_writeSync(lua_State* L) {
     size_t len;
@@ -469,22 +594,7 @@ static int stdio_read(lua_State* L) {
     }
     size_t maxBytes = (size_t)bytesArg;
 
-    // Initialize the pipe on first use
-    if (!g_asyncStdin.initialized) {
-        int initRc = uv_pipe_init(rt->loop, &g_asyncStdin.pipe, 0);
-        if (initRc != 0) {
-            luaL_error(L, "failed to initialize stdin pipe: %s", uv_strerror(initRc));
-        }
-
-        int openRc = uv_pipe_open(&g_asyncStdin.pipe, 0);  // fd 0 = stdin
-        if (openRc != 0) {
-            luaL_error(L, "failed to open stdin pipe: %s", uv_strerror(openRc));
-        }
-
-        g_asyncStdin.pipe.data = &g_asyncStdin;
-        g_asyncStdin.threadRef = LUA_NOREF;
-        g_asyncStdin.initialized = true;
-    }
+    stdio_init_async_stdin(L, rt);
 
     if (g_asyncStdin.threadRef != LUA_NOREF) {
         luaL_error(L, "another read is already pending");
@@ -499,7 +609,7 @@ static int stdio_read(lua_State* L) {
     g_asyncStdin.threadRef = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    int startRc = uv_read_start((uv_stream_t*)&g_asyncStdin.pipe, async_alloc_cb, async_read_cb);
+    int startRc = uv_read_start(g_asyncStdin.stream, async_alloc_cb, async_read_cb);
     if (startRc != 0) {
         int ref = g_asyncStdin.threadRef;
         g_asyncStdin.threadRef = LUA_NOREF;
@@ -521,21 +631,7 @@ static int stdio_readBuffer(lua_State* L) {
     }
     size_t maxBytes = (size_t)bytesArg;
 
-    if (!g_asyncStdin.initialized) {
-        int initRc = uv_pipe_init(rt->loop, &g_asyncStdin.pipe, 0);
-        if (initRc != 0) {
-            luaL_error(L, "failed to initialize stdin pipe: %s", uv_strerror(initRc));
-        }
-
-        int openRc = uv_pipe_open(&g_asyncStdin.pipe, 0);
-        if (openRc != 0) {
-            luaL_error(L, "failed to open stdin pipe: %s", uv_strerror(openRc));
-        }
-
-        g_asyncStdin.pipe.data = &g_asyncStdin;
-        g_asyncStdin.threadRef = LUA_NOREF;
-        g_asyncStdin.initialized = true;
-    }
+    stdio_init_async_stdin(L, rt);
 
     if (g_asyncStdin.threadRef != LUA_NOREF) {
         luaL_error(L, "another read is already pending");
@@ -549,7 +645,7 @@ static int stdio_readBuffer(lua_State* L) {
     g_asyncStdin.threadRef = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    int startRc = uv_read_start((uv_stream_t*)&g_asyncStdin.pipe, async_alloc_cb, async_read_cb);
+    int startRc = uv_read_start(g_asyncStdin.stream, async_alloc_cb, async_read_cb);
     if (startRc != 0) {
         int ref = g_asyncStdin.threadRef;
         g_asyncStdin.threadRef = LUA_NOREF;
@@ -688,11 +784,64 @@ static int stdio_isatty(lua_State* L) {
     return 1;
 }
 
+// stdio.terminalSize() -> { columns: number, rows: number }?
+static int stdio_terminalSize(lua_State* L) {
+    int columns = 0;
+    int rows = 0;
+
+#ifdef _WIN32
+    HANDLE handle = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (handle == INVALID_HANDLE_VALUE || handle == nullptr) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    CONSOLE_SCREEN_BUFFER_INFO info = {};
+    if (!GetConsoleScreenBufferInfo(handle, &info)) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    columns = (int)(info.srWindow.Right - info.srWindow.Left + 1);
+    rows = (int)(info.srWindow.Bottom - info.srWindow.Top + 1);
+#else
+    struct winsize ws = {};
+    if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != 0 || ws.ws_col == 0 || ws.ws_row == 0) {
+        lua_pushnil(L);
+        return 1;
+    }
+
+    columns = (int)ws.ws_col;
+    rows = (int)ws.ws_row;
+#endif
+
+    lua_createtable(L, 0, 2);
+    lua_pushinteger(L, columns);
+    lua_setfield(L, -2, "columns");
+    lua_pushinteger(L, rows);
+    lua_setfield(L, -2, "rows");
+    return 1;
+}
+
 static int stdio_stream_cannot_close(lua_State* L) {
     luaL_error(L, "standard stream handle cannot be closed");
     return 0;
 }
 
+static void stdio_stream_shift_no_arg(lua_State* L) {
+    if (lua_gettop(L) >= 2) {
+        lua_pushvalue(L, 2);
+        lua_replace(L, 1);
+        lua_settop(L, 1);
+        return;
+    }
+    if (lua_gettop(L) >= 1 && lua_type(L, 1) != LUA_TTABLE) {
+        // dot-call style: handle.write("x")
+        lua_settop(L, 1);
+        return;
+    }
+    return;
+}
 static void stdio_stream_shift_optional_arg(lua_State* L) {
     if (lua_gettop(L) >= 2 && !lua_isnoneornil(L, 2)) {
         lua_pushvalue(L, 2);
@@ -744,6 +893,10 @@ static int stdio_stdin_readline(lua_State* L) {
 }
 
 // stdout stream wrappers
+static int stdio_stdout_flush(lua_State* L) {
+    stdio_stream_shift_no_arg(L);
+    return stdio_flush(L);
+}
 static int stdio_stdout_write(lua_State* L) {
     stdio_stream_shift_required_arg(L);
     return stdio_write(L);
@@ -754,6 +907,10 @@ static int stdio_stdout_writeSync(lua_State* L) {
 }
 
 // stderr stream wrappers
+static int stdio_stderr_flush(lua_State* L) {
+    stdio_stream_shift_no_arg(L);
+    return stdio_flusherr(L);
+}
 static int stdio_stderr_write(lua_State* L) {
     stdio_stream_shift_required_arg(L);
     return stdio_writeerr(L);
@@ -807,6 +964,8 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     // Utility
     lua_pushcfunction(L, stdio_isatty, "isatty");
     lua_setfield(L, -2, "isatty");
+    lua_pushcfunction(L, stdio_terminalSize, "terminalSize");
+    lua_setfield(L, -2, "terminalSize");
 
     // stdin stream handle
     lua_newtable(L);
@@ -816,6 +975,8 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "writable");
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "closed");
+    lua_pushcfunction(L, stdio_stdin_setBinaryMode, "setBinaryMode");
+    lua_setfield(L, -2, "setBinaryMode");
     lua_pushcfunction(L, stdio_stdin_read, "read");
     lua_setfield(L, -2, "read");
     lua_pushcfunction(L, stdio_stdin_readSync, "readSync");
@@ -841,6 +1002,10 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "writable");
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "closed");
+    lua_pushcfunction(L, stdio_stdout_flush, "flush");
+    lua_setfield(L, -2, "flush");
+    lua_pushcfunction(L, stdio_stdout_setBinaryMode, "setBinaryMode");
+    lua_setfield(L, -2, "setBinaryMode");
     lua_pushcfunction(L, stdio_stdout_write, "write");
     lua_setfield(L, -2, "write");
     lua_pushcfunction(L, stdio_stdout_writeSync, "writeSync");
@@ -860,6 +1025,10 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "writable");
     lua_pushboolean(L, 0);
     lua_setfield(L, -2, "closed");
+    lua_pushcfunction(L, stdio_stderr_flush, "flush");
+    lua_setfield(L, -2, "flush");
+    lua_pushcfunction(L, stdio_stderr_setBinaryMode, "setBinaryMode");
+    lua_setfield(L, -2, "setBinaryMode");
     lua_pushcfunction(L, stdio_stderr_write, "write");
     lua_setfield(L, -2, "write");
     lua_pushcfunction(L, stdio_stderr_writeSync, "writeSync");
