@@ -20,10 +20,10 @@
 #include <unordered_set>
 
 #include "Luau/AstQuery.h"
-#include "Luau/BytecodeUtils.h"
 #include "Luau/Autocomplete.h"
 #include "Luau/AutocompleteTypes.h"
 #include "Luau/BuiltinDefinitions.h"
+#include "Luau/BytecodeUtils.h"
 #include "Luau/Common.h"
 #include "Luau/Config.h"
 #include "Luau/Error.h"
@@ -37,7 +37,6 @@
 #include "lprint.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
-
 #include "lstate.h"
 #ifndef ERYX_EMBED
 extern "C" {

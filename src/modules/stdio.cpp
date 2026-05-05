@@ -115,11 +115,11 @@ static void stdio_set_raw_mode_impl(lua_State* L, bool enabled) {
     auto rt = eryx_get_runtime(L);
     stdio_init_async_stdin(L, rt);
     if (g_asyncStdin.isTty) {
-        int modeRc = uv_tty_set_mode(
-            &g_asyncStdin.tty, enabled ? UV_TTY_MODE_RAW_VT : UV_TTY_MODE_NORMAL);
+        int modeRc =
+            uv_tty_set_mode(&g_asyncStdin.tty, enabled ? UV_TTY_MODE_RAW_VT : UV_TTY_MODE_NORMAL);
         if (modeRc != 0) {
             luaL_error(L, "failed to %s raw mode: %s", enabled ? "enable" : "disable",
-                uv_strerror(modeRc));
+                       uv_strerror(modeRc));
         }
         g_rawMode.enabled = enabled;
         return;

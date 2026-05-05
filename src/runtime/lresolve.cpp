@@ -442,8 +442,7 @@ static std::vector<LocatedModule> eryx_resolve_modules_impl(lua_State* L, Requir
             }
 
             fs::path aliasPath = fs::path(it->second.qualified);
-            fs::path candidate =
-                modulePath.empty() ? aliasPath : aliasPath / fs::path(modulePath);
+            fs::path candidate = modulePath.empty() ? aliasPath : aliasPath / fs::path(modulePath);
             resolvedPath = weakly_canonical_or_absolute(candidate);
         }
         // @self from a VFS module - try VFS first, fall through to filesystem
@@ -469,8 +468,8 @@ static std::vector<LocatedModule> eryx_resolve_modules_impl(lua_State* L, Requir
                 return locatedModules;
             }
             // Fall back to [exe dir]/modules
-            resolvedPath = weakly_canonical_or_absolute(getExecutableDir() / "modules" /
-                                                        fs::path(modulePath));
+            resolvedPath =
+                weakly_canonical_or_absolute(getExecutableDir() / "modules" / fs::path(modulePath));
         }
         // @self from an embedded module - try embedded first, fall through to filesystem
         else if (ctx.isEmbedded && alias == "self") {
@@ -511,7 +510,8 @@ static std::vector<LocatedModule> eryx_resolve_modules_impl(lua_State* L, Requir
             if (!vfs_is_isolated()) {
                 bool atOrAboveRoot = base.starts_with("..") || base.find('/') == std::string::npos;
                 if (atOrAboveRoot) {
-                    resolvedPath = weakly_canonical_or_absolute(getExecutableDir() / fs::path(base));
+                    resolvedPath =
+                        weakly_canonical_or_absolute(getExecutableDir() / fs::path(base));
                 }
             }
         }

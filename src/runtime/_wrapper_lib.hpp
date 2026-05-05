@@ -21,8 +21,8 @@ typedef struct {
 } EryxThreadInfo;
 
 typedef void (*EryxInterruptCallback)(struct EryxRuntime* rt, void* ctx);
-typedef void (*EryxDebugFunctionLoadedCallback)(lua_State* L, int funcIndex,
-                                                const char* chunkName, void* ctx);
+typedef void (*EryxDebugFunctionLoadedCallback)(lua_State* L, int funcIndex, const char* chunkName,
+                                                void* ctx);
 typedef struct EryxRuntime {
     lua_State* GL;  // main thread (for deref'ing refs in timer callbacks)
     uv_loop_t* loop;

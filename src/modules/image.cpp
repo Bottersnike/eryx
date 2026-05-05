@@ -15,8 +15,10 @@ For resizing:
 
 For fonts:
 
-- We'll use freetype, but we probably want @eryx/font as a standalone font manipulation layer, which can render an Image for us?
-    - Would this make a tight dependency between the C++ side of /image and /font? Would that require a shared native backing?
+- We'll use freetype, but we probably want @eryx/font as a standalone font manipulation layer, which
+can render an Image for us?
+    - Would this make a tight dependency between the C++ side of /image and /font? Would that
+require a shared native backing?
 
 For image manipulation:
 
@@ -168,10 +170,11 @@ type Image {  -- Userdata
     fillRect: (x: number, y: number, width: number, height: number, color: Color) -> ()
     fillRect: (rect: Rect, color: Color) -> ()
 
-    strokeRect: (x: number, y: number, width: number, height: number, color: Color, thickness: number?) -> ()
-    strokeRect: (rect: Rect, color: Color, thickness: number?) -> ()
+    strokeRect: (x: number, y: number, width: number, height: number, color: Color, thickness:
+number?) -> () strokeRect: (rect: Rect, color: Color, thickness: number?) -> ()
 
-    line: (x1: number, y1: number, x2: number, y2: number, color: Color, options: LineOptions?) -> ()
+    line: (x1: number, y1: number, x2: number, y2: number, color: Color, options: LineOptions?) ->
+()
 
     -- Future: Circles
 
@@ -187,10 +190,6 @@ type Image {  -- Userdata
 ```
 */
 
-#include "../LuaUtil.hpp"
-#include "lualib.h"
-#include "module_api.h"
-
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -203,6 +202,10 @@ type Image {  -- Userdata
 #include <utility>
 #include <vector>
 
+#include "../LuaUtil.hpp"
+#include "lualib.h"
+#include "module_api.h"
+
 // Must be here to ensure it's only in a single unit.
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_FAILURE_USERMSG
@@ -210,8 +213,8 @@ type Image {  -- Userdata
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 #define STB_IMAGE_RESIZE_IMPLEMENTATION
-#include "stb_image_resize2.h"
 #include "png.h"
+#include "stb_image_resize2.h"
 #include "turbojpeg.h"
 #include "webp/decode.h"
 #include "webp/encode.h"
@@ -381,7 +384,8 @@ static PixelFormat check_format(lua_State* L, int idx) {
     return PixelFormat::Rgba8;
 }
 
-static PixelFormat opt_format_field(lua_State* L, int idx, const char* field, PixelFormat fallback) {
+static PixelFormat opt_format_field(lua_State* L, int idx, const char* field,
+                                    PixelFormat fallback) {
     lua_getfield(L, idx, field);
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
@@ -433,7 +437,7 @@ static uint8_t opt_u8_field(lua_State* L, int idx, const char* field, uint8_t fa
     return value;
 }
 
-static Color check_color(lua_State* L, int idx, Color fallback = {0, 0, 0, 255}) {
+static Color check_color(lua_State* L, int idx, Color fallback = { 0, 0, 0, 255 }) {
     idx = lua_absindex(L, idx);
     luaL_checktype(L, idx, LUA_TTABLE);
 
@@ -494,7 +498,8 @@ static void push_rect(lua_State* L, Rect r) {
     lua_setreadonly(L, -1, true);
 }
 
-static bool checked_image_size(lua_State* L, uint32_t width, uint32_t height, PixelFormat format, size_t stride) {
+static bool checked_image_size(lua_State* L, uint32_t width, uint32_t height, PixelFormat format,
+                               size_t stride) {
     if (width == 0 || height == 0) {
         luaL_error(L, "image dimensions must be positive");
         return false;
@@ -522,16 +527,16 @@ static Color read_pixel(const LuaImage* i, int x, int y) {
     const uint8_t* p = pixel_at(i, x, y);
     switch (i->format) {
         case PixelFormat::Rgba8:
-            return {p[0], p[1], p[2], p[3]};
+            return { p[0], p[1], p[2], p[3] };
         case PixelFormat::Rgb8:
-            return {p[0], p[1], p[2], 255};
+            return { p[0], p[1], p[2], 255 };
         case PixelFormat::Gray8:
-            return {p[0], p[0], p[0], 255};
+            return { p[0], p[0], p[0], 255 };
         case PixelFormat::GrayAlpha8:
-            return {p[0], p[0], p[0], p[1]};
+            return { p[0], p[0], p[0], p[1] };
     }
 
-    return {0, 0, 0, 255};
+    return { 0, 0, 0, 255 };
 }
 
 static uint8_t luminance(Color c) {
@@ -545,7 +550,7 @@ static uint8_t composite_channel(uint8_t src, uint8_t alpha, uint8_t bg) {
 
 static Color composite_over(Color src, Color bg) {
     if (src.a == 255) return src;
-    if (src.a == 0) return {bg.r, bg.g, bg.b, 255};
+    if (src.a == 0) return { bg.r, bg.g, bg.b, 255 };
 
     return {
         composite_channel(src.r, src.a, bg.r),
@@ -595,9 +600,7 @@ static void image_release(LuaImage* i) {
     i->closed = true;
 }
 
-static void image_dtor(void* ud) {
-    image_release((LuaImage*)ud);
-}
+static void image_dtor(void* ud) { image_release((LuaImage*)ud); }
 
 static LuaImage* check_image(lua_State* L, int idx) {
     LuaImage* i = (LuaImage*)luaL_checkudata(L, idx, IMAGE_METATABLE);
@@ -669,7 +672,7 @@ static ResizeOptionsNative parse_resize_options(lua_State* L, int idx) {
     ResizeOptionsNative opts;
     opts.fit = ResizeFit::Stretch;
     opts.position = ResizePosition::Center;
-    opts.background = {0, 0, 0, 0};
+    opts.background = { 0, 0, 0, 0 };
     opts.nearest = false;
 
     if (lua_isnoneornil(L, idx)) return opts;
@@ -712,7 +715,7 @@ static BlitOptions parse_blit_options(lua_State* L, int idx) {
     BlitOptions opts;
     opts.blend = BlendMode::Replace;
     opts.opacity = 1.0;
-    opts.tint = {255, 255, 255, 255};
+    opts.tint = { 255, 255, 255, 255 };
     opts.mask = nullptr;
 
     if (lua_isnoneornil(L, idx)) return opts;
@@ -788,10 +791,13 @@ static Color blend_colors(Color dst, Color src, const BlitOptions& opts, double 
     };
 }
 
-static void write_blended_pixel(LuaImage* dst, int x, int y, Color src, const BlitOptions& opts, int maskX, int maskY) {
+static void write_blended_pixel(LuaImage* dst, int x, int y, Color src, const BlitOptions& opts,
+                                int maskX, int maskY) {
     double maskAlpha = 1.0;
     if (opts.mask) {
-        if (maskX < 0 || maskY < 0 || maskX >= (int)opts.mask->width || maskY >= (int)opts.mask->height) return;
+        if (maskX < 0 || maskY < 0 || maskX >= (int)opts.mask->width ||
+            maskY >= (int)opts.mask->height)
+            return;
         maskAlpha = read_pixel(opts.mask, maskX, maskY).a / 255.0;
     }
 
@@ -884,7 +890,9 @@ static void push_exif_table(lua_State* L, const ExifMetadata* exif) {
     lua_setreadonly(L, -1, true);
 }
 
-static int make_metadata_ref(lua_State* L, const char* format, int originalChannels = 0, const char* source = nullptr, const ExifMetadata* exif = nullptr, int width = 0, int height = 0) {
+static int make_metadata_ref(lua_State* L, const char* format, int originalChannels = 0,
+                             const char* source = nullptr, const ExifMetadata* exif = nullptr,
+                             int width = 0, int height = 0) {
     lua_createtable(L, 0, 6);
     if (format) {
         lua_pushstring(L, format);
@@ -916,7 +924,8 @@ static int make_metadata_ref(lua_State* L, const char* format, int originalChann
     return ref;
 }
 
-static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t height, PixelFormat format, size_t stride, int metadataRef) {
+static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t height,
+                                    PixelFormat format, size_t stride, int metadataRef) {
     checked_image_size(L, width, height, format, stride);
 
     LuaImage* i = (LuaImage*)lua_newuserdatadtor(L, sizeof(LuaImage), image_dtor);
@@ -934,7 +943,8 @@ static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t heigh
     return i;
 }
 
-static LuaImage* new_owned_image(lua_State* L, uint32_t width, uint32_t height, PixelFormat format, int metadataRef) {
+static LuaImage* new_owned_image(lua_State* L, uint32_t width, uint32_t height, PixelFormat format,
+                                 int metadataRef) {
     size_t stride = (size_t)width * format_channels(format);
     LuaImage* i = new_image_userdata(L, width, height, format, stride, metadataRef);
 
@@ -961,7 +971,8 @@ static void copy_image_pixels(LuaImage* dst, const LuaImage* src, Color backgrou
     }
 }
 
-static void write_oriented_pixel(LuaImage* dst, const LuaImage* src, uint32_t x, uint32_t y, uint16_t orientation) {
+static void write_oriented_pixel(LuaImage* dst, const LuaImage* src, uint32_t x, uint32_t y,
+                                 uint16_t orientation) {
     uint32_t dx = x;
     uint32_t dy = y;
 
@@ -1027,7 +1038,8 @@ static std::string lower_ext(const std::string& path) {
     size_t dot = path.find_last_of('.');
     if (dot == std::string::npos) return "";
     std::string ext = path.substr(dot + 1);
-    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return (char)std::tolower(c); });
+    std::transform(ext.begin(), ext.end(), ext.begin(),
+                   [](unsigned char c) { return (char)std::tolower(c); });
     return ext;
 }
 
@@ -1048,7 +1060,8 @@ static bool read_file_bytes(const std::string& path, std::vector<uint8_t>& out) 
     return true;
 }
 
-static void write_file_bytes(lua_State* L, const std::string& path, const std::vector<uint8_t>& bytes) {
+static void write_file_bytes(lua_State* L, const std::string& path,
+                             const std::vector<uint8_t>& bytes) {
     std::ofstream file(path, std::ios::binary);
     if (!file) luaL_error(L, "failed to open %s for writing", path.c_str());
     file.write((const char*)bytes.data(), (std::streamsize)bytes.size());
@@ -1065,13 +1078,13 @@ static PixelFormat parse_new_format(lua_State* L, int idx) {
 }
 
 static Color parse_new_color(lua_State* L, int idx) {
-    if (!lua_istable(L, idx)) return {0, 0, 0, 0};
+    if (!lua_istable(L, idx)) return { 0, 0, 0, 0 };
     lua_getfield(L, idx, "color");
     if (lua_isnil(L, -1)) {
         lua_pop(L, 1);
-        return {0, 0, 0, 0};
+        return { 0, 0, 0, 0 };
     }
-    Color c = check_color(L, -1, {0, 0, 0, 255});
+    Color c = check_color(L, -1, { 0, 0, 0, 255 });
     lua_pop(L, 1);
     return c;
 }
@@ -1087,9 +1100,7 @@ static DecodeOptions parse_decode_options(lua_State* L, int idx) {
     return opts;
 }
 
-static int stbi_channels_for_format(PixelFormat format) {
-    return format_channels(format);
-}
+static int stbi_channels_for_format(PixelFormat format) { return format_channels(format); }
 
 static png_uint_32 png_format_for_image(PixelFormat format) {
     switch (format) {
@@ -1105,7 +1116,8 @@ static png_uint_32 png_format_for_image(PixelFormat format) {
     return PNG_FORMAT_RGBA;
 }
 
-static LuaImage* image_from_stbi(lua_State* L, stbi_uc* data, int w, int h, int sourceChannels, PixelFormat format, const char* codec, const char* source) {
+static LuaImage* image_from_stbi(lua_State* L, stbi_uc* data, int w, int h, int sourceChannels,
+                                 PixelFormat format, const char* codec, const char* source) {
     if (!data) {
         luaL_error(L, "failed to decode image: %s", stbi_failure_reason());
         return nullptr;
@@ -1131,7 +1143,8 @@ static LuaImage* image_from_stbi(lua_State* L, stbi_uc* data, int w, int h, int 
     return i;
 }
 
-static LuaImage* image_from_png_memory(lua_State* L, const uint8_t* bytes, size_t len, PixelFormat format, const char* source) {
+static LuaImage* image_from_png_memory(lua_State* L, const uint8_t* bytes, size_t len,
+                                       PixelFormat format, const char* source) {
     png_image png;
     memset(&png, 0, sizeof(png));
     png.version = PNG_IMAGE_VERSION;
@@ -1142,9 +1155,12 @@ static LuaImage* image_from_png_memory(lua_State* L, const uint8_t* bytes, size_
     }
 
     png.format = png_format_for_image(format);
-    checked_image_size(L, png.width, png.height, format, (size_t)png.width * format_channels(format));
+    checked_image_size(L, png.width, png.height, format,
+                       (size_t)png.width * format_channels(format));
 
-    LuaImage* i = new_owned_image(L, png.width, png.height, format, make_metadata_ref(L, "png", format_channels(format), source, nullptr, png.width, png.height));
+    LuaImage* i = new_owned_image(L, png.width, png.height, format,
+                                  make_metadata_ref(L, "png", format_channels(format), source,
+                                                    nullptr, png.width, png.height));
     if (!png_image_finish_read(&png, nullptr, i->pixels, (png_int_32)i->stride, nullptr)) {
         std::string message = png.message;
         image_release(i);
@@ -1166,9 +1182,12 @@ static LuaImage* image_from_png_file(lua_State* L, const std::string& path, Pixe
     }
 
     png.format = png_format_for_image(format);
-    checked_image_size(L, png.width, png.height, format, (size_t)png.width * format_channels(format));
+    checked_image_size(L, png.width, png.height, format,
+                       (size_t)png.width * format_channels(format));
 
-    LuaImage* i = new_owned_image(L, png.width, png.height, format, make_metadata_ref(L, "png", format_channels(format), path.c_str(), nullptr, png.width, png.height));
+    LuaImage* i = new_owned_image(L, png.width, png.height, format,
+                                  make_metadata_ref(L, "png", format_channels(format), path.c_str(),
+                                                    nullptr, png.width, png.height));
     if (!png_image_finish_read(&png, nullptr, i->pixels, (png_int_32)i->stride, nullptr)) {
         std::string message = png.message;
         image_release(i);
@@ -1181,7 +1200,8 @@ static LuaImage* image_from_png_file(lua_State* L, const std::string& path, Pixe
 
 static ExifMetadata parse_jpeg_exif(const uint8_t* bytes, size_t len);
 
-static LuaImage* image_from_jpeg_memory(lua_State* L, const uint8_t* bytes, size_t len, DecodeOptions options, const char* source) {
+static LuaImage* image_from_jpeg_memory(lua_State* L, const uint8_t* bytes, size_t len,
+                                        DecodeOptions options, const char* source) {
     tjhandle handle = tjInitDecompress();
     if (!handle) {
         luaL_error(L, "failed to initialize JPEG decoder: %s", tjGetErrorStr());
@@ -1233,17 +1253,21 @@ static LuaImage* image_from_jpeg_memory(lua_State* L, const uint8_t* bytes, size
     ExifMetadata exif = parse_jpeg_exif(bytes, len);
     uint32_t outWidth = (uint32_t)w;
     uint32_t outHeight = (uint32_t)h;
-    if (options.applyOrientation && exif.hasOrientation && exif.orientation >= 5 && exif.orientation <= 8) {
+    if (options.applyOrientation && exif.hasOrientation && exif.orientation >= 5 &&
+        exif.orientation <= 8) {
         outWidth = (uint32_t)h;
         outHeight = (uint32_t)w;
     }
 
-    LuaImage* i = new_owned_image(L, outWidth, outHeight, options.format, make_metadata_ref(L, "jpeg", 3, source, &exif, w, h));
-    copy_image_pixels_oriented(i, &tmp, options.applyOrientation && exif.hasOrientation ? exif.orientation : 1);
+    LuaImage* i = new_owned_image(L, outWidth, outHeight, options.format,
+                                  make_metadata_ref(L, "jpeg", 3, source, &exif, w, h));
+    copy_image_pixels_oriented(
+        i, &tmp, options.applyOrientation && exif.hasOrientation ? exif.orientation : 1);
     return i;
 }
 
-static LuaImage* image_from_jpeg_file(lua_State* L, const std::string& path, DecodeOptions options) {
+static LuaImage* image_from_jpeg_file(lua_State* L, const std::string& path,
+                                      DecodeOptions options) {
     std::vector<uint8_t> bytes;
     if (!read_file_bytes(path, bytes)) {
         luaL_error(L, "failed to read %s", path.c_str());
@@ -1251,7 +1275,8 @@ static LuaImage* image_from_jpeg_file(lua_State* L, const std::string& path, Dec
     return image_from_jpeg_memory(L, bytes.data(), bytes.size(), options, path.c_str());
 }
 
-static LuaImage* image_from_webp(lua_State* L, const uint8_t* bytes, size_t len, PixelFormat format, const char* source) {
+static LuaImage* image_from_webp(lua_State* L, const uint8_t* bytes, size_t len, PixelFormat format,
+                                 const char* source) {
     int w = 0;
     int h = 0;
     if (!WebPGetInfo(bytes, len, &w, &h)) {
@@ -1285,7 +1310,8 @@ static LuaImage* image_from_webp(lua_State* L, const uint8_t* bytes, size_t len,
     tmp.closed = false;
     tmp.view = false;
 
-    LuaImage* i = new_owned_image(L, (uint32_t)w, (uint32_t)h, format, make_metadata_ref(L, "webp", 4, source, nullptr, w, h));
+    LuaImage* i = new_owned_image(L, (uint32_t)w, (uint32_t)h, format,
+                                  make_metadata_ref(L, "webp", 4, source, nullptr, w, h));
     copy_image_pixels(i, &tmp);
     WebPFree(decoded);
     return i;
@@ -1297,7 +1323,7 @@ static bool looks_like_webp(const uint8_t* bytes, size_t len) {
 }
 
 static bool looks_like_png(const uint8_t* bytes, size_t len) {
-    static const uint8_t sig[] = {0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'};
+    static const uint8_t sig[] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n' };
     return len >= sizeof(sig) && memcmp(bytes, sig, sizeof(sig)) == 0;
 }
 
@@ -1311,13 +1337,13 @@ static uint16_t exif_u16(const uint8_t* p, bool le) {
 }
 
 static uint32_t exif_u32(const uint8_t* p, bool le) {
-    if (le) return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+    if (le)
+        return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+               ((uint32_t)p[3] << 24);
     return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | (uint32_t)p[3];
 }
 
-static int32_t exif_i32(const uint8_t* p, bool le) {
-    return (int32_t)exif_u32(p, le);
-}
+static int32_t exif_i32(const uint8_t* p, bool le) { return (int32_t)exif_u32(p, le); }
 
 static size_t exif_type_size(uint16_t type) {
     switch (type) {
@@ -1338,7 +1364,8 @@ static size_t exif_type_size(uint16_t type) {
     }
 }
 
-static bool exif_entry_data(const uint8_t* tiff, size_t tiffLen, const uint8_t* entry, bool le, const uint8_t** data, size_t* size) {
+static bool exif_entry_data(const uint8_t* tiff, size_t tiffLen, const uint8_t* entry, bool le,
+                            const uint8_t** data, size_t* size) {
     uint16_t type = exif_u16(entry + 2, le);
     uint32_t count = exif_u32(entry + 4, le);
     size_t typeSize = exif_type_size(type);
@@ -1361,7 +1388,8 @@ static std::string exif_ascii(const uint8_t* data, size_t size) {
     return std::string((const char*)data, size);
 }
 
-static ExifTag parse_exif_tag_value(uint16_t tagId, uint16_t type, uint32_t count, const uint8_t* data, size_t size, bool le) {
+static ExifTag parse_exif_tag_value(uint16_t tagId, uint16_t type, uint32_t count,
+                                    const uint8_t* data, size_t size, bool le) {
     ExifTag tag;
     tag.tag = tagId;
     tag.type = type;
@@ -1429,13 +1457,15 @@ static ExifTag parse_exif_tag_value(uint16_t tagId, uint16_t type, uint32_t coun
             break;
     }
 
-    if ((tag.kind == ExifValueKind::Numbers && tag.numbers.empty()) || (tag.kind == ExifValueKind::Bytes && tag.bytes.empty())) {
+    if ((tag.kind == ExifValueKind::Numbers && tag.numbers.empty()) ||
+        (tag.kind == ExifValueKind::Bytes && tag.bytes.empty())) {
         tag.kind = ExifValueKind::None;
     }
     return tag;
 }
 
-static void parse_exif_ifd(const uint8_t* tiff, size_t tiffLen, uint32_t ifdOffset, bool le, ExifMetadata& out, int depth) {
+static void parse_exif_ifd(const uint8_t* tiff, size_t tiffLen, uint32_t ifdOffset, bool le,
+                           ExifMetadata& out, int depth) {
     if (depth > 4 || ifdOffset > tiffLen || tiffLen - ifdOffset < 2) return;
 
     const uint8_t* ifd = tiff + ifdOffset;
@@ -1536,8 +1566,9 @@ static ExifMetadata parse_jpeg_exif(const uint8_t* bytes, size_t len) {
         size_t payloadLen = segmentLen - 2;
         if (marker == 0xe1) {
             out = parse_exif_payload(bytes + pos, payloadLen);
-            if (out.hasOrientation || !out.make.empty() || !out.model.empty() || !out.software.empty() || !out.dateTime.empty() ||
-                !out.artist.empty() || !out.copyright.empty() || !out.tags.empty()) {
+            if (out.hasOrientation || !out.make.empty() || !out.model.empty() ||
+                !out.software.empty() || !out.dateTime.empty() || !out.artist.empty() ||
+                !out.copyright.empty() || !out.tags.empty()) {
                 return out;
             }
         }
@@ -1581,7 +1612,8 @@ static int image_open(lua_State* L) {
     int forceChannels = stbi_channels_for_format(options.format);
 
     int w, h, channels;
-    stbi_uc* data = stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels, forceChannels);
+    stbi_uc* data =
+        stbi_load_from_memory(bytes.data(), (int)bytes.size(), &w, &h, &channels, forceChannels);
     image_from_stbi(L, data, w, h, channels, options.format, "stb", path.c_str());
     return 1;
 }
@@ -1616,7 +1648,8 @@ static int image_decode(lua_State* L) {
     int forceChannels = stbi_channels_for_format(options.format);
 
     int w, h, channels;
-    stbi_uc* data = stbi_load_from_memory((const stbi_uc*)bytes, (int)len, &w, &h, &channels, forceChannels);
+    stbi_uc* data =
+        stbi_load_from_memory((const stbi_uc*)bytes, (int)len, &w, &h, &channels, forceChannels);
     image_from_stbi(L, data, w, h, channels, options.format, "stb", nullptr);
     return 1;
 }
@@ -1628,7 +1661,8 @@ static int image_new(lua_State* L) {
 
     PixelFormat format = parse_new_format(L, 3);
     Color color = parse_new_color(L, 3);
-    LuaImage* i = new_owned_image(L, (uint32_t)width, (uint32_t)height, format, make_metadata_ref(L, "raw"));
+    LuaImage* i =
+        new_owned_image(L, (uint32_t)width, (uint32_t)height, format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < i->height; y++) {
         for (uint32_t x = 0; x < i->width; x++) {
             write_pixel(i, x, y, color);
@@ -1659,14 +1693,17 @@ static int image_fromBuffer(lua_State* L) {
     }
 
     if (copy) {
-        LuaImage* i = new_owned_image(L, (uint32_t)width, (uint32_t)height, format, make_metadata_ref(L, "raw"));
+        LuaImage* i = new_owned_image(L, (uint32_t)width, (uint32_t)height, format,
+                                      make_metadata_ref(L, "raw"));
         for (int y = 0; y < height; y++) {
-            memcpy(i->pixels + (size_t)y * i->stride, (uint8_t*)buffer + (size_t)y * stride, minStride);
+            memcpy(i->pixels + (size_t)y * i->stride, (uint8_t*)buffer + (size_t)y * stride,
+                   minStride);
         }
         return 1;
     }
 
-    LuaImage* i = new_image_userdata(L, (uint32_t)width, (uint32_t)height, format, stride, make_metadata_ref(L, "raw"));
+    LuaImage* i = new_image_userdata(L, (uint32_t)width, (uint32_t)height, format, stride,
+                                     make_metadata_ref(L, "raw"));
     i->pixels = (uint8_t*)buffer;
     i->bufferRef = lua_ref(L, 1);
     return 1;
@@ -1684,20 +1721,22 @@ static int image_fromRGBABuffer(lua_State* L) {
         luaL_error(L, "provided buffer does not exactly match %dx%dx4", width, height);
     }
 
-    LuaImage* i = new_image_userdata(L, (uint32_t)width, (uint32_t)height, PixelFormat::Rgba8, (size_t)width * 4, make_metadata_ref(L, "raw"));
+    LuaImage* i = new_image_userdata(L, (uint32_t)width, (uint32_t)height, PixelFormat::Rgba8,
+                                     (size_t)width * 4, make_metadata_ref(L, "raw"));
     i->pixels = (uint8_t*)buffer;
     i->bufferRef = lua_ref(L, 1);
     return 1;
 }
 
 static int image_rgb(lua_State* L) {
-    Color c = {check_u8(L, 1, "r"), check_u8(L, 2, "g"), check_u8(L, 3, "b"), 255};
+    Color c = { check_u8(L, 1, "r"), check_u8(L, 2, "g"), check_u8(L, 3, "b"), 255 };
     push_color(L, c);
     return 1;
 }
 
 static int image_rgba(lua_State* L) {
-    Color c = {check_u8(L, 1, "r"), check_u8(L, 2, "g"), check_u8(L, 3, "b"), check_u8(L, 4, "a")};
+    Color c = { check_u8(L, 1, "r"), check_u8(L, 2, "g"), check_u8(L, 3, "b"),
+                check_u8(L, 4, "a") };
     push_color(L, c);
     return 1;
 }
@@ -1705,7 +1744,7 @@ static int image_rgba(lua_State* L) {
 static int image_gray(lua_State* L) {
     uint8_t v = check_u8(L, 1, "v");
     uint8_t a = lua_isnoneornil(L, 2) ? 255 : check_u8(L, 2, "a");
-    push_color(L, {v, v, v, a});
+    push_color(L, { v, v, v, a });
     return 1;
 }
 
@@ -1766,7 +1805,7 @@ static int image_index(lua_State* L) {
         return 1;
     }
     if (strcmp(key, "bounds") == 0) {
-        push_rect(L, {0, 0, (int)i->width, (int)i->height});
+        push_rect(L, { 0, 0, (int)i->width, (int)i->height });
         return 1;
     }
     if (strcmp(key, "colorSpace") == 0) {
@@ -1819,7 +1858,8 @@ static int image_setPixel(lua_State* L) {
 
 static int image_clone(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     copy_image_pixels(dst, src);
     return 1;
 }
@@ -1829,9 +1869,11 @@ static int image_crop(lua_State* L) {
     Rect r = check_rect_args(L, 2);
     check_rect_in_bounds(L, src, r);
 
-    LuaImage* dst = new_owned_image(L, (uint32_t)r.width, (uint32_t)r.height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst = new_owned_image(L, (uint32_t)r.width, (uint32_t)r.height, src->format,
+                                    make_metadata_ref(L, "raw"));
     for (int y = 0; y < r.height; y++) {
-        memcpy(pixel_at(dst, 0, y), pixel_at(src, r.x, r.y + y), (size_t)r.width * format_channels(src->format));
+        memcpy(pixel_at(dst, 0, y), pixel_at(src, r.x, r.y + y),
+               (size_t)r.width * format_channels(src->format));
     }
     return 1;
 }
@@ -1841,7 +1883,8 @@ static int image_subimage(lua_State* L) {
     Rect r = check_rect_args(L, 2);
     check_rect_in_bounds(L, src, r);
 
-    LuaImage* view = new_image_userdata(L, (uint32_t)r.width, (uint32_t)r.height, src->format, src->stride, make_metadata_ref(L, "raw"));
+    LuaImage* view = new_image_userdata(L, (uint32_t)r.width, (uint32_t)r.height, src->format,
+                                        src->stride, make_metadata_ref(L, "raw"));
     view->pixels = pixel_at(src, r.x, r.y);
     view->view = true;
 
@@ -1854,14 +1897,15 @@ static int image_subimage(lua_State* L) {
 static int image_convert(lua_State* L) {
     LuaImage* src = check_image(L, 1);
     PixelFormat format = check_format(L, 2);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, format, make_metadata_ref(L, "raw"));
 
     bool useBackground = false;
-    Color background = {0, 0, 0, 255};
+    Color background = { 0, 0, 0, 255 };
     if (lua_istable(L, 3)) {
         lua_getfield(L, 3, "background");
         if (!lua_isnil(L, -1)) {
-            background = check_color(L, -1, {0, 0, 0, 255});
+            background = check_color(L, -1, { 0, 0, 0, 255 });
             background.a = 255;
             useBackground = format_has_alpha(src->format) && !format_has_alpha(format);
         }
@@ -1933,21 +1977,26 @@ static void fill_image(LuaImage* dst, Color color) {
 static bool resize_rect_into(const LuaImage* src, Rect srcRect, LuaImage* dst, bool nearest) {
     if (nearest) {
         for (uint32_t y = 0; y < dst->height; y++) {
-            int sy = srcRect.y + std::min(srcRect.height - 1, (int)((uint64_t)y * srcRect.height / dst->height));
+            int sy = srcRect.y + std::min(srcRect.height - 1,
+                                          (int)((uint64_t)y * srcRect.height / dst->height));
             for (uint32_t x = 0; x < dst->width; x++) {
-                int sx = srcRect.x + std::min(srcRect.width - 1, (int)((uint64_t)x * srcRect.width / dst->width));
+                int sx = srcRect.x + std::min(srcRect.width - 1,
+                                              (int)((uint64_t)x * srcRect.width / dst->width));
                 write_pixel(dst, (int)x, (int)y, read_pixel(src, sx, sy));
             }
         }
         return true;
     }
 
-    return stbir_resize_uint8_srgb(pixel_at(src, srcRect.x, srcRect.y), srcRect.width, srcRect.height, (int)src->stride,
-                                   dst->pixels, (int)dst->width, (int)dst->height, (int)dst->stride, stbir_layout(src->format));
+    return stbir_resize_uint8_srgb(pixel_at(src, srcRect.x, srcRect.y), srcRect.width,
+                                   srcRect.height, (int)src->stride, dst->pixels, (int)dst->width,
+                                   (int)dst->height, (int)dst->stride, stbir_layout(src->format));
 }
 
-static LuaImage* resize_exact(lua_State* L, LuaImage* src, Rect srcRect, int width, int height, bool nearest) {
-    LuaImage* dst = new_owned_image(L, (uint32_t)width, (uint32_t)height, src->format, make_metadata_ref(L, "raw"));
+static LuaImage* resize_exact(lua_State* L, LuaImage* src, Rect srcRect, int width, int height,
+                              bool nearest) {
+    LuaImage* dst = new_owned_image(L, (uint32_t)width, (uint32_t)height, src->format,
+                                    make_metadata_ref(L, "raw"));
     if (!resize_rect_into(src, srcRect, dst, nearest)) {
         lua_pop(L, 1);
         luaL_error(L, "failed to resize image");
@@ -1962,7 +2011,7 @@ static int image_resize(lua_State* L) {
     if (width <= 0 || height <= 0) luaL_error(L, "image dimensions must be positive");
     ResizeOptionsNative opts = parse_resize_options(L, 4);
 
-    Rect srcRect = {0, 0, (int)src->width, (int)src->height};
+    Rect srcRect = { 0, 0, (int)src->width, (int)src->height };
     if (opts.fit == ResizeFit::Stretch) {
         resize_exact(L, src, srcRect, width, height, opts.nearest);
         return 1;
@@ -1973,10 +2022,12 @@ static int image_resize(lua_State* L) {
         double sourceRatio = (double)src->width / src->height;
         if (sourceRatio > targetRatio) {
             srcRect.width = std::max(1, (int)std::round(src->height * targetRatio));
-            srcRect.x = (int)std::round(((int)src->width - srcRect.width) * position_x_align(opts.position));
+            srcRect.x = (int)std::round(((int)src->width - srcRect.width) *
+                                        position_x_align(opts.position));
         } else {
             srcRect.height = std::max(1, (int)std::round(src->width / targetRatio));
-            srcRect.y = (int)std::round(((int)src->height - srcRect.height) * position_y_align(opts.position));
+            srcRect.y = (int)std::round(((int)src->height - srcRect.height) *
+                                        position_y_align(opts.position));
         }
         resize_exact(L, src, srcRect, width, height, opts.nearest);
         return 1;
@@ -1988,7 +2039,8 @@ static int image_resize(lua_State* L) {
     int offsetX = (int)std::round((width - innerWidth) * position_x_align(opts.position));
     int offsetY = (int)std::round((height - innerHeight) * position_y_align(opts.position));
 
-    LuaImage* dst = new_owned_image(L, (uint32_t)width, (uint32_t)height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst = new_owned_image(L, (uint32_t)width, (uint32_t)height, src->format,
+                                    make_metadata_ref(L, "raw"));
     fill_image(dst, opts.background);
     LuaImage* inner = resize_exact(L, src, srcRect, innerWidth, innerHeight, opts.nearest);
     for (int y = 0; y < innerHeight; y++) {
@@ -2011,13 +2063,14 @@ static int image_thumbnail(lua_State* L) {
     int width = std::max(1, (int)std::round(src->width * scale));
     int height = std::max(1, (int)std::round(src->height * scale));
     ResizeOptionsNative opts = parse_resize_options(L, 4);
-    resize_exact(L, src, {0, 0, (int)src->width, (int)src->height}, width, height, opts.nearest);
+    resize_exact(L, src, { 0, 0, (int)src->width, (int)src->height }, width, height, opts.nearest);
     return 1;
 }
 
 static int image_flipX(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             write_pixel(dst, src->width - x - 1, y, read_pixel(src, x, y));
@@ -2028,7 +2081,8 @@ static int image_flipX(lua_State* L) {
 
 static int image_flipY(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             write_pixel(dst, x, src->height - y - 1, read_pixel(src, x, y));
@@ -2039,7 +2093,8 @@ static int image_flipY(lua_State* L) {
 
 static int image_rotate90(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->height, src->width, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->height, src->width, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             write_pixel(dst, src->height - y - 1, x, read_pixel(src, x, y));
@@ -2050,7 +2105,8 @@ static int image_rotate90(lua_State* L) {
 
 static int image_rotate180(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             write_pixel(dst, src->width - x - 1, src->height - y - 1, read_pixel(src, x, y));
@@ -2061,7 +2117,8 @@ static int image_rotate180(lua_State* L) {
 
 static int image_rotate270(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->height, src->width, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->height, src->width, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             write_pixel(dst, y, src->width - x - 1, read_pixel(src, x, y));
@@ -2138,7 +2195,7 @@ static int image_blit(lua_State* L) {
         dstY = luaL_checkinteger(L, 5);
         optionsArg = 6;
     } else {
-        srcRect = {0, 0, (int)src->width, (int)src->height};
+        srcRect = { 0, 0, (int)src->width, (int)src->height };
         dstX = luaL_checkinteger(L, 3);
         dstY = luaL_checkinteger(L, 4);
         optionsArg = 5;
@@ -2152,7 +2209,8 @@ static int image_blit(lua_State* L) {
         for (int x = 0; x < srcRect.width; x++) {
             int tx = dstX + x;
             if (tx < 0 || tx >= (int)dst->width) continue;
-            write_blended_pixel(dst, tx, ty, read_pixel(src, srcRect.x + x, srcRect.y + y), opts, x, y);
+            write_blended_pixel(dst, tx, ty, read_pixel(src, srcRect.x + x, srcRect.y + y), opts, x,
+                                y);
         }
     }
     return 0;
@@ -2172,11 +2230,13 @@ static int image_draw(lua_State* L) {
     for (int y = 0; y < dstRect.height; y++) {
         int ty = dstRect.y + y;
         if (ty < 0 || ty >= (int)dst->height) continue;
-        int sy = srcRect.y + std::min(srcRect.height - 1, (int)((int64_t)y * srcRect.height / dstRect.height));
+        int sy = srcRect.y +
+                 std::min(srcRect.height - 1, (int)((int64_t)y * srcRect.height / dstRect.height));
         for (int x = 0; x < dstRect.width; x++) {
             int tx = dstRect.x + x;
             if (tx < 0 || tx >= (int)dst->width) continue;
-            int sx = srcRect.x + std::min(srcRect.width - 1, (int)((int64_t)x * srcRect.width / dstRect.width));
+            int sx = srcRect.x +
+                     std::min(srcRect.width - 1, (int)((int64_t)x * srcRect.width / dstRect.width));
             write_blended_pixel(dst, tx, ty, read_pixel(src, sx, sy), opts, x, y);
         }
     }
@@ -2232,11 +2292,13 @@ static int image_line(lua_State* L) {
 
 static int image_invert(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
-            write_pixel(dst, x, y, {(uint8_t)(255 - c.r), (uint8_t)(255 - c.g), (uint8_t)(255 - c.b), c.a});
+            write_pixel(dst, x, y,
+                        { (uint8_t)(255 - c.r), (uint8_t)(255 - c.g), (uint8_t)(255 - c.b), c.a });
         }
     }
     return 1;
@@ -2244,12 +2306,13 @@ static int image_invert(lua_State* L) {
 
 static int image_grayscale(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
             uint8_t v = luminance(c);
-            write_pixel(dst, x, y, {v, v, v, c.a});
+            write_pixel(dst, x, y, { v, v, v, c.a });
         }
     }
     return 1;
@@ -2259,7 +2322,8 @@ static int image_opacity(lua_State* L) {
     LuaImage* src = check_image(L, 1);
     double amount = luaL_checknumber(L, 2);
     amount = std::clamp(amount, 0.0, 1.0);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
@@ -2274,7 +2338,8 @@ static int image_brightness(lua_State* L) {
     LuaImage* src = check_image(L, 1);
     double amount = luaL_checknumber(L, 2);
     int delta = (int)std::round(amount * 255.0);
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
@@ -2291,7 +2356,8 @@ static int image_contrast(lua_State* L) {
     LuaImage* src = check_image(L, 1);
     double amount = luaL_checknumber(L, 2);
     double factor = 1.0 + amount;
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
@@ -2309,12 +2375,13 @@ static int image_threshold(lua_State* L) {
     int value = luaL_checkinteger(L, 2);
     value = std::clamp(value, 0, 255);
 
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
             uint8_t v = luminance(c) >= value ? 255 : 0;
-            write_pixel(dst, x, y, {v, v, v, c.a});
+            write_pixel(dst, x, y, { v, v, v, c.a });
         }
     }
     return 1;
@@ -2331,16 +2398,19 @@ static int image_colorMatrix(lua_State* L) {
         lua_pop(L, 1);
     }
 
-    LuaImage* dst = new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
+    LuaImage* dst =
+        new_owned_image(L, src->width, src->height, src->format, make_metadata_ref(L, "raw"));
     for (uint32_t y = 0; y < src->height; y++) {
         for (uint32_t x = 0; x < src->width; x++) {
             Color c = read_pixel(src, x, y);
-            double in[4] = {(double)c.r, (double)c.g, (double)c.b, (double)c.a};
+            double in[4] = { (double)c.r, (double)c.g, (double)c.b, (double)c.a };
             Color out = {
                 blend_channel(m[0] * in[0] + m[1] * in[1] + m[2] * in[2] + m[3] * in[3] + m[4]),
                 blend_channel(m[5] * in[0] + m[6] * in[1] + m[7] * in[2] + m[8] * in[3] + m[9]),
-                blend_channel(m[10] * in[0] + m[11] * in[1] + m[12] * in[2] + m[13] * in[3] + m[14]),
-                blend_channel(m[15] * in[0] + m[16] * in[1] + m[17] * in[2] + m[18] * in[3] + m[19]),
+                blend_channel(m[10] * in[0] + m[11] * in[1] + m[12] * in[2] + m[13] * in[3] +
+                              m[14]),
+                blend_channel(m[15] * in[0] + m[16] * in[1] + m[17] * in[2] + m[18] * in[3] +
+                              m[19]),
             };
             write_pixel(dst, x, y, out);
         }
@@ -2363,16 +2433,19 @@ static void image_as_format(LuaImage* src, PixelFormat format, std::vector<uint8
     }
 }
 
-static bool encode_webp_image(LuaImage* src, bool lossless, int quality, std::vector<uint8_t>& out) {
+static bool encode_webp_image(LuaImage* src, bool lossless, int quality,
+                              std::vector<uint8_t>& out) {
     std::vector<uint8_t> rgba;
     image_as_format(src, PixelFormat::Rgba8, rgba);
 
     uint8_t* encoded = nullptr;
     size_t encodedSize = 0;
     if (lossless) {
-        encodedSize = WebPEncodeLosslessRGBA(rgba.data(), (int)src->width, (int)src->height, (int)src->width * 4, &encoded);
+        encodedSize = WebPEncodeLosslessRGBA(rgba.data(), (int)src->width, (int)src->height,
+                                             (int)src->width * 4, &encoded);
     } else {
-        encodedSize = WebPEncodeRGBA(rgba.data(), (int)src->width, (int)src->height, (int)src->width * 4, (float)quality, &encoded);
+        encodedSize = WebPEncodeRGBA(rgba.data(), (int)src->width, (int)src->height,
+                                     (int)src->width * 4, (float)quality, &encoded);
     }
 
     if (encodedSize == 0 || !encoded) return false;
@@ -2390,12 +2463,15 @@ static bool encode_png_image(LuaImage* src, std::vector<uint8_t>& out) {
     png.format = png_format_for_image(src->format);
 
     png_alloc_size_t size = 0;
-    if (!png_image_write_to_memory(&png, nullptr, &size, 0, src->pixels, (png_int_32)src->stride, nullptr) || size == 0) {
+    if (!png_image_write_to_memory(&png, nullptr, &size, 0, src->pixels, (png_int_32)src->stride,
+                                   nullptr) ||
+        size == 0) {
         return false;
     }
 
     out.resize(size);
-    if (!png_image_write_to_memory(&png, out.data(), &size, 0, src->pixels, (png_int_32)src->stride, nullptr)) {
+    if (!png_image_write_to_memory(&png, out.data(), &size, 0, src->pixels, (png_int_32)src->stride,
+                                   nullptr)) {
         out.clear();
         return false;
     }
@@ -2404,7 +2480,8 @@ static bool encode_png_image(LuaImage* src, std::vector<uint8_t>& out) {
     return true;
 }
 
-static bool encode_jpeg_image(LuaImage* src, int quality, bool progressive, std::vector<uint8_t>& out, std::string& error) {
+static bool encode_jpeg_image(LuaImage* src, int quality, bool progressive,
+                              std::vector<uint8_t>& out, std::string& error) {
     std::vector<uint8_t> rgb;
     image_as_format(src, PixelFormat::Rgb8, rgb);
 
@@ -2441,7 +2518,8 @@ static std::string explicit_encode_format(lua_State* L, int idx) {
     }
 
     const char* format = luaL_checkstring(L, -1);
-    if (strcmp(format, "png") != 0 && strcmp(format, "jpeg") != 0 && strcmp(format, "jpg") != 0 && strcmp(format, "webp") != 0) {
+    if (strcmp(format, "png") != 0 && strcmp(format, "jpeg") != 0 && strcmp(format, "jpg") != 0 &&
+        strcmp(format, "webp") != 0) {
         luaL_error(L, "unsupported image format '%s'", format);
     }
 
@@ -2537,7 +2615,10 @@ static int image_save(lua_State* L) {
         write_file_bytes(L, path, webp);
         return 0;
     } else {
-        luaL_error(L, "unsupported image format for path '%s'; pass { format = \"png\" | \"jpeg\" | \"webp\" } to override", path.c_str());
+        luaL_error(L,
+                   "unsupported image format for path '%s'; pass { format = \"png\" | \"jpeg\" | "
+                   "\"webp\" } to override",
+                   path.c_str());
     }
 
     if (!ok) luaL_error(L, "failed to save %s", path.c_str());

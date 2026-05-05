@@ -640,10 +640,26 @@ suite:test("effects produce expected pixels", function()
 	expectColor(threshold:getPixel(0, 0), 255, 255, 255, 128)
 
 	local matrix = img:colorMatrix({
-		0, 0, 0, 0, 10,
-		0, 0, 0, 0, 20,
-		0, 0, 0, 0, 30,
-		0, 0, 0, 1, 0,
+		0,
+		0,
+		0,
+		0,
+		10,
+		0,
+		0,
+		0,
+		0,
+		20,
+		0,
+		0,
+		0,
+		0,
+		30,
+		0,
+		0,
+		0,
+		1,
+		0,
 	})
 	expectColor(matrix:getPixel(0, 0), 10, 20, 30, 128)
 
