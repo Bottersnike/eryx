@@ -719,10 +719,10 @@ if(ERYX_EMBED_MODULES)
         COMMAND ${CMAKE_COMMAND}
             -DMANIFEST=${EMBED_SOURCES_MANIFEST}
             -DOUTPUT=${EMBED_GEN_DIR}/embedded_sources.cpp
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateEmbeddedSources.cmake"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/GenerateEmbeddedSources.cmake"
         DEPENDS
             "${EMBED_SOURCES_MANIFEST}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateEmbeddedSources.cmake"
+            "${CMAKE_CURRENT_SOURCE_DIR}/GenerateEmbeddedSources.cmake"
             ${_embedded_script_sources}
         COMMENT "Generating embedded Luau source table"
         VERBATIM
