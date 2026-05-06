@@ -25,6 +25,7 @@ local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")
 local buildWarnings = require("@self/warnings")
 local assets = require("@self/assets")
+local resources = require("@self/resources")
 
 local log = logging.getLogger("eryxdoc.build")
 
@@ -378,7 +379,8 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local THEME_DIR = cfg.theme or (fs.path.join(_DIR, "/theme"))
+	local isDefaultTheme = cfg.theme == nil
+	local THEME_DIR = cfg.theme or resources.getDefaultThemePath()
 	local STATIC_DIR = cfg.static
 	local STATIC_MOUNT = normalizeMountPath(cfg.staticMount or "static")
 	local NO_MODULES = cfg.noModules or false
@@ -432,7 +434,10 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	end
 
 	-- Copy styles
-	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(fs.openSync(STYLE_PATH):readSync())
+	local styleContent = if isDefaultTheme
+		then resources.readDefaultThemeFile("style.css")
+		else fs.openSync(STYLE_PATH):readSync()
+	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(styleContent)
 
 	-- Collect content
 	local allModules = if NO_MODULES or not MODULES_DIR
@@ -490,6 +495,12 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
 		folderOrder = folderOrder,
+		templateReader = if isDefaultTheme
+			then function(path: string): string
+				local relative = path:match("/theme/(.+)$") or path
+				return resources.readDefaultThemeFile(relative)
+			end
+			else nil,
 		assetResolver = function(article: Article.Article, url: string): string
 			assets.copyArticleAsset(ARTICLES_DIR, article.sourceFilename, OUTPUT_DIR, url)
 			return assets.rewriteArticleAssetUrl(ARTICLES_DIR, article.sourceFilename, SITE_ROOT, url)
@@ -647,7 +658,11 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 end
 
 function eryxdoc.getDefaultTheme(): string
-	return fs.path.join(_DIR, "theme")
+	return resources.getDefaultThemePath()
+end
+
+function eryxdoc.copyDefaultTheme(outputDir: string): { fileCount: number, output: string }
+	return resources.copyDefaultTheme(outputDir)
 end
 
 return eryxdoc

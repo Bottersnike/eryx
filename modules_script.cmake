@@ -177,6 +177,7 @@ add_luau_script_module(eryxdoc/
     src/modules/eryxdoc/_devServer.luau
     src/modules/eryxdoc/init.luau
     src/modules/eryxdoc/assets.luau
+    src/modules/eryxdoc/resources.luau
     src/modules/eryxdoc/warnings.luau
 )
 

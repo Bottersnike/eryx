@@ -412,56 +412,11 @@ static std::vector<LocatedModule> eryx_resolve_modules_impl(lua_State* L, Requir
         // Strip trailing slashes (e.g. "@self/" produces empty modulePath)
         while (!modulePath.empty() && modulePath.back() == '/') modulePath.pop_back();
 
-        // Config aliases take priority over all built-in alias behavior
-        fs::path configSearchStart;
-        std::string vfsConfigDir;
-        if (!ctx.callerDir.empty()) {
-            configSearchStart = ctx.callerDir;
-        } else if (ctx.isVFS) {
-            vfsConfigDir = ctx.vfsCallerDir;
-        } else {
-            configSearchStart = ctx.root;
-        }
-        auto cfg = eryx_locate_config(L, configSearchStart, std::nullopt, vfsConfigDir);
-        auto it = cfg->aliases.find(alias);
-
-        if (it != cfg->aliases.end()) {
-            // Explicit config alias - always wins
-            if (std::find(aliasStack.begin(), aliasStack.end(), alias) != aliasStack.end()) {
-                std::string cycle = format_alias_cycle(aliasStack, alias);
-                luaL_error(L, "Alias cycle detected while resolving %s: %s", path.c_str(),
-                           cycle.c_str());
-            }
-
-            if (!it->second.path.empty() && it->second.path[0] == '@') {
-                aliasStack.push_back(alias);
-                std::string expandedPath = join_require_path(it->second.path, modulePath);
-                auto modules = eryx_resolve_modules_impl(L, ctx, expandedPath, aliasStack);
-                aliasStack.pop_back();
-                return modules;
-            }
-
-            fs::path aliasPath = fs::path(it->second.qualified);
-            fs::path candidate = modulePath.empty() ? aliasPath : aliasPath / fs::path(modulePath);
-            resolvedPath = weakly_canonical_or_absolute(candidate);
-        }
-        // @self from a VFS module - try VFS first, fall through to filesystem
-        else if (ctx.isVFS && alias == "self") {
-            std::string key;
-            if (modulePath.empty())
-                key = ctx.vfsSelfDir;
-            else if (ctx.vfsSelfDir.empty())
-                key = modulePath;
-            else
-                key = ctx.vfsSelfDir + "/" + modulePath;
-
-            locatedModules = resolver_vfs().lookup_bundled_vfs(key);
-            if (!locatedModules.empty()) return locatedModules;
-            // Fall through to filesystem @self resolution
-            resolvedPath = weakly_canonical_or_absolute(ctx.root / fs::path(key));
-        }
-        // @eryx - try embedded modules first, then fall back to filesystem
-        else if (alias == "eryx") {
+            // In embedded/hybrid builds, @eryx is the embedded runtime namespace even if
+            // project config defines an alias with the same name. Alias chains that expand
+            // to @eryx also arrive here through recursive resolution.
+#ifdef ERYX_EMBED
+        if (alias == "eryx") {
             auto module = eryx_resolve_embedded(modulePath);
             if (module) {
                 locatedModules.push_back(*module);
@@ -470,28 +425,92 @@ static std::vector<LocatedModule> eryx_resolve_modules_impl(lua_State* L, Requir
             // Fall back to [exe dir]/modules
             resolvedPath =
                 weakly_canonical_or_absolute(getExecutableDir() / "modules" / fs::path(modulePath));
-        }
-        // @self from an embedded module - try embedded first, fall through to filesystem
-        else if (ctx.isEmbedded && alias == "self") {
-            std::string key;
-            if (modulePath.empty())
-                key = ctx.embeddedSelfDir;
-            else if (ctx.embeddedSelfDir.empty())
-                key = modulePath;
-            else
-                key = ctx.embeddedSelfDir + "/" + modulePath;
-            auto module = eryx_resolve_embedded(key);
-            if (module) {
-                locatedModules.push_back(*module);
-                return locatedModules;
-            }
-            // Fall through to filesystem @self resolution
-            resolvedPath = weakly_canonical_or_absolute(ctx.selfDir / fs::path(modulePath));
-        } else if (alias == "self") {
-            resolvedPath = weakly_canonical_or_absolute(ctx.selfDir / fs::path(modulePath));
         } else {
-            luaL_error(L, "Require %s used undefined alias '@%s'", path.c_str(), alias.c_str());
+#endif
+            // Config aliases take priority over built-in alias behavior in normal builds.
+            fs::path configSearchStart;
+            std::string vfsConfigDir;
+            if (!ctx.callerDir.empty()) {
+                configSearchStart = ctx.callerDir;
+            } else if (ctx.isVFS) {
+                vfsConfigDir = ctx.vfsCallerDir;
+            } else {
+                configSearchStart = ctx.root;
+            }
+            auto cfg = eryx_locate_config(L, configSearchStart, std::nullopt, vfsConfigDir);
+            auto it = cfg->aliases.find(alias);
+
+            if (it != cfg->aliases.end()) {
+                // Explicit config alias - always wins
+                if (std::find(aliasStack.begin(), aliasStack.end(), alias) != aliasStack.end()) {
+                    std::string cycle = format_alias_cycle(aliasStack, alias);
+                    luaL_error(L, "Alias cycle detected while resolving %s: %s", path.c_str(),
+                               cycle.c_str());
+                }
+
+                if (!it->second.path.empty() && it->second.path[0] == '@') {
+                    aliasStack.push_back(alias);
+                    std::string expandedPath = join_require_path(it->second.path, modulePath);
+                    auto modules = eryx_resolve_modules_impl(L, ctx, expandedPath, aliasStack);
+                    aliasStack.pop_back();
+                    return modules;
+                }
+
+                fs::path aliasPath = fs::path(it->second.qualified);
+                fs::path candidate =
+                    modulePath.empty() ? aliasPath : aliasPath / fs::path(modulePath);
+                resolvedPath = weakly_canonical_or_absolute(candidate);
+            }
+            // @self from a VFS module - try VFS first, fall through to filesystem
+            else if (ctx.isVFS && alias == "self") {
+                std::string key;
+                if (modulePath.empty())
+                    key = ctx.vfsSelfDir;
+                else if (ctx.vfsSelfDir.empty())
+                    key = modulePath;
+                else
+                    key = ctx.vfsSelfDir + "/" + modulePath;
+
+                locatedModules = resolver_vfs().lookup_bundled_vfs(key);
+                if (!locatedModules.empty()) return locatedModules;
+                // Fall through to filesystem @self resolution
+                resolvedPath = weakly_canonical_or_absolute(ctx.root / fs::path(key));
+            }
+            // @eryx - try embedded modules first, then fall back to filesystem
+            else if (alias == "eryx") {
+                auto module = eryx_resolve_embedded(modulePath);
+                if (module) {
+                    locatedModules.push_back(*module);
+                    return locatedModules;
+                }
+                // Fall back to [exe dir]/modules
+                resolvedPath = weakly_canonical_or_absolute(getExecutableDir() / "modules" /
+                                                            fs::path(modulePath));
+            }
+            // @self from an embedded module - try embedded first, fall through to filesystem
+            else if (ctx.isEmbedded && alias == "self") {
+                std::string key;
+                if (modulePath.empty())
+                    key = ctx.embeddedSelfDir;
+                else if (ctx.embeddedSelfDir.empty())
+                    key = modulePath;
+                else
+                    key = ctx.embeddedSelfDir + "/" + modulePath;
+                auto module = eryx_resolve_embedded(key);
+                if (module) {
+                    locatedModules.push_back(*module);
+                    return locatedModules;
+                }
+                // Fall through to filesystem @self resolution
+                resolvedPath = weakly_canonical_or_absolute(ctx.selfDir / fs::path(modulePath));
+            } else if (alias == "self") {
+                resolvedPath = weakly_canonical_or_absolute(ctx.selfDir / fs::path(modulePath));
+            } else {
+                luaL_error(L, "Require %s used undefined alias '@%s'", path.c_str(), alias.c_str());
+            }
+#ifdef ERYX_EMBED
         }
+#endif
 
     } else if (!(path.starts_with("./") || path.starts_with("../"))) {
         luaL_error(L, "Require path must always start with @, ./ or ../");

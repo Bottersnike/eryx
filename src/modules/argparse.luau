@@ -22,6 +22,7 @@
 
 local os = require("@eryx/os")
 local fs = require("@eryx/fs")
+local stdio = require("@eryx/stdio")
 local argparse = {}
 
 local Parser = {}
@@ -1077,10 +1078,29 @@ end
 	@return { [string]: any } -- A table mapping argument names to their parsed values.
 	@error Throws on unknown flags/options, missing required arguments, or type coercion failures.
 ]=]
-function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
+function Parser.parse(self: Parser, arguments: { string }?, exitOnError: boolean?): { [string]: any }
 	local args: { string } = arguments or os.cliargs()
+	local shouldExitOnError = if exitOnError ~= nil then exitOnError else arguments == nil
 	if maybeEmitCompletionCandidates(self, args) then
 		return {}
+	end
+
+	local function fail(message: any)
+		local text = tostring(message)
+		if shouldExitOnError then
+			stdio.writeerr(`{self.name}: {text}\n\n{self:generateHelp()}\n`)
+			os.exit(2)
+		end
+		error(text)
+	end
+
+	local function coerceOrFail(value: string, expectedType: "string" | "number"): string | number
+		local ok, coerced = pcall(coerce, value, expectedType)
+		if ok then
+			return coerced
+		end
+		fail(coerced)
+		return value
 	end
 
 	local result: { [string]: any } = {}
@@ -1136,18 +1156,18 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 
 		if inlineValue ~= nil then
 			if arity ~= 1 then
-				error(`Option '--{opt.longName}' does not support inline values when arity is greater than 1`)
+				fail(`Option '--{opt.longName}' does not support inline values when arity is greater than 1`)
 			end
-			appendOptionValue(opt, coerce(inlineValue, opt.type))
+			appendOptionValue(opt, coerceOrFail(inlineValue, opt.type))
 			return currentIndex
 		end
 
 		for _ = 1, arity do
 			currentIndex += 1
 			if currentIndex > #args then
-				error(`Option '--{opt.longName}' expects {arity} value(s)`)
+				fail(`Option '--{opt.longName}' expects {arity} value(s)`)
 			end
-			table.insert(values, coerce(args[currentIndex], opt.type))
+			table.insert(values, coerceOrFail(args[currentIndex], opt.type))
 		end
 
 		if arity == 1 then
@@ -1175,7 +1195,7 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 				local value = string.sub(body, eqPos + 1)
 				local opt = findOptionByLong(self, key)
 				if not opt then
-					error(`Unknown option '--{key}'`)
+					fail(`Unknown option '--{key}'`)
 				end
 				i = consumeOptionValues(opt, value, i)
 			else
@@ -1187,7 +1207,7 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 				else
 					local opt = findOptionByLong(self, body)
 					if not opt then
-						error(`Unknown flag or option '--{body}'`)
+						fail(`Unknown flag or option '--{body}'`)
 					end
 					i = consumeOptionValues(opt, nil, i)
 				end
@@ -1211,7 +1231,7 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 					i = consumeOptionValues(opt, if #rest > 0 then rest else nil, i)
 					break -- rest was consumed
 				else
-					error(`Unknown flag or option '-{ch}'`)
+					fail(`Unknown flag or option '-{ch}'`)
 				end
 				j += 1
 			end
@@ -1225,7 +1245,7 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 			for idx = positionalIndex, #self.positionals do
 				local pos = self.positionals[idx]
 				if not pos.optional then
-					error(`Missing required positional argument '{pos.name}' (before subcommand '{arg}')`)
+					fail(`Missing required positional argument '{pos.name}' (before subcommand '{arg}')`)
 				end
 			end
 
@@ -1234,14 +1254,14 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 			for k = i + 1, #args do
 				table.insert(remaining, args[k])
 			end
-			local subResult = sub:parse(remaining)
+			local subResult = sub:parse(remaining, shouldExitOnError)
 			result[arg] = subResult
 			return result
 
 		-- Positional argument
 		else
 			if positionalIndex > #self.positionals then
-				error(`Unexpected argument '{arg}'`)
+				fail(`Unexpected argument '{arg}'`)
 			end
 			local pos = self.positionals[positionalIndex]
 			if pos.variadic then
@@ -1250,9 +1270,9 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 					values = {}
 					result[pos.name] = values
 				end
-				table.insert(values, coerce(arg, pos.type))
+				table.insert(values, coerceOrFail(arg, pos.type))
 			else
-				result[pos.name] = coerce(arg, pos.type)
+				result[pos.name] = coerceOrFail(arg, pos.type)
 				positionalIndex += 1
 			end
 		end
@@ -1275,14 +1295,14 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 		local value = result[pos.name]
 		local missing = value == nil or (pos.variadic and #value == 0)
 		if not pos.optional and missing then
-			error(`Missing required positional argument '{pos.name}'`)
+			fail(`Missing required positional argument '{pos.name}'`)
 		end
 	end
 
 	-- Validate required options were provided
 	for _, opt in self.options do
 		if not opt.optional and result[opt.longName] == nil then
-			error(`Missing required option '--{opt.longName}'`)
+			fail(`Missing required option '--{opt.longName}'`)
 		end
 	end
 
@@ -1308,7 +1328,7 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 				end
 			end
 			if not known then
-				error(`Unknown flag/option '{name}' in mutually exclusive group`)
+				fail(`Unknown flag/option '{name}' in mutually exclusive group`)
 			end
 
 			if provided[name] then
@@ -1318,10 +1338,10 @@ function Parser.parse(self: Parser, arguments: { string }?): { [string]: any }
 		end
 
 		if seen > 1 then
-			error(`Arguments {table.concat(seenNames, ", ")} are mutually exclusive`)
+			fail(`Arguments {table.concat(seenNames, ", ")} are mutually exclusive`)
 		end
 		if group.required and seen == 0 then
-			error(`One of {table.concat(group.names, ", ")} is required`)
+			fail(`One of {table.concat(group.names, ", ")} is required`)
 		end
 	end
 

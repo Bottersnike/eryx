@@ -185,6 +185,9 @@ add_luau_module(fs src/modules/fs.cpp src/modules/fs.luau
 )
 add_luau_module(_native/_path src/modules/_path_native.cpp src/modules/_native/_path.luau)
 add_luau_module(vfs src/modules/vfs.cpp src/modules/vfs.luau)
+add_luau_module(_embedded src/modules/_embedded.cpp src/modules/_embedded.luau
+    ENTRYPOINT luauopen_embedded
+)
 add_luau_module(_fs_watch src/modules/_fs_watch.cpp src/modules/_fs_watch.luau
     EXTRA_LIBS uv_a
 )

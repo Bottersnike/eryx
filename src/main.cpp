@@ -633,6 +633,21 @@ static std::filesystem::path getScriptsDir() {
     return getExecutablePath().parent_path() / "scripts";
 }
 
+static const EmbeddedScriptModule* find_embedded_builtin_script(const std::string& name) {
+#ifdef ERYX_EMBED
+    std::string key = "scripts/" + name;
+    auto* scripts = eryx_get_embedded_script_modules();
+    if (scripts) {
+        for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
+            if (key == m->modulePath) return m;
+        }
+    }
+#else
+    (void)name;
+#endif
+    return nullptr;
+}
+
 static std::string shell_single_quote(const std::string& value) {
     std::string out;
     out.reserve(value.size() + 8);
@@ -687,15 +702,29 @@ static void completion_debug_log(const std::string& message) {
 static std::vector<std::string> list_builtin_scripts() {
     namespace fs = std::filesystem;
     std::vector<std::string> names;
+
+#ifdef ERYX_EMBED
+    auto* scripts = eryx_get_embedded_script_modules();
+    if (scripts) {
+        constexpr const char* prefix = "scripts/";
+        constexpr size_t prefixLen = 8;
+        for (const EmbeddedScriptModule* m = scripts; m->modulePath; ++m) {
+            if (strncmp(m->modulePath, prefix, prefixLen) == 0) {
+                names.emplace_back(m->modulePath + prefixLen);
+            }
+        }
+    }
+#endif
+
     fs::path scriptsDir = getScriptsDir();
 
-    if (!fs::exists(scriptsDir) || !fs::is_directory(scriptsDir)) return names;
-
-    for (const auto& entry : fs::directory_iterator(scriptsDir)) {
-        if (!entry.is_regular_file()) continue;
-        fs::path path = entry.path();
-        if (path.extension() == ".luau") {
-            names.push_back(path.stem().string());
+    if (fs::exists(scriptsDir) && fs::is_directory(scriptsDir)) {
+        for (const auto& entry : fs::directory_iterator(scriptsDir)) {
+            if (!entry.is_regular_file()) continue;
+            fs::path path = entry.path();
+            if (path.extension() == ".luau") {
+                names.push_back(path.stem().string());
+            }
         }
     }
 
@@ -747,6 +776,20 @@ struct ScopedEnvVar {
     }
 };
 
+static int main_complete_script_source(const std::string& displayName, const std::string& source,
+                                       int cliOffset, const char* shell) {
+    if (source.find("@eryx/argparse") == std::string::npos) {
+        completion_debug_log("main_complete_script: script does not use @eryx/argparse");
+        return 0;
+    }
+    completion_debug_log("main_complete_script: invoking script in completion mode");
+    ScopedEnvVar completionMode("ERYX_ARGPARSE_COMPLETE", "1");
+    ScopedEnvVar completionShell("ERYX_ARGPARSE_COMPLETE_SHELL", shell ? shell : "");
+
+    eryx_set_cliargs_offset(cliOffset);
+    return main_script(displayName.c_str(), source);
+}
+
 static int main_complete_script(const std::filesystem::path& scriptPath, int cliOffset,
                                 const char* shell) {
     completion_debug_log("main_complete_script: path=" + scriptPath.string() + " cliOffset=" +
@@ -760,16 +803,7 @@ static int main_complete_script(const std::filesystem::path& scriptPath, int cli
     }
 
     std::string source((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    if (source.find("@eryx/argparse") == std::string::npos) {
-        completion_debug_log("main_complete_script: script does not use @eryx/argparse");
-        return 0;
-    }
-    completion_debug_log("main_complete_script: invoking script in completion mode");
-    ScopedEnvVar completionMode("ERYX_ARGPARSE_COMPLETE", "1");
-    ScopedEnvVar completionShell("ERYX_ARGPARSE_COMPLETE_SHELL", shell ? shell : "");
-
-    eryx_set_cliargs_offset(cliOffset);
-    return main_script(scriptPath.string().c_str(), source);
+    return main_complete_script_source(scriptPath.string(), source, cliOffset, shell);
 }
 
 static std::string render_completion_script(const std::string& programName,
@@ -971,6 +1005,14 @@ static int main_complete(int argc, const char* argv[]) {
     }
 
     if (words[0].find('.') == std::string::npos && !fs::exists(words[0])) {
+        if (const EmbeddedScriptModule* builtin = find_embedded_builtin_script(words[0])) {
+            std::string displayName = "@eryx/scripts/" + words[0];
+            completion_debug_log("main_complete: dispatching to embedded builtin script " +
+                                 displayName);
+            return main_complete_script_source(displayName, builtin->source, wordsStart + 1,
+                                               shell.c_str());
+        }
+
         fs::path builtinPath = getScriptsDir() / (words[0] + ".luau");
         if (fs::exists(builtinPath)) {
             completion_debug_log("main_complete: dispatching to builtin script " +
@@ -995,6 +1037,16 @@ static int main_complete(int argc, const char* argv[]) {
 // Returns -1 if the script doesn't exist (caller should fall through).
 int main_builtin_script(int argc, const char* argv[], const char* name) {
     namespace fs = std::filesystem;
+    (void)argc;
+    (void)argv;
+
+    if (const EmbeddedScriptModule* builtin = find_embedded_builtin_script(name)) {
+        std::string displayName = std::string("@eryx/scripts/") + name;
+        // "eryx <command> [args...]" -> user args start at argv[2]
+        eryx_set_cliargs_offset(2);
+        return main_script(displayName.c_str(), builtin->source);
+    }
+
     fs::path scriptPath = getScriptsDir() / (std::string(name) + ".luau");
 
     if (!fs::exists(scriptPath)) return -1;

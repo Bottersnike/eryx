@@ -174,6 +174,7 @@ function Renderer.new(
 		folderTitles: { [string]: string }?,
 		folderOrder: { [string]: number }?,
 		assetResolver: ((article: Article.Article, url: string) -> string)?,
+		templateReader: ((path: string) -> string)?,
 	}?
 ): Renderer
 	local siteRoot = (if options then options.siteRoot else nil) or "/"
@@ -181,6 +182,10 @@ function Renderer.new(
 		siteRoot = siteRoot .. "/"
 	end
 	local exportMode: "flat" | "directory" = (if options then options.exportMode else nil) or "flat"
+	local readTemplate = (if options then options.templateReader else nil)
+		or function(path: string): string
+			return fs.openSync(path):readSync()
+		end
 
 	local this = {
 		siteTitle = siteTitle,
@@ -208,11 +213,12 @@ function Renderer.new(
 		folderOrder = if options then options.folderOrder else nil,
 		assetResolver = if options then options.assetResolver else nil,
 		templates = {
-			article = template.compile(fs.openSync(templates.article):readSync(), templates.article),
-			api = template.compile(fs.openSync(templates.api):readSync(), templates.api),
-			index = template.compile(fs.openSync(templates.index):readSync(), templates.index),
-			notFound = if templates.notFound and fs.isFile(templates.notFound)
-				then template.compile(fs.openSync(templates.notFound):readSync(), templates.notFound)
+			article = template.compile(readTemplate(templates.article), templates.article),
+			api = template.compile(readTemplate(templates.api), templates.api),
+			index = template.compile(readTemplate(templates.index), templates.index),
+			notFound = if templates.notFound
+					and (if options and options.templateReader then true else fs.isFile(templates.notFound))
+				then template.compile(readTemplate(templates.notFound), templates.notFound)
 				else nil,
 		},
 
