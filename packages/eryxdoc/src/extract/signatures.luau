@@ -38,6 +38,23 @@ local function normalizeGenerics(generics: { any }?): { string }
 	return out
 end
 
+local function normalizeTypeList(listLike: any): ({ any }, any)
+	if type(listLike) ~= "table" then
+		return {}, nil
+	end
+	if type(listLike.types) == "table" then
+		return listLike.types, listLike.tail
+	end
+	return listLike, nil
+end
+
+local function unwrapTypeOrPack(value: any): any
+	if type(value) == "table" and value.kind and value.value ~= nil then
+		return value.value
+	end
+	return value
+end
+
 -- Extract raw signature data from an ExprFunction AST node.
 local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	local params: { string } = {}
@@ -108,6 +125,102 @@ local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	end
 
 	-- Generics (generics/genericPacks fields on ExprFunction)
+	local generics: { string }? = nil
+	local funcAny = funcNode :: any
+	local hasGenerics = funcAny.generics and #funcAny.generics > 0
+	local hasGenericPacks = funcAny.genericPacks and #funcAny.genericPacks > 0
+	if hasGenerics or hasGenericPacks then
+		generics = {}
+		if hasGenerics then
+			for _, g in funcAny.generics do
+				table.insert(generics :: { string }, genericName(g))
+			end
+		end
+		if hasGenericPacks then
+			for _, gp in funcAny.genericPacks do
+				table.insert(generics :: { string }, genericName(gp) .. "...")
+			end
+		end
+	end
+
+	return {
+		params = params,
+		paramNames = paramNames,
+		paramTypeParts = paramTypeParts,
+		paramTypeNodes = paramTypeNodes,
+		retStr = retStr,
+		retNode = retNode,
+		retParts = retParts,
+		isMethod = isMethod,
+		selfType = selfType,
+		generics = generics,
+	}
+end
+
+local function extractTypeFuncSig(funcNode: luau.TypeFunction): RawFuncSig
+	local params: { string } = {}
+	local paramNames: { string? } = {}
+	local paramTypeParts: { { SignaturePart }? } = {}
+	local paramTypeNodes: { (luau.AstType | luau.AstTypePack)? } = {}
+	local isMethod = false
+	local selfType: string? = nil
+
+	local argTypes, argTail = normalizeTypeList(funcNode.argTypes)
+	local argNames = funcNode.argNames or ({} :: { any })
+	local startIdx = 1
+	if #argNames > 0 then
+		local first = argNames[1]
+		local firstName = if type(first) == "table" then first.name else first
+		if firstName == "self" then
+			isMethod = true
+			if argTypes[1] then
+				selfType = td.describeType(argTypes[1])
+			end
+			startIdx = 2
+		end
+	end
+
+	for i = startIdx, #argTypes do
+		local argType = argTypes[i]
+		local argName = if argNames[i]
+			then (if type(argNames[i]) == "table" then argNames[i].name else argNames[i])
+			else nil
+		if argName then
+			table.insert(params, argName .. ": " .. td.describeType(argType))
+			table.insert(paramNames, argName)
+		else
+			table.insert(params, td.describeType(argType))
+			table.insert(paramNames, nil)
+		end
+		table.insert(paramTypeParts, td.describeTypeParts(argType))
+		table.insert(paramTypeNodes, argType)
+	end
+
+	if argTail then
+		local tailNode = unwrapTypeOrPack(argTail)
+		if tailNode and tailNode.type == "TypePackVariadic" then
+			local variadic = tailNode :: luau.TypePackVariadic
+			table.insert(params, "...: " .. td.describeType(variadic.variadicType))
+			table.insert(paramNames, "...")
+			table.insert(paramTypeParts, td.describeTypeParts(variadic.variadicType))
+			table.insert(paramTypeNodes, variadic.variadicType)
+		else
+			table.insert(params, "...")
+			table.insert(paramNames, "...")
+			table.insert(paramTypeParts, if tailNode then td.describeTypeParts(tailNode) else nil)
+			table.insert(paramTypeNodes, tailNode)
+		end
+	end
+
+	local retStr: string? = nil
+	local retNode: (luau.AstType | luau.AstTypePack)? = nil
+	local retParts: { SignaturePart }? = nil
+	if funcNode.returnTypes then
+		retParts = td.describeTypeParts(funcNode.returnTypes)
+		retStr = partsToString(retParts)
+		retNode = funcNode.returnTypes
+	end
+
 	local generics: { string }? = nil
 	local funcAny = funcNode :: any
 	local hasGenerics = funcAny.generics and #funcAny.generics > 0
@@ -445,4 +558,5 @@ return {
 	buildMeta = buildMeta,
 	buildFull = buildFull,
 	applySignature = applySignature,
+	extractTypeFuncSig = extractTypeFuncSig,
 }

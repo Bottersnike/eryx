@@ -148,7 +148,7 @@ static void print_table(lua_State* L, int index, int visited) {
         if (!first) printf(", ");
         first = 0;
 
-        if (lua_isstring(L, -2)) {
+        if (lua_type(L, -2) == LUA_TSTRING) {
             // Check if -2 is a name string
             const char* key = lua_tostring(L, -2);
             if (is_legal_name(key)) {

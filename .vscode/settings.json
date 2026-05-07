@@ -8,7 +8,8 @@
     "cSpell.words": ["eryx"],
     "search.useIgnoreFiles": false,
     "files.exclude": {
-        ".cache/**": true
+        ".cache/**": true,
+        "build*/**": true
     },
     "luau-lsp.inlayHints.typeHintMaxLength": 500,
     "luau-lsp.fflags": {

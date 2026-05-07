@@ -37,7 +37,7 @@ end
 
 local function needsMaterialization(plan: types.InstallPlan): boolean
 	for _, node in plan.nodes do
-		if node.requirement.type ~= "path" then
+		if node.requirement.type ~= "path" and node.requirement.type ~= "workspace" then
 			return true
 		end
 	end
@@ -200,15 +200,22 @@ local function materializeNode(
 	installNames: { [string]: string }
 )
 	local r = node.requirement
-	local installName = installNames[node.id]
-	local packagesDir = util.ensurePackagesDir(root)
-	local dest = fs.path.join(packagesDir, installName)
 
 	if r.type == "path" then
 		-- Path deps are not copied. They point at an existing folder.
 		-- Do not mutate them by writing .luaurc.
 		return
 	end
+
+	if r.type == "workspace" then
+		local aliases = layout.computeAliases(plan, node.dependencies, installNames, false)
+		installAliases(r.path, aliases, nil, false)
+		return
+	end
+
+	local installName = installNames[node.id]
+	local packagesDir = util.ensurePackagesDir(root)
+	local dest = fs.path.join(packagesDir, installName)
 
 	ensureEmptyDir(dest)
 
@@ -238,7 +245,7 @@ function execution.execute(root: string, plan: types.InstallPlan, previousLock: 
 
 	for _, node in plan.nodes do
 		materializeNode(plan, root, node, installNames)
-		if node.requirement.type ~= "path" then
+		if node.requirement.type ~= "path" and node.requirement.type ~= "workspace" then
 			local installName = installNames[node.id]
 			if installName then
 				installDirs[installName] = true

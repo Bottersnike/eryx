@@ -1,9 +1,9 @@
 local fs = require("@eryx/fs")
 local template = require("@eryx/template")
 local sidebar = require("./sidebar")
-local markdown = require("@eryx/markdown")
+local markdown = require("@markdown")
 
-local wikilinkRuleBuilder = require("@eryx/markdown/extensions/wikilink")
+local wikilinkRuleBuilder = require("@markdown/extensions/wikilink")
 
 local highlight = require("../parse/highlight")
 local modules = require("../content/modules")

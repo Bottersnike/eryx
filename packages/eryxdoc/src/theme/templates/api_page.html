@@ -39,6 +39,23 @@
 {% end %}
 {% end %}
 
+{% macro renderOverloads(item) %}
+{% if item.overloads and item.overloads | length > 0 then %}
+    {% for i, overload in item.overloads do %}
+        {% if overload.signatureParts then %}
+        <div class="signature signature-linked">{{ overload.signatureParts | signatureHtml }}</div>
+        {% elseif overload.signatureFull then %}
+        <div class="signature">{{ overload.signatureFull | highlightSig }}</div>
+        {% else %}
+        <div class="signature">{{ overload.signature | highlightSig }}</div>
+        {% end %}
+        {% use renderParamsReturns(overload.signatureMeta, overload.parsedDoc) %}{% end %}
+    {% end %}
+{% elseif item.params then %}
+{% use renderParamsReturns(item.signatureMeta, item.parsedDoc) %}{% end %}
+{% end %}
+{% end %}
+
 {% macro renderClass(c) %}
 <details open class="doc-entry" id="class-{{c.name | escape }}">
     <summary class="entry-header">
@@ -95,6 +112,7 @@
         {% if m.doc then %}
         <div class="entry-content">{{ m.doc | markdown }}</div>
         {% end %}
+        {% if not (m.overloads and m.overloads | length > 0) then %}
         {% if m.signatureParts then %}
         <div class="signature signature-linked">{{ m.signatureParts | signatureHtml }}</div>
         {% elseif m.signatureFull then %}
@@ -102,9 +120,8 @@
         {% else %}
         <div class="signature">{{ m.signature | highlightSig }}</div>
         {% end %}
-        {% if m.params then %}
-        {% use renderParamsReturns(m.signatureMeta, m.parsedDoc) %}{% end %}
         {% end %}
+        {% use renderOverloads(m) %}{% end %}
     </div>
     {% end %}
     {% end %}
@@ -252,12 +269,14 @@
                 <span class="type-toggle"></span>
             </summary>
             {% if f.doc then %}<div class="entry-content"> {{ f.doc | markdown }} </div>{% end %}
+            {% if not (f.overloads and f.overloads | length > 0) then %}
             {% if f.signatureParts then %}
             <div class="signature signature-linked">{{ f.signatureParts | signatureHtml }}</div>
             {% elseif f.signatureFull then %}
             <div class="signature">{{ f.signatureFull | highlightSig }}</div>
             {% end %}
-            {% use renderParamsReturns(f.signatureMeta, f.parsedDoc) %}{% end %}
+            {% end %}
+            {% use renderOverloads(f) %}{% end %}
         </details>
         {% end %}
         {% end %}

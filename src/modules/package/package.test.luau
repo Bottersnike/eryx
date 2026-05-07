@@ -15,6 +15,7 @@ local lockfile = require("@eryx/package/lockfile")
 local pkg = require("@eryx/package")
 
 local suite = test.Suite.new("package")
+local WORKSPACE_ROOT = tostring(os.cwd())
 
 type RepoDependencySpec = {
 	repo: string,
@@ -146,6 +147,32 @@ local function makeProjectManifest(
 		table.insert(lines, "")
 	end
 
+	return table.concat(lines, "\n")
+end
+
+local function withScripts(manifest: string, scripts: { [string]: string }): string
+	local lines = { manifest, "", "[eryx.scripts]" }
+	local keys = {}
+	for key in scripts do
+		table.insert(keys, key)
+	end
+	table.sort(keys)
+	for _, key in keys do
+		table.insert(lines, `{key} = "{scripts[key]}"`)
+	end
+	return table.concat(lines, "\n")
+end
+
+local function withWorkspace(manifest: string, workspace: { [string]: string }): string
+	local lines = { manifest, "", "[eryx.workspace]" }
+	local keys = {}
+	for key in workspace do
+		table.insert(keys, key)
+	end
+	table.sort(keys)
+	for _, key in keys do
+		table.insert(lines, `{key} = "{workspace[key]}"`)
+	end
 	return table.concat(lines, "\n")
 end
 
@@ -366,8 +393,47 @@ local function runGit(cwd: string, args: { string }): string
 	return res.stdout
 end
 
+local function eryxExePath(): string
+	local debug = fs.path.join(WORKSPACE_ROOT, "build", "Debug", "eryx.exe")
+	if fs.isFile(debug) then
+		return debug
+	end
+
+	local release = fs.path.join(WORKSPACE_ROOT, "build", "Release", "eryx.exe")
+	if fs.isFile(release) then
+		return release
+	end
+
+	error("Could not find eryx.exe in build/Debug or build/Release", 2)
+end
+
+local function runEryx(cwd: string, args: { string }): os.ExecResult
+	local exe = eryxExePath()
+	return os.exec(exe, args, {
+		cwd = cwd,
+		env = {
+			ERYX_EXE_PATH = exe,
+		},
+	})
+end
+
 local function trim(s: string): string
 	return s:match("^%s*(.-)%s*$") or ""
+end
+
+local function ensureDirRecursive(path: string)
+	if path == "" or fs.exists(path) then
+		return
+	end
+
+	local parent = fs.path.dirname(path)
+	if parent and parent ~= path and parent ~= "" then
+		ensureDirRecursive(parent)
+	end
+
+	if not fs.exists(path) then
+		fs.mkdir(path)
+	end
 end
 
 local function writeGitPackage(dir: string, spec: GitPackageSpec)
@@ -380,7 +446,12 @@ local function writeGitPackage(dir: string, spec: GitPackageSpec)
 		["init.luau"] = `return "{spec.name}@{spec.version}"\n`,
 	}
 	for path, content in files do
-		writeFile(fs.path.join(dir, path), content)
+		local fullPath = fs.path.join(dir, path)
+		local parent = fs.path.dirname(fullPath)
+		if parent then
+			ensureDirRecursive(parent)
+		end
+		writeFile(fullPath, content)
 	end
 end
 
@@ -1210,6 +1281,159 @@ suite:test("local dependencies are materialized and can bring child repository d
 	end)
 end)
 
+suite:test("workspace overrides keep monorepo packages in place and resolve child aliases", function()
+	tempfile.withTempDir(function(root)
+		local packagesDir = fs.path.join(root, "packages")
+		local markdownDir = fs.path.join(packagesDir, "markdown")
+		local eryxdocDir = fs.path.join(packagesDir, "eryxdoc")
+		fs.mkdir(packagesDir)
+		fs.mkdir(markdownDir)
+		fs.mkdir(eryxdocDir)
+		fs.mkdir(fs.path.join(markdownDir, "src"))
+		fs.mkdir(fs.path.join(eryxdocDir, "src"))
+
+		writeFile(
+			fs.path.join(markdownDir, "eryx.toml"),
+			makeProjectManifest("markdown", "0.1.0", nil, nil, "src", nil)
+		)
+		writeFile(fs.path.join(markdownDir, "src", "init.luau"), 'return "markdown"\n')
+
+		writeFile(
+			fs.path.join(eryxdocDir, "eryx.toml"),
+			makeProjectManifest(
+				"eryxdoc",
+				"0.1.0",
+				'markdown = { git = "https://example.invalid/eryx.git", branch = "main", subdir = "packages/markdown" }',
+				nil,
+				"src",
+				nil
+			)
+		)
+		writeFile(fs.path.join(eryxdocDir, "src", "init.luau"), 'return "eryxdoc"\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withWorkspace(
+				makeProjectManifest(
+					"workspace-root",
+					"0.1.0",
+					'eryxdoc = { git = "https://example.invalid/eryx.git", branch = "main", subdir = "packages/eryxdoc" }',
+					nil
+				),
+				{
+					eryxdoc = "./packages/eryxdoc",
+					markdown = "./packages/markdown",
+				}
+			)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+
+			local lock = lockfile.load(root)
+			test.expect(lock):toNotBeNil()
+			assert(lock)
+			test.expect(countLockPackages(lock)):toBe(2)
+
+			local eryxdocPkg = findLockedPackage(lock, "eryxdoc")
+			test.expect(eryxdocPkg.type):toBe("workspace")
+
+			local markdownTarget = findDependencyTarget(eryxdocPkg, "markdown")
+			local markdownPkg = lock.packages[markdownTarget]
+			test.expect(markdownPkg.type):toBe("workspace")
+
+			test.expect(fs.exists(fs.path.join(root, "eryx_packages"))):toBeFalse()
+
+			local rootAliases = readLuaurcAliases(root)
+			local expectedRootAlias = fs.path.canonicalize(eryxdocDir):gsub("\\", "/") .. "/src"
+			test.expect(rootAliases.eryxdoc):toBe(expectedRootAlias)
+
+			local childAliases = readLuaurcAliases(eryxdocDir)
+			local expectedMarkdownAlias = fs.path.canonicalize(markdownDir):gsub("\\", "/") .. "/src"
+			test.expect(childAliases.markdown):toBe(expectedMarkdownAlias)
+		end)
+	end, "eryx-package-workspace-monorepo-test")
+end)
+
+suite:test("workspace overrides reject packages whose manifest name does not match the workspace key", function()
+	tempfile.withTempDir(function(root)
+		local packagesDir = fs.path.join(root, "packages")
+		local wrongDir = fs.path.join(packagesDir, "markdown")
+		fs.mkdir(packagesDir)
+		fs.mkdir(wrongDir)
+
+		writeFile(fs.path.join(wrongDir, "eryx.toml"), makeProjectManifest("wrong-name", "0.1.0", nil, nil))
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withWorkspace(makeProjectManifest("workspace-root", "0.1.0", 'markdown = { local = "./nowhere" }', nil), {
+				markdown = "./packages/markdown",
+			})
+		)
+
+		withWorkingDir(root, function()
+			test.expect(function()
+				pkg.doInstall()
+			end):toError('Workspace package "markdown" expected project name "markdown", found "wrong%-name"')
+		end)
+	end, "eryx-package-workspace-name-test")
+end)
+
+suite:test("workspace packages are initialized even when they are not root dependencies", function()
+	tempfile.withTempDir(function(root)
+		local packagesDir = fs.path.join(root, "projects")
+		local markdownDir = fs.path.join(packagesDir, "markdown")
+		local eryxdocDir = fs.path.join(packagesDir, "eryxdoc")
+		fs.mkdir(packagesDir)
+		fs.mkdir(markdownDir)
+		fs.mkdir(eryxdocDir)
+		fs.mkdir(fs.path.join(markdownDir, "src"))
+		fs.mkdir(fs.path.join(eryxdocDir, "src"))
+
+		writeFile(
+			fs.path.join(markdownDir, "eryx.toml"),
+			makeProjectManifest("markdown", "0.1.0", nil, nil, "src", nil)
+		)
+		writeFile(fs.path.join(markdownDir, "src", "init.luau"), 'return "markdown"\n')
+
+		writeFile(
+			fs.path.join(eryxdocDir, "eryx.toml"),
+			makeProjectManifest(
+				"eryxdoc",
+				"0.1.0",
+				'markdown = { git = "https://example.invalid/eryx.git", branch = "main", subdir = "projects/markdown" }',
+				nil,
+				"src",
+				nil
+			)
+		)
+		writeFile(fs.path.join(eryxdocDir, "src", "init.luau"), 'return "eryxdoc"\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withWorkspace(
+				makeProjectManifest("workspace-root", "0.1.0", 'eryx = { path = "build/Debug/modules" }', nil),
+				{
+					eryxdoc = "./projects/eryxdoc",
+					markdown = "./projects/markdown",
+				}
+			)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+
+			local rootAliases = readLuaurcAliases(root)
+			test.expect(rootAliases.eryx):toBe("build/Debug/modules")
+			test.expect(rootAliases.eryxdoc):toBeNil()
+			test.expect(rootAliases.markdown):toBeNil()
+
+			local childAliases = readLuaurcAliases(eryxdocDir)
+			local expectedMarkdownAlias = fs.path.canonicalize(markdownDir):gsub("\\", "/") .. "/src"
+			test.expect(childAliases.markdown):toBe(expectedMarkdownAlias)
+		end)
+	end, "eryx-package-workspace-bootstrap-test")
+end)
+
 suite:test("path dependencies ignore child manifests and remain single-node aliases", function()
 	withRepository({
 		shared = {
@@ -1754,6 +1978,294 @@ suite:test("git dependencies can bring child repository dependencies", function(
 			end, "eryx-package-git-child-test")
 		end)
 	end)
+end)
+
+suite:test("git subdir dependencies materialize only the selected subtree", function()
+	withRepository({
+		shared = {
+			["1.0.0"] = {},
+		},
+	}, function(repositoryUrl)
+		withGitRemote(function(remoteUrl, commit)
+			commit({
+				name = "root",
+				version = "0.0.0",
+				files = {
+					["README.md"] = "root readme\n",
+					["packages/markdown/eryx.toml"] = makeProjectManifest(
+						"markdown",
+						"0.1.0",
+						'shared = { repo = "' .. repositoryUrl .. '", version = "1.0.0" }',
+						nil,
+						"src"
+					),
+					["packages/markdown/src/init.luau"] = 'return "markdown"\n',
+					["packages/markdown/notes.txt"] = "keep me\n",
+					["packages/eryxdoc/eryx.toml"] = makeProjectManifest("eryxdoc", "0.1.0", nil, nil),
+					["packages/eryxdoc/init.luau"] = 'return "eryxdoc"\n',
+				},
+			}, "first")
+
+			tempfile.withTempDir(function(root)
+				writeFile(
+					fs.path.join(root, "eryx.toml"),
+					makeProjectManifest(
+						"git-subdir-root",
+						"0.1.0",
+						'markdown = { git = "' .. remoteUrl .. '", branch = "main", subdir = "packages/markdown" }',
+						nil
+					)
+				)
+
+				withWorkingDir(root, function()
+					pkg.doInstall()
+
+					local lock = lockfile.load(root)
+					test.expect(lock):toNotBeNil()
+					assert(lock)
+
+					local markdown = findLockedPackage(lock, "markdown")
+					test.expect(markdown.data.subdir):toBe("packages/markdown")
+					test.expect(lock.rootAliases.markdown):toContain("/src")
+
+					local sharedTarget = findDependencyTarget(markdown, "shared")
+					test.expect(lock.packages[sharedTarget].type):toBe("repository")
+
+					local dest = fs.path.join(root, "eryx_packages", markdown.installName :: string)
+					test.expect(fs.exists(fs.path.join(dest, "src", "init.luau"))):toBeTrue()
+					test.expect(fs.exists(fs.path.join(dest, "notes.txt"))):toBeTrue()
+					test.expect(fs.exists(fs.path.join(dest, "packages"))):toBeFalse()
+					test.expect(fs.exists(fs.path.join(dest, "README.md"))):toBeFalse()
+					test.expect(fs.exists(fs.path.join(dest, "eryxdoc"))):toBeFalse()
+				end)
+			end, "eryx-package-git-subdir-materialize-test")
+		end)
+	end)
+end)
+
+suite:test("git subdir dependencies from the same repo share one cache entry", function()
+	withGitRemote(function(remoteUrl, commit)
+		commit({
+			name = "root",
+			version = "0.0.0",
+			files = {
+				["packages/markdown/eryx.toml"] = makeProjectManifest("markdown", "0.1.0", nil, nil),
+				["packages/markdown/init.luau"] = 'return "markdown"\n',
+				["packages/eryxdoc/eryx.toml"] = makeProjectManifest("eryxdoc", "0.1.0", nil, nil),
+				["packages/eryxdoc/init.luau"] = 'return "eryxdoc"\n',
+			},
+		}, "first")
+
+		tempfile.withTempDir(function(root)
+			writeFile(
+				fs.path.join(root, "eryx.toml"),
+				makeProjectManifest(
+					"git-subdir-cache-root",
+					"0.1.0",
+					table.concat({
+						'markdown = { git = "' .. remoteUrl .. '", branch = "main", subdir = "packages/markdown" }',
+						'eryxdoc = { git = "' .. remoteUrl .. '", branch = "main", subdir = "packages/eryxdoc" }',
+					}, "\n"),
+					nil
+				)
+			)
+
+			withWorkingDir(root, function()
+				pkg.doInstall()
+
+				local lock = lockfile.load(root)
+				test.expect(lock):toNotBeNil()
+				assert(lock)
+				test.expect(countLockPackages(lock)):toBe(2)
+
+				local cacheDir = fs.path.join(root, "eryx_packages", ".git-cache")
+				test.expect(#listDirNames(cacheDir)):toBe(1)
+
+				local markdown = findLockedPackage(lock, "markdown")
+				local eryxdoc = findLockedPackage(lock, "eryxdoc")
+				test.expect(markdown.data.subdir):toBe("packages/markdown")
+				test.expect(eryxdoc.data.subdir):toBe("packages/eryxdoc")
+
+				local markdownDir = fs.path.join(root, "eryx_packages", markdown.installName :: string)
+				local eryxdocDir = fs.path.join(root, "eryx_packages", eryxdoc.installName :: string)
+				test.expect(fs.exists(fs.path.join(markdownDir, "init.luau"))):toBeTrue()
+				test.expect(fs.exists(fs.path.join(markdownDir, "packages"))):toBeFalse()
+				test.expect(fs.exists(fs.path.join(eryxdocDir, "init.luau"))):toBeTrue()
+				test.expect(fs.exists(fs.path.join(eryxdocDir, "packages"))):toBeFalse()
+			end)
+		end, "eryx-package-git-subdir-cache-test")
+	end)
+end)
+
+suite:test("eryx run resolves scripts from installed direct dependencies", function()
+	tempfile.withTempDir(function(root)
+		local depDir = fs.path.join(root, "eryxdoc")
+		fs.mkdir(depDir)
+		fs.mkdir(fs.path.join(depDir, "scripts"))
+
+		writeFile(
+			fs.path.join(depDir, "eryx.toml"),
+			withScripts(makeProjectManifest("eryxdoc", "0.1.0", nil, nil, nil, nil), { doc = "scripts/doc.luau" })
+		)
+		writeFile(fs.path.join(depDir, "scripts", "doc.luau"), 'print("dep-doc")\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			makeProjectManifest("run-root", "0.1.0", 'eryxdoc = { local = "./eryxdoc" }', nil)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+		end)
+
+		local res = runEryx(root, { "run", "doc" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("dep-doc")
+	end, "eryx-run-dependency-script-test")
+end)
+
+suite:test("eryx run resolves scripts from direct workspace dependencies", function()
+	tempfile.withTempDir(function(root)
+		local packagesDir = fs.path.join(root, "projects")
+		local depDir = fs.path.join(packagesDir, "eryxdoc")
+		fs.mkdir(packagesDir)
+		fs.mkdir(depDir)
+		fs.mkdir(fs.path.join(depDir, "scripts"))
+
+		writeFile(
+			fs.path.join(depDir, "eryx.toml"),
+			withScripts(makeProjectManifest("eryxdoc", "0.1.0", nil, nil, nil, nil), { doc = "scripts/doc.luau" })
+		)
+		writeFile(fs.path.join(depDir, "scripts", "doc.luau"), 'print("workspace-doc")\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withWorkspace(
+				makeProjectManifest(
+					"run-root",
+					"0.1.0",
+					'eryxdoc = { git = "https://example.invalid/eryx.git", branch = "main", subdir = "projects/eryxdoc" }',
+					nil
+				),
+				{
+					eryxdoc = "./projects/eryxdoc",
+				}
+			)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+		end)
+
+		local res = runEryx(root, { "run", "doc" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("workspace-doc")
+	end, "eryx-run-workspace-dependency-script-test")
+end)
+
+suite:test("eryx run ignores workspace packages that are not direct dependencies", function()
+	tempfile.withTempDir(function(root)
+		local packagesDir = fs.path.join(root, "projects")
+		local depDir = fs.path.join(packagesDir, "eryxdoc")
+		fs.mkdir(packagesDir)
+		fs.mkdir(depDir)
+		fs.mkdir(fs.path.join(depDir, "scripts"))
+
+		writeFile(
+			fs.path.join(depDir, "eryx.toml"),
+			withScripts(makeProjectManifest("eryxdoc", "0.1.0", nil, nil, nil, nil), { doc = "scripts/doc.luau" })
+		)
+		writeFile(fs.path.join(depDir, "scripts", "doc.luau"), 'print("workspace-doc")\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withWorkspace(makeProjectManifest("run-root", "0.1.0", 'eryx = { path = "build/Debug/modules" }', nil), {
+				eryxdoc = "./projects/eryxdoc",
+			})
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+		end)
+
+		local res = runEryx(root, { "run", "doc" })
+		test.expect(res.code):toBe(1)
+		test.expect(normalizeNewlines(res.stderr)):toContain("No project script named 'doc'")
+	end, "eryx-run-workspace-nondependency-script-test")
+end)
+
+suite:test("eryx run prefers project scripts over dependency scripts", function()
+	tempfile.withTempDir(function(root)
+		local depDir = fs.path.join(root, "eryxdoc")
+		fs.mkdir(depDir)
+		fs.mkdir(fs.path.join(depDir, "scripts"))
+		fs.mkdir(fs.path.join(root, "scripts"))
+
+		writeFile(
+			fs.path.join(depDir, "eryx.toml"),
+			withScripts(makeProjectManifest("eryxdoc", "0.1.0", nil, nil, nil, nil), { doc = "scripts/doc.luau" })
+		)
+		writeFile(fs.path.join(depDir, "scripts", "doc.luau"), 'print("dep-doc")\n')
+		writeFile(fs.path.join(root, "scripts", "doc.luau"), 'print("root-doc")\n')
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withScripts(
+				makeProjectManifest("run-root", "0.1.0", 'eryxdoc = { local = "./eryxdoc" }', nil),
+				{ doc = "scripts/doc.luau" }
+			)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+		end)
+
+		local res = runEryx(root, { "run", "doc" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("root-doc")
+		test.expect(normalizeNewlines(res.stdout):find("dep-doc", 1, true)):toBeNil()
+	end, "eryx-run-project-script-precedence-test")
+end)
+
+suite:test("eryx run errors when multiple dependencies define the same script", function()
+	tempfile.withTempDir(function(root)
+		local function writeDep(dirName: string)
+			local depDir = fs.path.join(root, dirName)
+			fs.mkdir(depDir)
+			fs.mkdir(fs.path.join(depDir, "scripts"))
+			writeFile(
+				fs.path.join(depDir, "eryx.toml"),
+				withScripts(makeProjectManifest(dirName, "0.1.0", nil, nil, nil, nil), { doc = "scripts/doc.luau" })
+			)
+			writeFile(fs.path.join(depDir, "scripts", "doc.luau"), `print("{dirName}-doc")\n`)
+		end
+
+		writeDep("eryxdoc")
+		writeDep("markdown")
+
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			makeProjectManifest(
+				"run-root",
+				"0.1.0",
+				table.concat({
+					'eryxdoc = { local = "./eryxdoc" }',
+					'markdown = { local = "./markdown" }',
+				}, "\n"),
+				nil
+			)
+		)
+
+		withWorkingDir(root, function()
+			pkg.doInstall()
+		end)
+
+		local res = runEryx(root, { "run", "doc" })
+		test.expect(res.code):toBe(1)
+		test.expect(normalizeNewlines(res.stderr)):toContain("multiple direct dependencies")
+		test.expect(normalizeNewlines(res.stderr)):toContain("eryxdoc")
+		test.expect(normalizeNewlines(res.stderr)):toContain("markdown")
+	end, "eryx-run-dependency-script-conflict-test")
 end)
 
 suite:test("local dependency cycles are rejected", function()

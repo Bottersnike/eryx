@@ -32,7 +32,10 @@ $cpp = @(
 
 $luau = @(
     $stagedPaths | Where-Object {
-        $_ -like '*.luau' -and $_ -notlike 'src/modules/unicode/_data/*'
+        $_ -like '*.luau' `
+            -and $_ -notlike 'src/modules/unicode/_data/*' `
+            -and $_ -ne 'src/modules/uuid.luau' `
+            -and $_ -ne 'src/modules/uuid.test.luau'
     }
 )
 

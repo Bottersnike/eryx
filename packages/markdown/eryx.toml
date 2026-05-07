@@ -1,0 +1,7 @@
+[eryx]
+manifest-version = 1
+
+[eryx.project]
+name = "markdown"
+version = "0.0.1"
+source-root = "src"

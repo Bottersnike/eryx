@@ -111,7 +111,7 @@ function planner.generateLockFile(plan: types.InstallPlan): types.LockFile
 
 		local entry: types.LockPackage = {
 			id = id,
-			installName = if r.type == "path" then nil else installNames[id],
+			installName = if r.type == "path" or r.type == "workspace" then nil else installNames[id],
 			type = r.type,
 			dependencies = {},
 			aliases = layout.computeAliases(plan, node.dependencies, installNames, false),
@@ -274,7 +274,10 @@ function planner.produceInstallPlanFromLock(root: string, lock: types.LockFile, 
 		end
 
 		local requirement = requirementFromLock(root, pkg)
-		local installName = pkg.installName or util.installNameFor(requirement, id)
+		local installName = if pkg.installName ~= nil
+			then pkg.installName
+			elseif requirement.type == "path" or requirement.type == "workspace" then nil
+			else util.installNameFor(requirement, id)
 
 		plan.nodes[id] = {
 			id = id,

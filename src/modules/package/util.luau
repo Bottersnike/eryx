@@ -77,7 +77,7 @@ function util.identityToDirName(identity: string): string
 end
 
 local function requirementDisplayName(r: types.Requirement): string
-	if r.type == "local" or r.type == "path" then
+	if r.type == "local" or r.type == "path" or r.type == "workspace" then
 		return r.path
 	elseif r.type == "git" then
 		return util.identityToDirName(r.path)

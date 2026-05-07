@@ -22,10 +22,9 @@ local Article = require("./content/article")
 local Renderer = require("./render/renderer")
 local buildWarnings = require("./warnings")
 local assets = require("./assets")
-local resources = require("./resources")
 
-local eryxdoc = require("@eryx/eryxdoc")
 local exception = require("@eryx/exception")
+local eryxdoc = require("@self")
 type Config = eryxdoc.Config
 
 local log = logging.getLogger("eryxdoc.dev")
@@ -69,6 +68,10 @@ local function normalizeMountPath(path: string?): string
 	local normalized = path:gsub("\\", "/")
 	normalized = normalized:gsub("^/+", ""):gsub("/+$", "")
 	return normalized
+end
+
+local function defaultThemePath(): string
+	return (_DIR:gsub("\\", "/")):gsub("/+$", "") .. "/theme"
 end
 
 -- ── Helpers ──────────────────────────────────────────────────────────────
@@ -281,8 +284,7 @@ local function buildState(cfg: Config): DevState
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local isDefaultTheme = cfg.theme == nil
-	local THEME_DIR = cfg.theme or eryxdoc.getDefaultTheme()
+	local THEME_DIR = cfg.theme or defaultThemePath()
 	local STATIC_DIR = cfg.static
 	local STATIC_MOUNT = normalizeMountPath(cfg.staticMount or "static")
 	local NO_MODULES = cfg.noModules or false
@@ -333,10 +335,7 @@ local function buildState(cfg: Config): DevState
 
 	-- Inject dev-only live-reload script if provided by the theme
 	local devScriptTag = ""
-	local hasLiveReloadScript = if isDefaultTheme
-		then resources.readDefaultThemeFile("eryxdoc-live-reload.js") ~= nil
-		else fs.isFile(THEME_DIR .. "/eryxdoc-live-reload.js")
-	if hasLiveReloadScript then
+	if fs.isFile(THEME_DIR .. "/eryxdoc-live-reload.js") then
 		devScriptTag = string.format('<script src="%seryxdoc-live-reload.js"></script>', SITE_ROOT)
 	end
 
@@ -357,12 +356,6 @@ local function buildState(cfg: Config): DevState
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
 		folderOrder = folderOrder,
-		templateReader = if isDefaultTheme
-			then function(path: string): string
-				local relative = path:match("/theme/(.+)$") or path
-				return resources.readDefaultThemeFile(relative)
-			end
-			else nil,
 		assetResolver = function(article: Article.Article, url: string): string
 			return assets.rewriteArticleAssetUrl(cfg.articles, article.sourceFilename, SITE_ROOT, url)
 		end,
@@ -417,13 +410,9 @@ local function tryServeStatic(
 ): (number?, string?, string?)
 	-- style.css
 	if safePath == "style.css" then
-		if state.cfg.theme == nil then
-			return 200, resources.readDefaultThemeFile("style.css"), "text/css; charset=utf-8"
-		else
-			local stylePath = state.themeDir .. "/style.css"
-			if fs.isFile(stylePath) then
-				return 200, fs.openSync(stylePath):readSync(), "text/css; charset=utf-8"
-			end
+		local stylePath = state.themeDir .. "/style.css"
+		if fs.isFile(stylePath) then
+			return 200, fs.openSync(stylePath):readSync(), "text/css; charset=utf-8"
 		end
 	end
 
@@ -465,15 +454,9 @@ local function tryServeStatic(
 
 	-- Theme-supplied dev client script
 	if safePath == "eryxdoc-live-reload.js" then
-		if state.cfg.theme == nil then
-			return 200,
-				resources.readDefaultThemeFile("eryxdoc-live-reload.js"),
-				"application/javascript; charset=utf-8"
-		else
-			local themePath = state.themeDir .. "/eryxdoc-live-reload.js"
-			if fs.isFile(themePath) then
-				return 200, fs.openSync(themePath):readSync(), "application/javascript; charset=utf-8"
-			end
+		local themePath = state.themeDir .. "/eryxdoc-live-reload.js"
+		if fs.isFile(themePath) then
+			return 200, fs.openSync(themePath):readSync(), "application/javascript; charset=utf-8"
 		end
 	end
 

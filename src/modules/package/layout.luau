@@ -38,7 +38,7 @@ local function aliasPathForEdge(
 
 	local r = node.requirement
 
-	if r.type == "path" then
+	if r.type == "path" or r.type == "workspace" then
 		return applySourceRoot(r.path, r.sourceRoot)
 	end
 
@@ -76,6 +76,10 @@ function layout.resolveInstallNames(plan: types.InstallPlan): { [string]: string
 
 	for id, node in plan.nodes do
 		local base = node.installName
+		if base == nil then
+			continue
+		end
+
 		local name = base
 		local n = 2
 

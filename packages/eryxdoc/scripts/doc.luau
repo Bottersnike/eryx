@@ -14,11 +14,41 @@
 local fs = require("@eryx/fs")
 local argparse = require("@eryx/argparse")
 local fsWatch = require("@eryx/fs_watch")
+local logging = require("@eryx/logging")
 local os = require("@eryx/os")
 local stdio = require("@eryx/stdio")
+local tempfile = require("@eryx/tempfile")
 
-local eryxdoc = require("@eryx/eryxdoc")
-local devServer = require("@eryx/eryxdoc/_devServer")
+local eryxdoc = require("../src")
+local devServer = require("../src/_devServer")
+
+local okEmbedded, embedded = pcall(require, "@eryx/_embedded")
+if not okEmbedded then
+	embedded = nil
+end
+
+local function normalizeSlashes(path: string): string
+	return (path:gsub("\\", "/"))
+end
+
+local function joinVirtual(base: string, relative: string): string
+	return normalizeSlashes(base):gsub("/+$", "") .. "/" .. normalizeSlashes(relative):gsub("^/+", "")
+end
+
+local DEFAULT_THEME_FILES = {
+	"style.css",
+	"eryxdoc-live-reload.js",
+	"templates/404_page.html",
+	"templates/api_page.html",
+	"templates/article_page.html",
+	"templates/index_page.html",
+	"templates/_footer.html",
+	"templates/_header.html",
+	"templates/_layout.html",
+	"templates/_sidebar.html",
+}
+
+local IS_EMBEDDED = embedded ~= nil and embedded.exists(joinVirtual("eryxdoc/theme", DEFAULT_THEME_FILES[1]))
 
 local parser = argparse.Parser.new(
 	"eryx doc",
@@ -27,10 +57,19 @@ local parser = argparse.Parser.new(
 		.. "  eryx doc --config eryxdoc.config.luau\n"
 		.. "  eryx doc --output build-docs --modules src/modules --articles docs --prefix @mylib\n"
 		.. "  eryx doc --dev --output build-docs --modules src/modules\n"
-		.. "  eryx doc create-theme ./eryxdoc-theme"
+		.. "  eryx doc create-theme ./eryxdoc-theme\n"
+		.. "  eryx doc export-json docs.json --modules src/modules --prefix @mylib"
 )
 local createTheme = parser:addSubCommand("create-theme", "Copy the bundled default theme into a directory")
 createTheme:addPositional("directory", "string", nil, true, "Directory to write theme files into")
+
+local exportJson = parser:addSubCommand("export-json", "Export module documentation data as JSON")
+exportJson:addPositional("file", "string", nil, true, "JSON file to write")
+exportJson:addOption("config", "c", "string", nil, false, "Path to config file (Luau module returning a table)")
+exportJson:addOption("modules", "m", "string", nil, false, "Modules source directory")
+exportJson:addOption("prefix", nil, "string", nil, false, "Module prefix (e.g. @mylib)")
+exportJson:addFlag("pretty", nil, "Pretty-print JSON")
+exportJson:addFlag("quiet", "q", "Suppress logging")
 
 parser:addOption("config", "c", "string", nil, false, "Path to config file (Luau module returning a table)")
 parser:addOption("port", "p", "number", nil, false, "Port for the dev server")
@@ -60,11 +99,41 @@ parser:addFlag("dev", nil, "Run a local dev server, rather than running a build"
 parser:addFlag("no-modules", nil, "Skip module scanning (articles-only mode)")
 parser:addFlag("clean", nil, "Wipe the output directory before building")
 parser:addFlag("last-updated", nil, "Show last-updated dates on articles (from git)")
+parser:addFlag("quiet", "q", "Suppress logging")
 
 local args = parser:parse()
 
+local function writeFileMkdir(path: string, content: string)
+	local dir = fs.path.dirname(path)
+	if dir and dir ~= "." and not fs.isDirectory(dir) then
+		fs.mkdir(dir)
+	end
+	fs.openSync(path, "w"):writeSync(content)
+end
+
+local function copyDefaultThemeFiles(outputDir: string): { fileCount: number, output: string }
+	if fs.isFile(outputDir) then
+		error(string.format("destination is a file: %s", outputDir))
+	end
+
+	fs.mkdir(outputDir)
+	local defaultThemePath = eryxdoc.getDefaultTheme()
+	for _, relativePath in DEFAULT_THEME_FILES do
+		local embeddedPath = joinVirtual("eryxdoc/theme", relativePath)
+		local content = if IS_EMBEDDED then embedded.read(embeddedPath) else nil
+		if content == nil then
+			content = fs.openSync(joinVirtual(defaultThemePath, relativePath)):readSync()
+		end
+		writeFileMkdir(fs.path.join(outputDir, relativePath), content)
+	end
+	return {
+		fileCount = #DEFAULT_THEME_FILES,
+		output = outputDir,
+	}
+end
+
 local function copyDefaultTheme(outputDir: string)
-	local ok, result = pcall(eryxdoc.copyDefaultTheme, outputDir)
+	local ok, result = pcall(copyDefaultThemeFiles, outputDir)
 	if not ok then
 		stdio.writeerr(string.format("eryx doc create-theme: %s\n", tostring(result)))
 		os.exit(2)
@@ -76,6 +145,22 @@ end
 if args["create-theme"] then
 	copyDefaultTheme(args["create-theme"].directory)
 	os.exit(0)
+end
+
+local exportJsonArgs = args["export-json"]
+if exportJsonArgs then
+	for _, key in { "config", "modules", "prefix", "quiet" } do
+		if exportJsonArgs[key] ~= nil then
+			args[key] = exportJsonArgs[key]
+		end
+	end
+end
+
+local QUIET: boolean = args["quiet"] == true
+local exportJsonFile: string? = if exportJsonArgs then exportJsonArgs.file else nil
+local EXPORT_TO_STDOUT = exportJsonFile == "-"
+if QUIET or EXPORT_TO_STDOUT then
+	logging.config({ level = math.huge })
 end
 
 -- ── Config file ───────────────────────────────────────────────────────────
@@ -100,7 +185,9 @@ if configPath then
 	if ok and type(result) == "table" then
 		fileConfig = result :: eryxdoc.Config
 		loadedConfigPath = configPath
-		print(string.format("Loaded config from %s", configPath))
+		if not QUIET and not EXPORT_TO_STDOUT then
+			print(string.format("Loaded config from %s", configPath))
+		end
 	elseif not ok then
 		stdio.writeerr(
 			string.format("eryx doc: failed to load config file %s: %s\n", configPath :: string, tostring(result))
@@ -228,6 +315,76 @@ local function validateConfig(config: eryxdoc.Config): { string }
 	return errors
 end
 
+local function validateExportConfig(config: eryxdoc.Config): { string }
+	local errors: { string } = {}
+
+	if isBlank(config.modules) then
+		table.insert(errors, "Missing modules directory. Set `modules` in config or pass --modules <dir>.")
+	elseif not fs.isDirectory(config.modules :: string) then
+		table.insert(errors, string.format("Modules directory does not exist: %s", config.modules :: string))
+	end
+
+	if isBlank(config.prefix) then
+		config.prefix = "@eryx"
+	end
+
+	return errors
+end
+
+if exportJsonArgs then
+	local validationErrors = validateExportConfig(cfg)
+	if #validationErrors > 0 then
+		if not loadedConfigPath then
+			stdio.writeerr("eryx doc export-json: no config file found (looked for eryxdoc.config.luau).\n")
+		end
+		stdio.writeerr("eryx doc export-json: cannot export module documentation:\n")
+		for _, message in validationErrors do
+			stdio.writeerr("  - " .. message .. "\n")
+		end
+		stdio.writeerr("\n" .. exportJson:generateHelp() .. "\n")
+		os.exit(2)
+	end
+
+	local ok, result = pcall(function()
+		return eryxdoc.exportModulesJson(
+			{ modules = cfg.modules :: string, prefix = cfg.prefix },
+			{ pretty = exportJsonArgs.pretty }
+		)
+	end)
+	if not ok then
+		stdio.writeerr(string.format("eryx doc export-json: %s\n", tostring(result)))
+		os.exit(1)
+	end
+
+	if EXPORT_TO_STDOUT then
+		stdio.writeSync(result :: string)
+	else
+		writeFileMkdir(exportJsonArgs.file, result :: string)
+		if not QUIET then
+			print(string.format("Exported module documentation JSON to %s", exportJsonArgs.file))
+		end
+	end
+	os.exit(0)
+end
+
+local tempThemeDir: any? = nil
+local function prepareDefaultTheme(config: eryxdoc.Config)
+	if config.theme ~= nil and config.theme ~= defaultTheme then
+		return
+	end
+
+	tempThemeDir = tempfile.openDir("eryxdoc-theme")
+	local ok, result = pcall(copyDefaultThemeFiles, tempThemeDir.path)
+	if not ok then
+		stdio.writeerr(string.format("eryx doc: failed to prepare default theme: %s\n", tostring(result)))
+		pcall(function()
+			(tempThemeDir :: any):close()
+		end)
+		os.exit(2)
+	end
+	config.theme = tempThemeDir.path
+end
+
 local validationErrors = validateConfig(cfg)
 if #validationErrors > 0 then
 	if not loadedConfigPath then
@@ -243,8 +400,19 @@ end
 
 -- ── Dev mode ──────────────────────────────────────────────────────────────
 
+if IS_EMBEDDED then
+	prepareDefaultTheme(cfg)
+end
+
 if IS_DEV then
-	local dev = devServer.start(cfg, HOST, PORT)
+	local ok, devOrErr = pcall(devServer.start, cfg, HOST, PORT)
+	if not ok then
+		if tempThemeDir then
+			tempThemeDir:close()
+		end
+		error(devOrErr)
+	end
+	local dev = devOrErr
 
 	if not cfg.noModules and cfg.modules then
 		local moduleWatcher = fsWatch.watchDir(cfg.modules, { recursive = true, debounce = 0.1 })
@@ -273,6 +441,12 @@ if IS_DEV then
 	end
 else
 	-- ── Build ─────────────────────────────────────────────────────────────
-	eryxdoc.build(cfg)
+	local ok, result = pcall(eryxdoc.build, cfg)
+	if tempThemeDir then
+		tempThemeDir:close()
+	end
+	if not ok then
+		error(result)
+	end
 	print("Build complete.")
 end

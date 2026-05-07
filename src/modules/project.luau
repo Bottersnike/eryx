@@ -47,14 +47,17 @@ export type GitDependency =
 	{
 		git: string,
 		rev: string,
+		subdir: string?,
 	}
 	| {
 		git: string,
 		tag: string,
+		subdir: string?,
 	}
 	| {
 		git: string,
 		branch: string,
+		subdir: string?,
 	}
 
 -- Represents a dependency that is on the local filesystem
@@ -92,6 +95,7 @@ export type RepositoryDependency = {
 
 export type Dependency = string | GitDependency | PathDependency | LocalDependency | UrlDependency | RepositoryDependency
 export type Dependencies = { [string]: Dependency }
+export type Workspace = { [string]: string }
 
 export type BuildTarget = {
 	output: string,
@@ -112,6 +116,7 @@ export type Manifest = {
 	links: Links?,
 	scripts: { [string]: string }?,
 	repositories: { [string]: string }?,
+	workspace: Workspace?,
 	dependencies: Dependencies?,
 	devDependencies: Dependencies?,
 	build: { [string]: BuildTarget }?,
@@ -310,22 +315,26 @@ local function parseDependency(value: any, context: string): Dependency
 		fail(`{context}.alias is not supported; the dependency table key is the alias`)
 	end
 	if raw.git then
+		local subdir = expectOptionalString(raw.subdir, at(context, "subdir"))
 		if raw.rev then
 			return {
 				git = expectString(raw.git, at(context, "git")),
 				rev = expectString(raw.rev, at(context, "rev")),
+				subdir = subdir,
 			}
 		end
 		if raw.tag then
 			return {
 				git = expectString(raw.git, at(context, "git")),
 				tag = expectString(raw.tag, at(context, "tag")),
+				subdir = subdir,
 			}
 		end
 		if raw.branch then
 			return {
 				git = expectString(raw.git, at(context, "git")),
 				branch = expectString(raw.branch, at(context, "branch")),
+				subdir = subdir,
 			}
 		end
 		return fail(`git dependency {context} must specify exactly one of rev/tag/branch.`)
@@ -420,6 +429,7 @@ local function parseManifestTable(raw: { [any]: any }): Manifest
 		links = parseLinks(eryx.links),
 		scripts = parseStringMap(eryx.scripts, "eryx.scripts"),
 		repositories = parseStringMap(eryx.repositories, "eryx.repositories"),
+		workspace = parseStringMap(eryx.workspace, "eryx.workspace"),
 		dependencies = parseDependencies(eryx.dependencies, "eryx.dependencies"),
 		devDependencies = parseDependencies(eryx["dev-dependencies"], "eryx.dev-dependencies"),
 		build = parseBuildTargets(eryx.build),

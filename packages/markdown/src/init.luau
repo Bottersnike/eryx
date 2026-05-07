@@ -12,21 +12,21 @@ local InlineHtmlRule = require("@self/rules/inlineHtml")
 export type TocEntry = { level: number, id: string, text: string }
 
 local EXTENSIONS: { types.AnyBlockRule } = {
-	require("@eryx/markdown/extensions/table") :: types.AnyBlockRule,
-	require("@eryx/markdown/extensions/footnote") :: types.AnyBlockRule,
-	require("@eryx/markdown/extensions/admonition") :: types.AnyBlockRule,
-	require("@eryx/markdown/extensions/tabs").TabGroupRule :: types.AnyBlockRule,
-	require("@eryx/markdown/extensions/tabs").TabPanelRule :: types.AnyBlockRule,
+	require("@self/extensions/table") :: types.AnyBlockRule,
+	require("@self/extensions/footnote") :: types.AnyBlockRule,
+	require("@self/extensions/admonition") :: types.AnyBlockRule,
+	require("@self/extensions/tabs").TabGroupRule :: types.AnyBlockRule,
+	require("@self/extensions/tabs").TabPanelRule :: types.AnyBlockRule,
 }
 local INLINE_EXTENSIONS: { types.InlineRule } = {
-	require("@eryx/markdown/extensions/footnoteInline") :: types.InlineRule,
-	require("@eryx/markdown/extensions/colour") :: types.InlineRule,
+	require("@self/extensions/footnoteInline") :: types.InlineRule,
+	require("@self/extensions/colour") :: types.InlineRule,
 
 	-- We can't do wikilinks by default because they need a resolver
 	-- wikilinkRuleBuilder(wikilinkResolver),
 }
 local INLINE_EMPHASIS_EXTENSIONS: { types.InlineEmphasisRule } = {
-	require("@eryx/markdown/extensions/strikethrough") :: types.InlineEmphasisRule,
+	require("@self/extensions/strikethrough") :: types.InlineEmphasisRule,
 }
 
 local markdown = {}

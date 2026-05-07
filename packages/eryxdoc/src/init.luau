@@ -25,7 +25,7 @@ local Article = require("@self/content/article")
 local Renderer = require("@self/render/renderer")
 local buildWarnings = require("@self/warnings")
 local assets = require("@self/assets")
-local resources = require("@self/resources")
+local exportData = require("@self/export")
 
 local log = logging.getLogger("eryxdoc.build")
 
@@ -142,6 +142,11 @@ export type Config = {
 	-- Build options
 	clean: boolean?,
 	showLastUpdated: boolean?, -- show "Last updated" date on pages (from git)
+}
+
+export type ModuleExportConfig = {
+	modules: string,
+	prefix: string?,
 }
 
 -- ── Helpers ───────────────────────────────────────────────────────────────
@@ -361,6 +366,10 @@ local function normalizeMountPath(path: string?): string
 	return normalized
 end
 
+local function defaultThemePath(): string
+	return (_DIR:gsub("\\", "/")):gsub("/+$", "") .. "/theme"
+end
+
 -- ── Build ─────────────────────────────────────────────────────────────────
 
 local eryxdoc = {}
@@ -379,8 +388,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	local SITE_ROOT = cfg.siteRoot or "/"
 	local EXPORT_MODE: "flat" | "directory" = cfg.exportMode or "directory"
 	local SITE_TITLE = cfg.title or "API Docs"
-	local isDefaultTheme = cfg.theme == nil
-	local THEME_DIR = cfg.theme or resources.getDefaultThemePath()
+	local THEME_DIR = cfg.theme or defaultThemePath()
 	local STATIC_DIR = cfg.static
 	local STATIC_MOUNT = normalizeMountPath(cfg.staticMount or "static")
 	local NO_MODULES = cfg.noModules or false
@@ -434,10 +442,7 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	end
 
 	-- Copy styles
-	local styleContent = if isDefaultTheme
-		then resources.readDefaultThemeFile("style.css")
-		else fs.openSync(STYLE_PATH):readSync()
-	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(styleContent)
+	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(fs.openSync(STYLE_PATH):readSync())
 
 	-- Collect content
 	local allModules = if NO_MODULES or not MODULES_DIR
@@ -495,12 +500,6 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		sectionTitles = sectionTitles,
 		folderTitles = folderTitles,
 		folderOrder = folderOrder,
-		templateReader = if isDefaultTheme
-			then function(path: string): string
-				local relative = path:match("/theme/(.+)$") or path
-				return resources.readDefaultThemeFile(relative)
-			end
-			else nil,
 		assetResolver = function(article: Article.Article, url: string): string
 			assets.copyArticleAsset(ARTICLES_DIR, article.sourceFilename, OUTPUT_DIR, url)
 			return assets.rewriteArticleAssetUrl(ARTICLES_DIR, article.sourceFilename, SITE_ROOT, url)
@@ -658,11 +657,15 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 end
 
 function eryxdoc.getDefaultTheme(): string
-	return resources.getDefaultThemePath()
+	return defaultThemePath()
 end
 
-function eryxdoc.copyDefaultTheme(outputDir: string): { fileCount: number, output: string }
-	return resources.copyDefaultTheme(outputDir)
+function eryxdoc.exportModules(cfg: ModuleExportConfig): any
+	return exportData.exportModules(cfg.modules :: string, cfg.prefix or "@eryx")
+end
+
+function eryxdoc.exportModulesJson(cfg: ModuleExportConfig, options: { pretty: boolean? }?): string
+	return exportData.encodeModules(cfg.modules :: string, cfg.prefix or "@eryx", options)
 end
 
 return eryxdoc

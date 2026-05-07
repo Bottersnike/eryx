@@ -145,10 +145,12 @@ jobs:
       - name: Generate documentation
         shell: pwsh
         run: |
-          Write-Host "Running eryx doc from repository root using downloaded executable"
+          Write-Host "Running eryx pkg install and eryx run doc from repository root using downloaded executable"
           $exe = Join-Path $env:GITHUB_WORKSPACE 'artifact\eryx.exe'
           if (Test-Path $exe) {
-            & $exe doc
+            & $exe pkg install
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & $exe run doc
           } else {
             Write-Error "eryx executable not found at $exe"
             exit 1

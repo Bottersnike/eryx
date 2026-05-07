@@ -137,7 +137,9 @@ eryx pkg add foo=https://cdn.eryx.local/package.zip --sha256 b94d27...
 
 A Git dependency represents a package available on a Git server. The requested version must be specified with exactly one of a branch name, a tag, or a revision (commit hash).
 
-An `eryx.toml` present at the repository root is used for discovery of child dependencies.
+By default, an `eryx.toml` present at the repository root is used for discovery of child dependencies. Git dependencies may also specify `subdir = "..."` to treat a subfolder of the repository as the package root, which is useful for monorepos.
+
+Only the selected package root is materialized into `eryx_packages`, even when the dependency points at a repository subdirectory.
 
 If that manifest declares `eryx.project.source-root`, the generated alias points at that subdirectory inside the checked out package.
 
@@ -148,6 +150,7 @@ Although dependencies may be requested by branch or tag, Eryx resolves them to e
 package1 = { git = "ssh://git@git.eryx.local/package.git", rev = "f771f5..." }
 package2 = { git = "ssh://git@git.eryx.local/package.git", tag = "v1.0.0" }
 package3 = { git = "ssh://git@git.eryx.local/package.git", branch = "master" }
+package4 = { git = "ssh://git@git.eryx.local/monorepo.git", branch = "main", subdir = "packages/markdown" }
 ```
 
 Install a new Git dependency with:
@@ -157,6 +160,7 @@ Install a new Git dependency with:
 eryx pkg add git+ssh://git@git.eryx.local/package.git --rev f771f5
 eryx pkg add git+ssh://git@git.eryx.local/package.git --tag v1.0.0
 eryx pkg add git+ssh://git@git.eryx.local/package.git --branch master
+eryx pkg add git+ssh://git@git.eryx.local/monorepo.git --branch main --subdir packages/markdown
 # Explicit "foo" name
 eryx pkg add foo=git+ssh://git@git.eryx.local/package.git --tag v1.0.0
 ```

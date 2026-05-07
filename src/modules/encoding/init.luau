@@ -30,6 +30,4 @@ return {
 	base64 = require("@self/base64"),
 	base85 = require("@self/base85"),
 	url = require("@self/url"),
-	json = require("@self/json"),
-	yaml = require("@self/yaml"),
 }

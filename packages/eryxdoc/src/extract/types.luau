@@ -34,6 +34,23 @@ export type SignatureMeta = {
 	returns: { ReturnMeta }?,
 }
 
+export type OverloadDoc = {
+	doc: string?,
+	location: luau.Location,
+	params: { string }?,
+	returnStr: string?,
+	parsedDoc: ParsedDoc?,
+	yields: boolean,
+	isMethod: boolean,
+	selfType: string?,
+	owner: string?,
+	generics: { string }?,
+	signature: string,
+	signatureFull: string,
+	signatureParts: { SignaturePart }?,
+	signatureMeta: SignatureMeta?,
+}
+
 -- Unified doc record for functions, methods, and properties.
 -- Used both as top-level functions and as class members/metamethods.
 -- Properties (non-function type table fields) have params=nil.
@@ -53,6 +70,7 @@ export type FuncDoc = {
 	signatureFull: string,
 	signatureParts: { SignaturePart }?,
 	signatureMeta: SignatureMeta?,
+	overloads: { OverloadDoc }?,
 }
 
 export type TypeDoc = {

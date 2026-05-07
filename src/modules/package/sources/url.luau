@@ -135,7 +135,8 @@ local urlSource: types.Source = {
 		requirements: { types.Requirement },
 		visiting: types.Visiting,
 		allowLocal: boolean,
-		recurse: types.CollectRecursion
+		recurse: types.CollectRecursion,
+		workspace: project.Workspace?
 	)
 		local dep = dep :: project.UrlDependency
 
@@ -155,7 +156,7 @@ local urlSource: types.Source = {
 		if childManifest and childManifest.dependencies then
 			r.sourceRoot = childManifest.project.sourceRoot
 			local visitingKey = cycles.pushVisiting(r, visiting, name)
-			recurse(root, path, childManifest, r.tree, visiting, false)
+			recurse(root, path, childManifest, r.tree, visiting, false, workspace)
 			cycles.popVisiting(visitingKey, visiting)
 		elseif childManifest then
 			r.sourceRoot = childManifest.project.sourceRoot

@@ -30,6 +30,7 @@ add:addOption("sha256", nil, "string", nil, false, "URL package SHA256")
 add:addOption("rev", nil, "string", nil, false, "Git revision")
 add:addOption("tag", nil, "string", nil, false, "Git tag")
 add:addOption("branch", nil, "string", nil, false, "Git branch")
+add:addOption("subdir", nil, "string", nil, false, "Git package subdirectory")
 add:addMutuallyExclusive({ "path", "sha256", "rev", "tag", "branch" })
 add:addPositional("package", "string")
 
@@ -65,6 +66,7 @@ local args = parser:parse() :: {
 		rev: string?,
 		tag: string?,
 		branch: string?,
+		subdir: string?,
 		package: string,
 	}?,
 	remove: {
@@ -410,8 +412,8 @@ local function parseAddDependency(): (string, project.Dependency)
 	end
 
 	if args.add.path then
-		if args.add.sha256 or countGitRefs() > 0 then
-			error("--path cannot be combined with --sha256, --rev, --tag or --branch")
+		if args.add.sha256 or countGitRefs() > 0 or args.add.subdir then
+			error("--path cannot be combined with --sha256, --rev, --tag, --branch or --subdir")
 		end
 
 		return explicitName or basename(spec), {
@@ -425,6 +427,7 @@ local function parseAddDependency(): (string, project.Dependency)
 		end
 
 		local git = spec:gsub("^git%+", "")
+		local subdir = args.add.subdir
 		validateGitUrl(git)
 
 		if args.add.rev then
@@ -432,27 +435,31 @@ local function parseAddDependency(): (string, project.Dependency)
 			return explicitName or basename(git), {
 				git = git,
 				rev = args.add.rev,
+				subdir = subdir,
 			}
 		elseif args.add.tag then
 			validateGitRefName("tag", args.add.tag)
 			return explicitName or basename(git), {
 				git = git,
 				tag = args.add.tag,
+				subdir = subdir,
 			}
 		elseif args.add.branch then
 			validateGitRefName("branch", args.add.branch)
-			return explicitName or basename(git), {
-				git = git,
-				branch = args.add.branch,
-			}
+			return explicitName or basename(git),
+				{
+					git = git,
+					branch = args.add.branch,
+					subdir = subdir,
+				}
 		else
 			error("Git dependencies require exactly one of --rev, --tag or --branch")
 		end
 	end
 
 	if isUrl(spec) then
-		if countGitRefs() > 0 then
-			error("--rev, --tag and --branch are only valid for Git dependencies")
+		if countGitRefs() > 0 or args.add.subdir then
+			error("--rev, --tag, --branch and --subdir are only valid for Git dependencies")
 		end
 		if args.add.sha256 then
 			validateSha256(args.add.sha256)
@@ -466,8 +473,8 @@ local function parseAddDependency(): (string, project.Dependency)
 	end
 
 	if isProbablyPath(spec) then
-		if args.add.sha256 or countGitRefs() > 0 then
-			error("Local dependencies cannot use --sha256, --rev, --tag or --branch")
+		if args.add.sha256 or countGitRefs() > 0 or args.add.subdir then
+			error("Local dependencies cannot use --sha256, --rev, --tag, --branch or --subdir")
 		end
 
 		return explicitName or basename(spec), {
@@ -475,8 +482,8 @@ local function parseAddDependency(): (string, project.Dependency)
 		} :: project.LocalDependency
 	end
 
-	if args.add.sha256 or countGitRefs() > 0 then
-		error("--sha256, --rev, --tag and --branch require a URL or Git dependency")
+	if args.add.sha256 or countGitRefs() > 0 or args.add.subdir then
+		error("--sha256, --rev, --tag, --branch and --subdir require a URL or Git dependency")
 	end
 
 	return parseRepoSpec(spec)
@@ -520,6 +527,9 @@ local function formatDependency(name: string, dep: project.Dependency): string
 		elseif (dep :: any).branch then
 			out ..= ` --branch {dep.branch}`
 		end
+		if (dep :: any).subdir then
+			out ..= ` --subdir {dep.subdir}`
+		end
 
 		return out
 	end
@@ -553,6 +563,7 @@ local function main()
 
 	if args.install then
 		pkg.doInstall(args.install.dev)
+		print("Install done")
 		return
 	end
 

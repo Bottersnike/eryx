@@ -1,0 +1,17 @@
+[eryx]
+manifest-version = 1
+
+[eryx.project]
+name = "Eryx"
+version = "0.0.1"
+
+[eryx.repositories]
+eryx = "http://127.0.0.1:8000"
+
+[eryx.dependencies]
+eryx = { path = "build/Debug/modules" }
+eryxdoc = { git = "https://github.com/Bottersnike/eryx", branch = "master", subdir = "packages/eryxdoc" }
+
+[eryx.workspace]
+eryxdoc = "./packages/eryxdoc"
+markdown = "./packages/markdown"

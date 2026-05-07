@@ -28,6 +28,7 @@ export type ParamMeta = types.ParamMeta
 export type ReturnMeta = types.ReturnMeta
 export type SignatureMeta = types.SignatureMeta
 export type FuncDoc = types.FuncDoc
+export type OverloadDoc = types.OverloadDoc
 export type TypeDoc = types.TypeDoc
 export type ConstDoc = types.ConstDoc
 export type ExtractedDocs = types.ExtractedDocs
@@ -314,10 +315,344 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	local typeDocs: { TypeDoc } = {}
 	local functions: { FuncDoc } = {}
 	local constants: { ConstDoc } = {}
+	local typeAliasNodes: { [string]: luau.AstType } = {}
 
 	local classImplToType: { [string]: string } = {}
 	local suppressedTypes: { [string]: boolean } = {}
 	local typeMemberMixins: { [string]: { string } } = {}
+
+	for _, stat in result.root.body do
+		if stat.type == "StatTypeAlias" then
+			local aliasStat = stat :: luau.StatTypeAlias
+			if aliasStat.aliasedType then
+				typeAliasNodes[aliasStat.name] = aliasStat.aliasedType
+			end
+		end
+	end
+
+	local function buildKnownParams(rawSig: types.RawFuncSig): { [string]: boolean }
+		local knownParams: { [string]: boolean } = {}
+		for _, n in rawSig.paramNames do
+			if n and n ~= "self" then
+				knownParams[n :: string] = true
+			end
+		end
+		knownParams["..."] = true
+		return knownParams
+	end
+
+	local function filterParsedDocParams(parsed: ParsedDoc, knownParams: { [string]: boolean }): ParsedDoc
+		local filteredParams = {}
+		for _, param in parsed.params do
+			if knownParams[param.name] then
+				table.insert(filteredParams, param)
+			end
+		end
+
+		local filteredReturns = {}
+		for _, ret in parsed.returns do
+			table.insert(filteredReturns, ret)
+		end
+
+		local filteredErrors = {}
+		for _, err in parsed.errors do
+			table.insert(filteredErrors, err)
+		end
+
+		local filteredTags = {}
+		for _, tag in parsed.tags do
+			table.insert(filteredTags, tag)
+		end
+
+		return {
+			body = parsed.body,
+			params = filteredParams,
+			returns = filteredReturns,
+			errors = filteredErrors,
+			yields = parsed.yields,
+			unreleased = parsed.unreleased,
+			since = parsed.since,
+			deprecated = parsed.deprecated,
+			private = parsed.private,
+			ignore = parsed.ignore,
+			reexportOnly = parsed.reexportOnly,
+			tags = filteredTags,
+		}
+	end
+
+	local function mergeParsedDocs(
+		shared: ParsedDoc?,
+		specific: ParsedDoc?,
+		knownParams: { [string]: boolean }
+	): ParsedDoc?
+		if not shared and not specific then
+			return nil
+		end
+		if shared and not specific then
+			return filterParsedDocParams(shared, knownParams)
+		end
+		if specific and not shared then
+			return filterParsedDocParams(specific, knownParams)
+		end
+
+		local mergedParamsByName: { [string]: doctags.ParsedParam } = {}
+		local paramOrder: { string } = {}
+		for _, param in (shared :: ParsedDoc).params do
+			if knownParams[param.name] then
+				mergedParamsByName[param.name] = {
+					name = param.name,
+					description = param.description,
+					typeOverride = param.typeOverride,
+				}
+				table.insert(paramOrder, param.name)
+			end
+		end
+		for _, param in (specific :: ParsedDoc).params do
+			if knownParams[param.name] then
+				if not mergedParamsByName[param.name] then
+					table.insert(paramOrder, param.name)
+				end
+				mergedParamsByName[param.name] = {
+					name = param.name,
+					description = param.description,
+					typeOverride = param.typeOverride,
+				}
+			end
+		end
+
+		local mergedParams = {}
+		for _, name in paramOrder do
+			if mergedParamsByName[name] then
+				table.insert(mergedParams, mergedParamsByName[name])
+			end
+		end
+
+		local mergedReturns = {}
+		local sharedReturns = (shared :: ParsedDoc).returns
+		local specificReturns = (specific :: ParsedDoc).returns
+		local returnCount = math.max(#sharedReturns, #specificReturns)
+		for i = 1, returnCount do
+			local s = sharedReturns[i]
+			local o = specificReturns[i]
+			table.insert(mergedReturns, {
+				description = if o and o.description ~= "" then o.description else if s then s.description else "",
+				type = if o and o.type ~= nil then o.type else if s then s.type else nil,
+			})
+		end
+
+		local mergedErrors = {}
+		for _, err in (shared :: ParsedDoc).errors do
+			table.insert(mergedErrors, err)
+		end
+		for _, err in (specific :: ParsedDoc).errors do
+			table.insert(mergedErrors, err)
+		end
+
+		local mergedTags = {}
+		local seenTags: { [string]: boolean } = {}
+		for _, source in { (shared :: ParsedDoc).tags, (specific :: ParsedDoc).tags } do
+			for _, tag in source do
+				if not seenTags[tag] then
+					seenTags[tag] = true
+					table.insert(mergedTags, tag)
+				end
+			end
+		end
+
+		return {
+			body = mergeDocText((shared :: ParsedDoc).body, (specific :: ParsedDoc).body) or "",
+			params = mergedParams,
+			returns = mergedReturns,
+			errors = mergedErrors,
+			yields = (shared :: ParsedDoc).yields or (specific :: ParsedDoc).yields,
+			unreleased = (shared :: ParsedDoc).unreleased or (specific :: ParsedDoc).unreleased,
+			since = (specific :: ParsedDoc).since or (shared :: ParsedDoc).since,
+			deprecated = (specific :: ParsedDoc).deprecated or (shared :: ParsedDoc).deprecated,
+			private = (shared :: ParsedDoc).private or (specific :: ParsedDoc).private,
+			ignore = (shared :: ParsedDoc).ignore or (specific :: ParsedDoc).ignore,
+			reexportOnly = (shared :: ParsedDoc).reexportOnly or (specific :: ParsedDoc).reexportOnly,
+			tags = mergedTags,
+		}
+	end
+
+	local function makeOverloadDoc(
+		name: string,
+		owner: string?,
+		location: luau.Location,
+		docText: string?,
+		parsed: ParsedDoc?,
+		rawSig: types.RawFuncSig
+	): OverloadDoc
+		local adapter: FuncDoc = {
+			name = name,
+			doc = if parsed then parsed.body else docText,
+			location = location,
+			params = rawSig.params,
+			returnStr = rawSig.retStr,
+			parsedDoc = parsed,
+			yields = if parsed then parsed.yields else false,
+			isMethod = rawSig.isMethod,
+			selfType = rawSig.selfType,
+			owner = owner,
+			generics = rawSig.generics,
+			signature = "",
+			signatureFull = "",
+			signatureParts = nil,
+			signatureMeta = nil,
+			overloads = nil,
+		}
+		sig.applySignature(adapter, rawSig)
+		return {
+			doc = adapter.doc,
+			location = adapter.location,
+			params = adapter.params,
+			returnStr = adapter.returnStr,
+			parsedDoc = adapter.parsedDoc,
+			yields = adapter.yields,
+			isMethod = adapter.isMethod,
+			selfType = adapter.selfType,
+			owner = adapter.owner,
+			generics = adapter.generics,
+			signature = adapter.signature,
+			signatureFull = adapter.signatureFull,
+			signatureParts = adapter.signatureParts,
+			signatureMeta = adapter.signatureMeta,
+		}
+	end
+
+	local function collectTypeFunctionOverloads(
+		typeNode: luau.AstType?,
+		seenAliases: { [string]: boolean }?
+	): { luau.TypeFunction }
+		local overloads: { luau.TypeFunction } = {}
+
+		local function visit(node: luau.AstType?)
+			if not node then
+				return
+			end
+			if node.type == "TypeFunction" then
+				table.insert(overloads, node :: luau.TypeFunction)
+				return
+			end
+			if node.type == "TypeGroup" then
+				visit((node :: luau.TypeGroup).inner)
+				return
+			end
+			if node.type == "TypeIntersection" then
+				for _, part in (node :: luau.TypeIntersection).types do
+					visit(part)
+				end
+				return
+			end
+			if node.type == "TypeReference" then
+				local ref = node :: luau.TypeReference
+				if not ref.prefix and typeAliasNodes[ref.name] then
+					local seen = seenAliases or {}
+					if seen[ref.name] then
+						return
+					end
+					seen[ref.name] = true
+					visit(typeAliasNodes[ref.name])
+					seen[ref.name] = nil
+				end
+			end
+		end
+
+		visit(typeNode)
+		return overloads
+	end
+
+	local function extractAssertionAnnotation(expr: luau.AstExpr?): luau.AstType?
+		local current = expr
+		while current and current.type == "ExprTypeAssertion" do
+			local assertion = current :: luau.ExprTypeAssertion
+			if assertion.annotation then
+				return assertion.annotation
+			end
+			current = assertion.expr
+		end
+		return nil
+	end
+
+	local function processTypedOverloads(
+		name: string,
+		owner: string?,
+		location: luau.Location,
+		typeNode: luau.AstType?,
+		doc: string?
+	): boolean
+		local overloadNodes = collectTypeFunctionOverloads(typeNode)
+		if #overloadNodes == 0 then
+			return false
+		end
+
+		local rawOverloads = {}
+		local allKnownParams: { [string]: boolean } = { ["..."] = true }
+		for _, overloadNode in overloadNodes do
+			local rawSig = sig.extractTypeFuncSig(overloadNode)
+			table.insert(rawOverloads, {
+				node = overloadNode,
+				rawSig = rawSig,
+			})
+			for paramName in buildKnownParams(rawSig) do
+				allKnownParams[paramName] = true
+			end
+		end
+
+		local sharedParsed = if doc then parseDocTags(doc, allKnownParams) else nil
+		if sharedParsed and sharedParsed.ignore then
+			return true
+		end
+
+		local overloadDocs: { OverloadDoc } = {}
+		for _, entry in rawOverloads do
+			local overloadNode = entry.node :: luau.TypeFunction
+			local rawSig = entry.rawSig :: types.RawFuncSig
+			local knownParams = buildKnownParams(rawSig)
+			local overloadDocText = findDocComment(overloadNode.location.beginline)
+			local overloadParsed = if overloadDocText then parseDocTags(overloadDocText, knownParams) else nil
+			local mergedParsed = mergeParsedDocs(sharedParsed, overloadParsed, knownParams)
+			if mergedParsed and mergedParsed.ignore then
+				continue
+			end
+			table.insert(
+				overloadDocs,
+				makeOverloadDoc(
+					name,
+					owner,
+					overloadNode.location,
+					mergeDocText(if sharedParsed then sharedParsed.body else doc, overloadDocText),
+					mergedParsed,
+					rawSig
+				)
+			)
+		end
+
+		if #overloadDocs == 0 then
+			return true
+		end
+
+		local primary = overloadDocs[1]
+		table.insert(functions, {
+			name = name,
+			doc = if sharedParsed then sharedParsed.body else doc,
+			location = location,
+			params = primary.params,
+			returnStr = primary.returnStr,
+			parsedDoc = sharedParsed,
+			yields = if sharedParsed then sharedParsed.yields else primary.yields,
+			isMethod = primary.isMethod,
+			selfType = primary.selfType,
+			owner = owner,
+			generics = primary.generics,
+			signature = primary.signature,
+			signatureFull = primary.signatureFull,
+			signatureParts = primary.signatureParts,
+			signatureMeta = primary.signatureMeta,
+			overloads = overloadDocs,
+		})
+		return true
+	end
 
 	-- ── Process a function statement/expression ─────────────────────────
 	local function processFunction(
@@ -328,15 +663,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		doc: string?
 	)
 		local funcSig = sig.extractFuncSig(funcNode)
-
-		-- Build known param names set for doc tag parsing
-		local knownParams: { [string]: boolean } = {}
-		for _, n in funcSig.paramNames do
-			if n and n ~= "self" then
-				knownParams[n :: string] = true
-			end
-		end
-		knownParams["..."] = true
+		local knownParams = buildKnownParams(funcSig)
 
 		local parsed = if doc then parseDocTags(doc, knownParams) else nil
 
@@ -359,6 +686,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			generics = funcSig.generics,
 			signature = "",
 			signatureFull = "",
+			overloads = nil,
 		}
 		sig.applySignature(func, funcSig)
 		table.insert(functions, func)
@@ -882,6 +1210,15 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 						continue
 					end
 
+					local annotation = extractAssertionAnnotation(val)
+					if varName and returnedRoots[varName] and annotation then
+						if
+							processTypedOverloads(varName, nil, stat.location, annotation, if i == 1 then doc else nil)
+						then
+							continue
+						end
+					end
+
 					if varName and returnedRoots[varName] then
 						local valStr = extractLiteralValue(val :: luau.AstExpr)
 						if valStr then
@@ -928,6 +1265,24 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 							else nil
 						processFunction(name, ownerPath, fnExpr, stat.location, if i == 1 then doc else nil)
 						continue
+					end
+
+					local annotation = extractAssertionAnnotation(val)
+					if annotation then
+						local ownerPath = if var.type == "ExprIndexName"
+							then exprToPath((var :: luau.ExprIndexName).expr)
+							else nil
+						if
+							processTypedOverloads(
+								name,
+								ownerPath,
+								stat.location,
+								annotation,
+								if i == 1 then doc else nil
+							)
+						then
+							continue
+						end
 					end
 
 					-- Table constructor: foo.bar = { ... } or foo.bar = table.freeze({ ... })
@@ -1225,18 +1580,36 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			for _, member in t.members do
 				annotateSignatureParts(member.signatureParts)
 				annotateSignatureMeta(member.signatureMeta)
+				if member.overloads then
+					for _, overload in member.overloads do
+						annotateSignatureParts(overload.signatureParts)
+						annotateSignatureMeta(overload.signatureMeta)
+					end
+				end
 			end
 		end
 		if t.metamethods then
 			for _, member in t.metamethods do
 				annotateSignatureParts(member.signatureParts)
 				annotateSignatureMeta(member.signatureMeta)
+				if member.overloads then
+					for _, overload in member.overloads do
+						annotateSignatureParts(overload.signatureParts)
+						annotateSignatureMeta(overload.signatureMeta)
+					end
+				end
 			end
 		end
 	end
 	for _, f in functions do
 		annotateSignatureParts(f.signatureParts)
 		annotateSignatureMeta(f.signatureMeta)
+		if f.overloads then
+			for _, overload in f.overloads do
+				annotateSignatureParts(overload.signatureParts)
+				annotateSignatureMeta(overload.signatureMeta)
+			end
+		end
 	end
 
 	-- ── Detect primary export ────────────────────────────────────────────

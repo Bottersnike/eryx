@@ -199,6 +199,39 @@ local function rewriteFunctionIdentity(func: extract.FuncDoc, newName: string, n
 		func.signatureMeta.name = newName
 		func.signatureMeta.owner = newOwner
 	end
+
+	if func.overloads then
+		for _, overload in func.overloads do
+			local overloadOldPrefix = (if oldOwner then oldOwner .. (if overload.isMethod then ":" else ".") else "")
+				.. oldName
+			local overloadNewPrefix = (if newOwner then newOwner .. (if overload.isMethod then ":" else ".") else "")
+				.. newName
+			overload.owner = newOwner
+			if overload.signature and overload.signature:sub(1, #overloadOldPrefix) == overloadOldPrefix then
+				overload.signature = overloadNewPrefix .. overload.signature:sub(#overloadOldPrefix + 1)
+			end
+			if overload.signatureFull and overload.signatureFull:sub(1, #overloadOldPrefix) == overloadOldPrefix then
+				overload.signatureFull = overloadNewPrefix .. overload.signatureFull:sub(#overloadOldPrefix + 1)
+			end
+			if overload.signatureParts then
+				local parts = overload.signatureParts
+				if oldOwner then
+					if #parts >= 3 then
+						if newOwner then
+							parts[1].text = newOwner
+						end
+						parts[3].text = newName
+					end
+				elseif #parts >= 1 then
+					parts[1].text = newName
+				end
+			end
+			if overload.signatureMeta then
+				overload.signatureMeta.name = newName
+				overload.signatureMeta.owner = newOwner
+			end
+		end
+	end
 end
 
 local function functionKey(owner: string?, name: string): string

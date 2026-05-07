@@ -54,6 +54,80 @@ local function trim(s: string): string
 	return s:match("^%s*(.-)%s*$") or ""
 end
 
+local function normalizeGitSubdir(subdir: string?): string?
+	if subdir == nil then
+		return nil
+	end
+
+	local normalized = trim(subdir):gsub("\\", "/")
+
+	while normalized:sub(1, 2) == "./" do
+		normalized = normalized:sub(3)
+	end
+
+	normalized = normalized:gsub("^/+", ""):gsub("/+$", ""):gsub("/+", "/")
+	if normalized == "" or normalized == "." then
+		return nil
+	end
+
+	for segment in normalized:gmatch("[^/]+") do
+		if segment == ".." then
+			error(`Invalid git dependency subdir: {subdir}`)
+		end
+	end
+
+	return normalized
+end
+
+local function manifestPath(subdir: string?): string
+	if subdir then
+		return subdir .. "/eryx.toml"
+	end
+
+	return "eryx.toml"
+end
+
+local function gitRequirementPath(cloneUrl: string, subdir: string?): string
+	local identity = canonicalGitIdentity(cloneUrl)
+	if subdir then
+		return identity .. "\0" .. subdir
+	end
+
+	return identity
+end
+
+local function moveDirContents(source: string, dest: string)
+	for _, entry in fs.listDir(source) do
+		local from = fs.path.join(source, entry)
+		local to = fs.path.join(dest, entry)
+
+		if fs.exists(to) then
+			error(`Failed to materialize git dependency: destination already exists at {to}`)
+		end
+
+		fs.rename(from, to)
+	end
+end
+
+local function removeEmptyParents(path: string, stopAt: string)
+	local current = path
+
+	while current ~= "" and current ~= stopAt do
+		if #fs.listDir(current) > 0 then
+			return
+		end
+
+		local parent = fs.path.dirname(current)
+		fs.remove(current)
+
+		if parent == nil or parent == current then
+			return
+		end
+
+		current = parent
+	end
+end
+
 local function gitFolderPath(root: string, cloneUrl: string): string
 	local identity = canonicalGitIdentity(cloneUrl)
 	local dir = util.identityToDirName(identity) .. ".git"
@@ -84,7 +158,7 @@ local function ensureBareRepo(root: string, cloneUrl: string): string
 	return gitFolder
 end
 
-local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (string, string, string?)
+local function prepare(root: string, cloneUrl: string, ref: types.GitRef, subdir: string?): (string, string, string?)
 	local gitFolder = ensureBareRepo(root, cloneUrl)
 
 	local fetchRef: string
@@ -117,7 +191,7 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (stri
 
 			local ok, out = callGit(gitFolder, {
 				"show",
-				resolvedCommit .. ":eryx.toml",
+				resolvedCommit .. ":" .. manifestPath(subdir),
 			})
 
 			if ok then
@@ -149,7 +223,7 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef): (stri
 
 	local ok, out = callGit(gitFolder, {
 		"show",
-		resolvedCommit .. ":eryx.toml",
+		resolvedCommit .. ":" .. manifestPath(subdir),
 	})
 
 	if not ok then
@@ -210,18 +284,21 @@ local gitSource: types.Source = {
 		requirements: { types.Requirement },
 		visiting: types.Visiting,
 		allowLocal: boolean,
-		recurse: types.CollectRecursion
+		recurse: types.CollectRecursion,
+		workspace: project.Workspace?
 	)
 		local dep = dep :: project.GitDependency
 
 		local ref = getGitRef(dep)
-		local gitFolder, resolvedCommit, config = prepare(root, dep.git, ref)
+		local subdir = normalizeGitSubdir((dep :: any).subdir)
+		local gitFolder, resolvedCommit, config = prepare(root, dep.git, ref, subdir)
 
 		local r: types.Requirement = {
 			type = "git",
 			name = name,
-			path = canonicalGitIdentity(dep.git),
+			path = gitRequirementPath(dep.git, subdir),
 			url = dep.git,
+			subdir = subdir,
 			ref = { type = "commit", value = resolvedCommit },
 			requestedRef = ref,
 			gitFolder = gitFolder,
@@ -234,7 +311,7 @@ local gitSource: types.Source = {
 
 			local childPrj = project.parse(config)
 			r.sourceRoot = childPrj.manifest.project.sourceRoot
-			recurse(root, path, childPrj.manifest, r.tree, visiting, false)
+			recurse(root, path, childPrj.manifest, r.tree, visiting, false, workspace)
 
 			cycles.popVisiting(visitingKey, visiting)
 		end
@@ -248,7 +325,9 @@ local gitSource: types.Source = {
 		end
 
 		-- Re-fetch here so FETCH_HEAD definitely points at this exact dependency.
-		local gitFolder, resolvedCommit = prepare(root, requirement.url, requirement.ref)
+		local gitFolder, resolvedCommit = prepare(root, requirement.url, requirement.ref, requirement.subdir)
+
+		local checkoutPath = if requirement.subdir then requirement.subdir else "."
 
 		local res, _stdout, stderr = callGit(".", {
 			"--git-dir",
@@ -259,23 +338,35 @@ local gitSource: types.Source = {
 			"--force",
 			resolvedCommit,
 			"--",
-			".",
+			checkoutPath,
 		})
 
 		if not res then
 			error(`Failed to checkout git dependency {requirement.url}\n{stderr}`)
 		end
+
+		if requirement.subdir then
+			local source = fs.path.join(dest, requirement.subdir)
+			if not fs.isDirectory(source) then
+				error(`Failed to checkout git dependency subtree {requirement.subdir}`)
+			end
+
+			moveDirContents(source, dest)
+			removeEmptyParents(source, dest)
+		end
 	end,
 
 	identity = function(requirement: types.Requirement): string
 		assert(requirement.type == "git")
-		return "git:" .. requirement.path .. "#" .. gitRefIdentity(requirement.ref)
+		local suffix = if requirement.subdir then ":" .. requirement.subdir else ""
+		return "git:" .. canonicalGitIdentity(requirement.url) .. suffix .. "#" .. gitRefIdentity(requirement.ref)
 	end,
 
 	generateLock = function(requirement: types.Requirement): { [string]: any }
 		assert(requirement.type == "git")
 		return {
 			url = requirement.url,
+			subdir = requirement.subdir,
 			ref = {
 				type = requirement.ref.type,
 				value = requirement.ref.value,
@@ -294,8 +385,9 @@ local gitSource: types.Source = {
 		return {
 			type = "git",
 			name = "",
-			path = canonicalGitIdentity(url),
+			path = gitRequirementPath(url, package.data.subdir),
 			url = url,
+			subdir = package.data.subdir,
 			ref = {
 				type = package.data.ref.type,
 				value = package.data.ref.value,

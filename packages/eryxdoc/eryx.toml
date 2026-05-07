@@ -1,0 +1,13 @@
+[eryx]
+manifest-version = 1
+
+[eryx.project]
+name = "eryxdoc"
+version = "0.0.1"
+source-root = "src"
+
+[eryx.scripts]
+doc = "scripts/doc.luau"
+
+[eryx.dependencies]
+markdown = { git = "https://github.com/Bottersnike/eryx", branch = "master", subdir = "packages/markdown" }

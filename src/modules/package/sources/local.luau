@@ -27,7 +27,8 @@ local repo: types.Source = {
 		requirements: { types.Requirement },
 		visiting: types.Visiting,
 		allowLocal: boolean,
-		recurse: types.CollectRecursion
+		recurse: types.CollectRecursion,
+		workspace: project.Workspace?
 	)
 		local dep = dep :: project.LocalDependency
 
@@ -52,7 +53,7 @@ local repo: types.Source = {
 		local childPrj = project.loadNearest(dep["local"])
 		if childPrj then
 			r.sourceRoot = childPrj.manifest.project.sourceRoot
-			recurse(root, dep["local"], childPrj.manifest, r.tree, visiting, allowLocal)
+			recurse(root, dep["local"], childPrj.manifest, r.tree, visiting, allowLocal, workspace)
 		end
 
 		cycles.popVisiting(visitingKey, visiting)

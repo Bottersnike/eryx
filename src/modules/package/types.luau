@@ -32,10 +32,18 @@ export type Requirement =
 		tree: { Requirement },
 	}
 	| {
+		type: "workspace",
+		name: string,
+		path: string,
+		sourceRoot: string?,
+		tree: { Requirement },
+	}
+	| {
 		type: "git",
 		name: string,
 		path: string,
 		url: string,
+		subdir: string?,
 		ref: GitRef,
 		requestedRef: GitRef,
 		gitFolder: string,
@@ -63,7 +71,7 @@ export type Requirement =
 		sourceRoot: string?,
 		tree: { Requirement },
 	}
-export type RequirementKind = "local" | "path" | "git" | "file" | "repository"
+export type RequirementKind = "local" | "path" | "workspace" | "git" | "file" | "repository"
 
 export type InstallEdge = {
 	alias: string,
@@ -115,7 +123,8 @@ export type CollectRecursion = (
 	manifest: project.Manifest,
 	requirements: { Requirement },
 	visiting: Visiting,
-	allowLocal: boolean
+	allowLocal: boolean,
+	workspace: project.Workspace?
 ) -> ()
 
 export type ResolveRecursion = (ctx: ResolveContext, node: InstallNode, children: { Requirement }) -> ()
@@ -144,6 +153,8 @@ export type Source = {
 		visiting: Visiting,
 		-- Are local-copy packages allowed at this point in the chain?
 		allowLocal: boolean,
+		-- Root-level workspace overrides, if any
+		workspace: project.Workspace?,
 
 		-- For recursing into children
 		recurse: CollectRecursion
