@@ -9,7 +9,6 @@ version = "0.0.1"
 eryx = "http://127.0.0.1:8000"
 
 [eryx.dependencies]
-eryx = { path = "build/Debug/modules" }
 eryxdoc = { git = "https://github.com/Bottersnike/eryx", branch = "master", subdir = "packages/eryxdoc" }
 
 [eryx.workspace]
