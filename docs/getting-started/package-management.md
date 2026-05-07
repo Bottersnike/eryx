@@ -25,6 +25,8 @@ This means:
 
 The lock file also tracks package-manager-owned aliases, so installs can preserve unrelated user aliases in `.luaurc` while cleaning up stale aliases that were previously managed by Eryx.
 
+Workspace bootstrap installs are not added to the root `eryx.lock` unless they are also part of the root dependency graph. If a workspace package has its own `eryx.lock`, Eryx will still respect it when initializing that package in place.
+
 ## Command line
 
 The package manager is accessed through `eryx pkg`. The following commands are available:
@@ -43,6 +45,8 @@ Eryx writes package aliases into `.luaurc`.
 
 If a package manifest sets `eryx.project.source-root`, Eryx points that package's alias at the declared source folder instead of the package directory itself. For example, a package installed into `eryx_packages/foo-1234abcd` with `source-root = "src"` will be aliased to `eryx_packages/foo-1234abcd/src`.
 
+Workspace packages behave the same way, except their aliases point at the real package directory on disk rather than a copied install in `eryx_packages`.
+
 When a previous `eryx.lock` is available, Eryx treats the aliases recorded in that lock as package-manager-owned. During install:
 
 - Aliases currently owned by Eryx are updated in place.
@@ -52,6 +56,58 @@ When a previous `eryx.lock` is available, Eryx treats the aliases recorded in th
 When no lock file exists yet, Eryx warns before overwriting existing aliases that it cannot prove it owns.
 
 `.config.luau` is currently not supported by the package manager.
+
+## Monorepo workspaces
+
+Eryx supports root-level monorepo workspace overrides through `[eryx.workspace]`.
+
+This lets packages keep their published dependency sources, such as `git` dependencies with `subdir = "..."`, while local development resolves those package names to folders inside the current repository.
+
+```toml
+[eryx.workspace]
+eryxdoc = "./packages/eryxdoc"
+markdown = "./packages/markdown"
+```
+
+Workspace entries are:
+
+- Root-only. They belong in the top-level `eryx.toml`, not in package manifests.
+- Keyed by package name. The target folder must contain an `eryx.toml` whose `eryx.project.name` matches the workspace key.
+- Resolved relative to the root manifest that declares them.
+
+When a dependency matches a workspace entry:
+
+- Eryx keeps the package in place instead of copying it into `eryx_packages`.
+- Eryx still loads that package's manifest, resolves its child dependencies, and writes its local `.luaurc`.
+- If the package declares `source-root`, the alias points at that subdirectory inside the real package folder.
+
+Workspace packages are also initialized even when they are not direct dependencies of the root project. This is useful for monorepos where you want each package's local aliases set up without making the root project depend on every package.
+
+That means:
+
+- The root `.luaurc` only gets aliases for actual root dependencies.
+- Each workspace package still gets its own `.luaurc` generated in place.
+- The root `eryx.lock` only tracks packages that are actually part of the root dependency graph.
+
+A common monorepo pattern looks like this:
+
+```toml
+# packages/eryxdoc/eryx.toml
+[eryx.dependencies]
+markdown = { git = "https://github.com/example/eryx", branch = "main", subdir = "packages/markdown" }
+```
+
+```toml
+# repo root eryx.toml
+[eryx.workspace]
+eryxdoc = "./packages/eryxdoc"
+markdown = "./packages/markdown"
+```
+
+In that setup:
+
+- External users install `markdown` from git when they depend on `eryxdoc`.
+- Local monorepo development resolves `markdown` to `./packages/markdown` instead.
 
 ## Dependency types
 

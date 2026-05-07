@@ -1,6 +1,8 @@
 # Markdown
 
-Eryx provides a markdown parser and HTML renderer in [[@eryx/markdown]].
+Eryx provides a first-party markdown parser and HTML renderer, though this has now been moved to a package.
+
+As there is no central repository yet, it can be installed by adding `markdown = { git = "https://github.com/Bottersnike/eryx", branch = "master", subdir = "packages/markdown" }` to your dependencies.
 
 This parser supports CommonMark Markdown, along with most GitHub Flavored Markdown (GFM) extensions. It also supports a number of additional custom extensions and can make use of user-provided extensions too.
 

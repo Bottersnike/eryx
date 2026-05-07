@@ -2,6 +2,8 @@
 
 Eryx comes with a powerful documentation generation engine. It was used to generate this site!
 
+To install the documentation engine, add `eryxdoc = { git = "https://github.com/Bottersnike/eryx", branch = "master", subdir = "packages/eryxdoc" }` to your project dependencies.
+
 API documentation is **exclusively** extracted from your code and its structure, along with associated documentation comments. Documentation comments should be denoted with either `---` or wrapped in `--[=[ ... ]=]`.
 
 When locating the documentation for a piece of code, the line directly above is checked. That is:
@@ -121,6 +123,6 @@ return {
 
 Set `staticMount = "/"` to copy and serve files from `static` at the site root instead of under `/static/`.
 
-Once our project is configured, we can start the development server using `eryx doc --dev`. The development server supports live-reload as you make changes to your project.
+Once our project is configured, we can start the development server using `eryx run doc --dev`. The development server supports live-reload as you make changes to your project.
 
-To produce a build, simply run `eryx doc`.
+To produce a build, simply run `eryx run doc`.
