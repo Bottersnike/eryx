@@ -8,6 +8,12 @@
 
 namespace fs = std::filesystem;
 
+static std::string path_to_string(const fs::path& p) {
+    if (p.empty()) return std::string();
+    auto u8 = p.generic_u8string();
+    return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
+}
+
 static fs::path getExecutableDir() {
 #if defined(_WIN32)
     wchar_t buf[MAX_PATH];
@@ -230,7 +236,7 @@ static void runLuauConfig(lua_State* L, fs::path path, std::string source, fs::p
     }
 
     auto aliasOptions = Luau::ConfigOptions::AliasOptions{
-        .configLocation = directory.string(),
+        .configLocation = path_to_string(directory),
         .overwriteAliases = true,
     };
     auto maybeError = createLuauConfigFromLuauTable(cfg, *luauTable, aliasOptions);
@@ -350,8 +356,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
             if (fs::exists(cur) && fs::is_directory(cur)) {
                 for (auto& entry : fs::directory_iterator(cur)) {
                     if (!entry.is_regular_file()) continue;
-                    std::string name = entry.path().filename().string();
-                    if (name == ".config.luau") {
+                    if (entry.path().filename() == fs::path(".config.luau")) {
                         configLuau = entry.path();
                         break;
                     }
@@ -457,7 +462,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
         }
 
         if (it->isLuaurc) {
-            if (configDir.string().length() == 0) {
+            if (configDir.empty()) {
 #ifdef _WIN32
                 luaL_error(L, "Config loading went drastically wrong. \"%ls\" has no directory!",
                            it->file.c_str());
@@ -469,7 +474,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
 
             Luau::ConfigOptions opts;
             opts.aliasOptions = Luau::ConfigOptions::AliasOptions{
-                .configLocation = configDir.string(),
+                .configLocation = path_to_string(configDir),
                 .overwriteAliases = true,
             };
             auto err = Luau::parseConfig(contents, cfg, opts);
@@ -482,7 +487,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
             if (it->isVFS)
                 cacheKey = std::to_string(LocatedModule::TYPE_VFS) + ":" + it->vfsPath;
             else
-                cacheKey = std::to_string(LocatedModule::TYPE_VFS) + ":" + it->file.string();
+                cacheKey = std::to_string(LocatedModule::TYPE_VFS) + ":" + path_to_string(it->file);
 
             runLuauConfig(L, it->file, contents, configDir, cfg, cacheKey);
         }
@@ -512,7 +517,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
         }
 
         AliasInfo ainfo = {
-            resolved.string(),
+            path_to_string(resolved),
             std::string(info.configLocation),
             info.value,
         };
