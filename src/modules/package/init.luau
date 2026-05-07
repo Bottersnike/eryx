@@ -52,12 +52,32 @@ local function resolveWorkspacePath(root: string, configuredPath: string): strin
 	return resolved
 end
 
-local function effectiveWorkspace(manifest: project.Manifest, workspaceOverride: project.Workspace?): project.Workspace?
-	if workspaceOverride ~= nil then
-		return workspaceOverride
+local function normalizeWorkspace(root: string?, workspace: project.Workspace?): project.Workspace?
+	if workspace == nil then
+		return nil
 	end
 
-	return manifest.workspace
+	if root == nil then
+		return workspace
+	end
+
+	local out: project.Workspace = {}
+	for name in workspace do
+		out[name] = resolveWorkspacePath(root, workspace[name])
+	end
+	return out
+end
+
+local function effectiveWorkspace(
+	root: string?,
+	manifest: project.Manifest,
+	workspaceOverride: project.Workspace?
+): project.Workspace?
+	if workspaceOverride ~= nil then
+		return normalizeWorkspace(root, workspaceOverride)
+	end
+
+	return normalizeWorkspace(root, manifest.workspace)
 end
 
 local function resolveRepositoryName(manifest: project.Manifest, dep: project.RepositoryDependency): string
@@ -87,7 +107,7 @@ local function dependencyMatchesLock(
 		return false
 	end
 
-	local workspace = effectiveWorkspace(manifest, workspaceOverride)
+	local workspace = effectiveWorkspace(root, manifest, workspaceOverride)
 	local workspaceName = if (dep :: any).repo then ((dep :: any).package or alias) :: string else alias
 	local workspacePath = workspace and workspace[workspaceName]
 	if workspacePath then
@@ -204,7 +224,7 @@ local function collectRequirementsFromDependencies(
 		requirements,
 		visiting,
 		true,
-		effectiveWorkspace(manifest, workspaceOverride)
+		effectiveWorkspace(root, manifest, workspaceOverride)
 	)
 end
 
@@ -403,16 +423,10 @@ local function computeInstallPlanFromManifest(
 
 	local requirements: { types.Requirement } = {}
 	local visiting: types.Visiting = { order = {}, set = {} }
+	local workspace = effectiveWorkspace(prj.root, prj.manifest, workspaceOverride)
 
-	collectRequirementsFromDependencies(
-		prj.root,
-		prj.manifest,
-		groups.regular,
-		requirements,
-		visiting,
-		workspaceOverride
-	)
-	collectRequirementsFromDependencies(prj.root, prj.manifest, groups.dev, requirements, visiting, workspaceOverride)
+	collectRequirementsFromDependencies(prj.root, prj.manifest, groups.regular, requirements, visiting, workspace)
+	collectRequirementsFromDependencies(prj.root, prj.manifest, groups.dev, requirements, visiting, workspace)
 
 	local plan = planner.produceInstallPlan(requirements)
 	splitPlanRoots(plan, groups.dev)
@@ -568,7 +582,7 @@ local function installWithMode(
 end
 
 local function initialiseWorkspaceProjects(prj: project.ManifestDocument, includeDev: boolean)
-	local workspace = prj.manifest.workspace
+	local workspace = effectiveWorkspace(prj.root, prj.manifest, nil)
 	if workspace == nil or prj.root == nil then
 		return
 	end
@@ -580,7 +594,7 @@ local function initialiseWorkspaceProjects(prj: project.ManifestDocument, includ
 	table.sort(names)
 
 	for _, name in names do
-		local packageRoot = resolveWorkspacePath(prj.root, workspace[name])
+		local packageRoot = workspace[name]
 		local manifestPath = fs.path.join(packageRoot, "eryx.toml")
 		if not fs.isFile(manifestPath) then
 			error(`Workspace package "{name}" does not contain eryx.toml at {workspace[name]}`)
