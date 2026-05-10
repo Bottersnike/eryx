@@ -26,8 +26,8 @@ task.spawn(function(url: string)
     local title = re.find("<title>(.*?)</title>", res.body)[1]
 
     local db = sqlite.open("crawls.db")
-    db:Exec("INSERT INTO pages VALUES(?, ?, ?)", url, title, date.now():ToIsoString())
-    db:Close()
+    db:exec("INSERT INTO pages VALUES(?, ?, ?)", url, title, date.now():toIsoString())
+    db:close()
 
     pprint.pprint({ url=url, title=title })
 end, "https://example.org")

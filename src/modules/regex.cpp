@@ -131,7 +131,7 @@ static void push_match_table(lua_State* L, pcre2_code* re, pcre2_match_data* md,
     // Numbered captures as array part [1], [2], ...
     for (int i = 1; i < rc; i++) {
         if (ov[2 * i] == PCRE2_UNSET) {
-            lua_pushboolean(L, 0);  // false for unmatched optional groups
+            lua_pushnil(L);  // nil for unmatched optional groups
         } else {
             lua_pushlstring(L, subject + ov[2 * i], ov[2 * i + 1] - ov[2 * i]);
         }
