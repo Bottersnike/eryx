@@ -1,62 +1,54 @@
 local urlEncoding = require("@eryx/encoding/url")
+local uri = require("@eryx/uri")
 
 local util = {}
 
 type QueryScalar = string | number | boolean
 type QueryValue = QueryScalar | { QueryScalar }
 type QueryTable = { [string]: string | { string } }
+type ParsedUrl = { scheme: string, host: string, port: number, path: string }
 
 function util.trim(value: string): string
 	return (value:gsub("^%s+", ""):gsub("%s+$", ""))
 end
 
+local function normalizeUrlHost(host: string): string
+	if string.sub(host, 1, 1) == "[" and string.sub(host, -1) == "]" then
+		return string.sub(host, 2, -2)
+	end
+	return host
+end
+
+local function formatUrlHost(host: string): string
+	if string.find(host, ":", 1, true) ~= nil and string.sub(host, 1, 1) ~= "[" then
+		return "[" .. host .. "]"
+	end
+	return host
+end
+
 --- Parse a URL into (scheme, host, port, path)
-function util.parseUrl(url: string): { scheme: string, host: string, port: number, path: string }
-	-- scheme://host[:port][/path]
-	local scheme, rest = string.match(url, "^(https?)://(.+)$")
-	if not scheme then
-		error("Unsupported or malformed URL: " .. url)
+function util.parseUrl(url: string): ParsedUrl
+	local parsed = uri.parseUrl(url)
+	local port = parsed.authority.port
+	if port == nil then
+		port = if parsed.scheme == "https" then 443 else 80
 	end
 
-	-- Split host and path
-	local hostport, path = string.match(rest :: string, "^([^/]+)(/.*)$")
-	if not hostport then
-		hostport = rest :: string
-		path = "/"
+	local path = parsed.path
+	if parsed.query ~= nil then
+		path ..= "?" .. parsed.query
 	end
 
-	-- Split host and port
-	-- Handle IPv6: [::1]:port
-	local host: string, port: number
-	local bracket_host, bracket_port = string.match(hostport :: string, "^%[([^%]]+)%]:(%d+)$")
-	if bracket_host then
-		host = bracket_host
-		port = tonumber(bracket_port) :: number
-	else
-		local bracket_host_only = string.match(hostport :: string, "^%[([^%]]+)%]$")
-		if bracket_host_only then
-			host = bracket_host_only
-			port = if scheme == "https" then 443 else 80
-		else
-			local h, p = string.match(hostport :: string, "^(.+):(%d+)$")
-			if h then
-				host = h
-				port = tonumber(p) :: number
-			else
-				host = hostport :: string
-				port = if scheme == "https" then 443 else 80
-			end
-		end
-	end
-
-	return { scheme = scheme :: string, host = host, port = port, path = path :: string }
+	return {
+		scheme = parsed.scheme,
+		host = normalizeUrlHost(parsed.authority.host),
+		port = port,
+		path = path,
+	}
 end
 
 --- Resolves a possibly-relative Location header against the original URL.
-function util.resolveRedirect(
-	originalUrl: { scheme: string, host: string, port: number, path: string },
-	location: string
-): string
+function util.resolveRedirect(originalUrl: ParsedUrl, location: string): string
 	-- Absolute URL
 	if string.match(location, "^https?://") then
 		return location
@@ -75,14 +67,15 @@ function util.resolveRedirect(
 	then
 		portSuffix = ":" .. tostring(originalUrl.port)
 	end
-	local base = originalUrl.scheme .. "://" .. originalUrl.host .. portSuffix
+	local base = originalUrl.scheme .. "://" .. formatUrlHost(originalUrl.host) .. portSuffix
 
 	if string.sub(location, 1, 1) == "/" then
 		return base .. location
 	end
 
 	-- Relative path: resolve against the directory of the current path
-	local dir = string.match(originalUrl.path, "^(.*/)[^/]*$") or "/"
+	local sourcePath = string.match(originalUrl.path, "^([^?]*)") or originalUrl.path
+	local dir = string.match(sourcePath, "^(.*/)[^/]*$") or "/"
 	return base .. dir .. location
 end
 
@@ -146,27 +139,14 @@ function util.decodeForm(data: string): QueryTable
 		return result
 	end
 
-	for pair in string.gmatch(data, "([^&]+)") do
-		local eqPos = string.find(pair, "=", 1, true)
-		local rawName: string
-		local rawValue: string
-		if eqPos then
-			rawName = string.sub(pair, 1, eqPos - 1)
-			rawValue = string.sub(pair, eqPos + 1)
-		else
-			rawName = pair
-			rawValue = ""
-		end
-
-		local name = urlEncoding.decode(rawName, true)
-		local value = urlEncoding.decode(rawValue, true)
-		local existing = result[name]
-		if existing == nil then
-			result[name] = value
-		elseif type(existing) == "table" then
-			table.insert(existing, value)
-		else
-			result[name] = { existing, value }
+	local parsed = uri.parseQueryString(data, true)
+	for name, value in parsed do
+		if type(name) == "string" then
+			if type(value) == "table" then
+				result[name] = value :: { string }
+			else
+				result[name] = (value :: string?) or ""
+			end
 		end
 	end
 
@@ -175,17 +155,9 @@ end
 
 --- Splits a request target into pathname and decoded query parameters.
 function util.parseRequestTarget(target: string): { path: string, queryString: string, query: QueryTable }
-	local qmark = string.find(target, "?", 1, true)
-	if not qmark then
-		return {
-			path = target,
-			queryString = "",
-			query = {},
-		}
-	end
-
-	local path = string.sub(target, 1, qmark - 1)
-	local queryString = string.sub(target, qmark + 1)
+	local parsed = uri.parseReference(target, false)
+	local path = parsed.path
+	local queryString = parsed.query or ""
 	return {
 		path = path,
 		queryString = queryString,
