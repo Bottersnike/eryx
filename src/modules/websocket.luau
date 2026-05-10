@@ -187,6 +187,12 @@ local function requireHash()
 	)
 end
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = requireHash().new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 local function requireRandom()
 	return capability.require(
 		"@eryx/crypto/hazmat/random",
@@ -221,7 +227,7 @@ local function computeAccept(key: string): string
 	-- Trim any whitespace from the key (RFC 7230 OWS).
 	key = trim(key)
 	local input = key .. WS_GUID
-	local sha1 = requireHash().sha1(strToBuf(input))
+	local sha1 = digest("sha1", strToBuf(input))
 	local accept = base64.encode(sha1)
 	return accept
 end

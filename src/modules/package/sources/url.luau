@@ -10,6 +10,12 @@ local project = require("@eryx/project")
 local cycles = require("../cycles")
 local types = require("../types")
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = hash.new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 local function fetchArchive(url: string, sha256: string?): buffer
 	local res = http.get(url)
 	if res.status ~= 200 then
@@ -19,7 +25,7 @@ local function fetchArchive(url: string, sha256: string?): buffer
 	local archive = buffer.fromstring(res.body)
 
 	if sha256 then
-		local actual = hex.encode(hash.sha256(archive))
+		local actual = hex.encode(digest("sha256", archive))
 		if actual ~= string.lower(sha256) then
 			error(`Downloaded file for {url} did not match expected sha256`)
 		end

@@ -26,8 +26,14 @@ local hash = {}
 
 local DIGEST_TAG = "$h$"
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = hazmatHash.new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 local function taggedDigest(data: buffer): buffer
-	return buffer.fromstring(DIGEST_TAG .. buffer.tostring(hazmatHash.sha256(data)))
+	return buffer.fromstring(DIGEST_TAG .. buffer.tostring(digest("sha256", data)))
 end
 
 local function constantTimeEqual(left: buffer, right: buffer): boolean

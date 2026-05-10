@@ -310,6 +310,7 @@ include(vendor/dyncall.cmake)
 
 if(ERYX_USE_CRYPTOGRAPHY)
     include(vendor/mbedtls.cmake)
+    include(vendor/openssl.cmake)
 
     set(ARGON2_DIR "${VENDOR_DIR}/phc-winner-argon2")
     add_library(phc_argon2 STATIC

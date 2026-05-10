@@ -24,7 +24,7 @@ endif()
 
 if(ERYX_USE_CRYPTOGRAPHY)
     add_luau_module(_native/_ssl src/modules/_ssl.cpp src/modules/_native/stub.luau
-        EXTRA_LIBS mbedtls mbedx509 tfpsacrypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
+        EXTRA_LIBS mbedtls mbedx509 tfpsacrypto OpenSSL::SSL OpenSSL::Crypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
                    "$<$<BOOL:${APPLE}>:-framework Security>"
                    "$<$<BOOL:${APPLE}>:-framework CoreFoundation>"
         EXTRA_INCLUDES "${mbedtls_SOURCE_DIR}/include"
@@ -32,12 +32,16 @@ if(ERYX_USE_CRYPTOGRAPHY)
                     "${mbedtls_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include"
     )
 
+    # add_luau_module(crypto/hazmat/_native src/modules/crypto/hazmat/_crypto.cpp src/modules/_native/stub.luau
+    #     ENTRYPOINT luauopen__crypto
+    #     EXTRA_LIBS mbedtls mbedx509 tfpsacrypto OpenSSL::Crypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
+    #     EXTRA_INCLUDES "${mbedtls_SOURCE_DIR}/include"
+    #                 "${mbedtls_SOURCE_DIR}/tf-psa-crypto/include"
+    #                 "${mbedtls_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include"
+    # )
     add_luau_module(crypto/hazmat/_native src/modules/crypto/hazmat/_crypto.cpp src/modules/_native/stub.luau
         ENTRYPOINT luauopen__crypto
-        EXTRA_LIBS mbedtls mbedx509 tfpsacrypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
-        EXTRA_INCLUDES "${mbedtls_SOURCE_DIR}/include"
-                    "${mbedtls_SOURCE_DIR}/tf-psa-crypto/include"
-                    "${mbedtls_SOURCE_DIR}/tf-psa-crypto/drivers/builtin/include"
+        EXTRA_LIBS OpenSSL::Crypto ${_PLAT_SOCK_LIBS} ${_PLAT_CRYPT_LIBS}
     )
 
     add_luau_module(crypto/hazmat/argon2 src/modules/crypto/hazmat/argon2.cpp src/modules/crypto/hazmat/argon2.luau
@@ -53,6 +57,7 @@ if(ERYX_USE_CRYPTOGRAPHY)
         src/modules/crypto/hazmat/camellia.luau
         src/modules/crypto/hazmat/des.luau
         src/modules/crypto/hazmat/chacha20.luau
+        src/modules/crypto/hazmat/pkcs7.luau
         src/modules/crypto/hazmat/kdf.luau
         src/modules/crypto/hazmat/rsa.luau
         src/modules/crypto/hazmat/ecc.luau

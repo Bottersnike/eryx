@@ -206,6 +206,12 @@ local function fail(message: string): never
 	error(message, 2)
 end
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = hash.new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 local function copyBuffer(source: buffer, offset: number?, length: number?): buffer
 	local from = offset or 0
 	local size = length or (buffer.len(source) - from)
@@ -508,15 +514,15 @@ local function writeNode(bytes: buffer, node: buffer)
 	buffer.copy(bytes, 10, node, 0, 6)
 end
 
-local function hashUuid(namespace: UUIDLike, name: string | buffer, digestFn: (buffer) -> buffer, version: number): UUID
+local function hashUuid(namespace: UUIDLike, name: string | buffer, algorithm: string, version: number): UUID
 	local ns = uuid.from(namespace).bytes
 	local nameBuffer = coerceName(name)
 	local payload = buffer.create(16 + buffer.len(nameBuffer))
 	buffer.copy(payload, 0, ns, 0, 16)
 	buffer.copy(payload, 16, nameBuffer, 0, buffer.len(nameBuffer))
 
-	local digest = digestFn(payload)
-	local bytes = copyBuffer(digest, 0, 16)
+	local hashed = digest(algorithm, payload)
+	local bytes = copyBuffer(hashed, 0, 16)
 	buffer.writeu8(bytes, 6, bit32.bor(bit32.band(buffer.readu8(bytes, 6), 0x0F), bit32.lshift(version, 4)))
 	buffer.writeu8(bytes, 8, bit32.bor(bit32.band(buffer.readu8(bytes, 8), 0x3F), 0x80))
 	return buildUuid(bytes)
@@ -822,7 +828,7 @@ end
 	@return UUIDv3 -- Generated version 3 UUID.
 ]=]
 function uuid.v3(options: UUIDv3Options): UUIDv3
-	return hashUuid(options.namespace, options.name, hash.md5, 3) :: any
+	return hashUuid(options.namespace, options.name, "md5", 3) :: any
 end
 
 --[=[
@@ -850,7 +856,7 @@ end
 	@return UUIDv5 -- Generated version 5 UUID.
 ]=]
 function uuid.v5(options: UUIDv5Options): UUIDv5
-	return hashUuid(options.namespace, options.name, hash.sha1, 5) :: any
+	return hashUuid(options.namespace, options.name, "sha1", 5) :: any
 end
 
 --[=[

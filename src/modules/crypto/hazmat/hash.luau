@@ -1,22 +1,49 @@
 --[=[
 	Cryptographic hash functions.
 
-	All functions take a `buffer` and return the raw digest as a `buffer`.
-	For hex output, pipe through `@eryx/encoding/hex`.
+	All one-shot functions take a `buffer` and return the raw digest as a
+	`buffer`. For incremental hashing, use [[new]] to create a streaming
+	hash context.
 
 	```luau
 	local hash = require("@eryx/crypto/hazmat/hash")
-	local hex  = require("@eryx/encoding/hex")
+	local hex = require("@eryx/encoding/hex")
 
-	print(hex.encode(hash.sha256(buffer.fromstring("hello"))))
+	local ctx = hash.new("sha256")
+	ctx:update(buffer.fromstring("hel"))
+	ctx:update(buffer.fromstring("lo"))
+	print(hex.encode(ctx:final()))
 	-- "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
 	```
 ]=]
 
 local _h = require("@eryx/crypto/hazmat/_crypto").hash
 
+export type Context = {
+	update: (self: Context, data: buffer) -> (),
+	final: (self: Context) -> buffer,
+	close: (self: Context) -> (),
+}
+
 local hash = {}
 
+--[=[
+	Creates an incremental hash context.
+
+	Supported algorithms currently include `"md5"`, `"sha1"`, `"sha224"`,
+	`"sha256"`, `"sha384"`, `"sha512"`, `"sha3_224"`, `"sha3_256"`,
+	`"sha3_384"`, and `"sha3_512"`.
+
+	@param algorithm Hash algorithm name.
+	@return Context -- Streaming hash context.
+]=]
+function hash.new(algorithm: string): Context
+	return _h.new(algorithm)
+end
+
+-- Legacy one-shot hash helpers kept commented out during the
+-- streaming API transition.
+--[==[
 --[=[
 	Computes the MD5 digest of `data`.
 
@@ -131,5 +158,6 @@ end
 function hash.sha3_512(data: buffer): buffer
 	return _h.sha3_512(data)
 end
+]==]
 
-return hash
+return table.freeze(hash)

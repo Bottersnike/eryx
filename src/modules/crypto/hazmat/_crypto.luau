@@ -7,7 +7,17 @@
 	clear capability error.
 ]=]
 
+export type HashContext = {
+	update: (self: HashContext, data: buffer) -> (),
+	final: (self: HashContext) -> buffer,
+	close: (self: HashContext) -> (),
+}
+
 export type HashLib = {
+	new: (algorithm: string) -> HashContext,
+	-- Legacy one-shot hash helpers kept commented out during the
+	-- streaming API transition.
+	--[==[
 	md5: (data: buffer) -> buffer,
 	sha1: (data: buffer) -> buffer,
 	sha224: (data: buffer) -> buffer,
@@ -18,6 +28,7 @@ export type HashLib = {
 	sha3_256: (data: buffer) -> buffer,
 	sha3_384: (data: buffer) -> buffer,
 	sha3_512: (data: buffer) -> buffer,
+	]==]
 }
 
 export type HmacLib = {
@@ -33,8 +44,24 @@ export type HmacLib = {
 	sha3_512: (key: buffer, data: buffer) -> buffer,
 }
 
--- Symmetric cipher: key, iv, data -> ciphertext (CBC uses PKCS7 padding)
-export type CipherLib = {
+export type AesContext = {
+	update: (self: AesContext, data: buffer) -> buffer,
+	updateAAD: (self: AesContext, aad: buffer) -> (),
+	setTag: (self: AesContext, tag: buffer) -> (),
+	getTag: (self: AesContext) -> buffer,
+	final: (self: AesContext) -> buffer,
+	close: (self: AesContext) -> (),
+}
+
+-- Symmetric cipher: key, iv, data -> ciphertext (hazmat surface is raw/unpadded)
+export type AesLib = {
+	new: (key: buffer, mode: string, operation: "encrypt" | "decrypt", iv_or_nonce: buffer?) -> AesContext,
+	ccm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?, tag_len: number?) -> (buffer, buffer),
+	ccm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
+	-- Legacy one-shot AES helpers kept commented out during the
+	-- streaming API transition. CCM stays exposed because its API is
+	-- intentionally one-shot.
+	--[==[
 	ecb_encrypt: (key: buffer, data: buffer) -> buffer,
 	ecb_decrypt: (key: buffer, data: buffer) -> buffer,
 	cbc_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
@@ -43,8 +70,7 @@ export type CipherLib = {
 	ctr_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
 	gcm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?) -> (buffer, buffer),
 	gcm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
-	ccm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?) -> (buffer, buffer),
-	ccm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
+	]==]
 }
 
 export type CamelliaLib = {
@@ -120,7 +146,7 @@ local capability = require("@eryx/capability")
 local _crypto = {}
 _crypto.hash = {} :: HashLib
 _crypto.hmac = {} :: HmacLib
-_crypto.aes = {} :: CipherLib
+_crypto.aes = {} :: AesLib
 _crypto.camellia = {} :: CamelliaLib
 _crypto.des = {} :: DesLib
 _crypto.chacha20 = {} :: ChaCha20Lib

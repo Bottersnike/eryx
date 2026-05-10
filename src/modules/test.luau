@@ -311,7 +311,14 @@ function Expecter.toBe(self: Expecter, ...: any)
 		error(`Expected {expect.n} return value(s) but got {self.values.n}`, 2)
 	end
 	for i = 1, expect.n do
-		if expect[i] ~= self.values[i] then
+		local eq = false
+		if type(expect[i]) == "buffer" and type(self.values[i]) == "buffer" then
+			eq = buffer.tostring(expect[i]) == buffer.tostring(self.values[i])
+		else
+			eq = expect[i] == self.values[i]
+		end
+
+		if not eq then
 			if #self.values == 1 then
 				error(`expected {fmt(expect[i])} but got {fmt(self.values[i])}`, 2)
 			else

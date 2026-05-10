@@ -10,6 +10,12 @@ local suite = test.Suite.new("websocket")
 
 local WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = hash.new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 local function reservePort(): number
 	local sock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
 	sock:bind("127.0.0.1", 0)
@@ -21,7 +27,7 @@ end
 local function computeAccept(key: string): (string, string)
 	key = string.match(key, "^%s*(.-)%s*$") :: string
 	local input = key .. WS_GUID
-	local sha1 = hash.sha1(buffer.fromstring(input))
+	local sha1 = digest("sha1", buffer.fromstring(input))
 	return base64.encode(sha1), hex.encode(sha1)
 end
 

@@ -17,6 +17,12 @@ local pkg = require("@eryx/package")
 local suite = test.Suite.new("package")
 local WORKSPACE_ROOT = tostring(os.cwd())
 
+local function digest(algorithm: string, data: buffer): buffer
+	local ctx = hash.new(algorithm)
+	ctx:update(data)
+	return ctx:final()
+end
+
 type RepoDependencySpec = {
 	repo: string,
 	version: string?,
@@ -310,7 +316,7 @@ local function withArchiveServer<T...>(archive: buffer, run: (url: string, sha25
 		task.wait(0.05)
 
 		local ok, result = pcall(function()
-			return run(`http://127.0.0.1:{port}/package.zip`, hex.encode(hash.sha256(archive)))
+			return run(`http://127.0.0.1:{port}/package.zip`, hex.encode(digest("sha256", archive)))
 		end)
 		app:close()
 		task.wait(0.05)

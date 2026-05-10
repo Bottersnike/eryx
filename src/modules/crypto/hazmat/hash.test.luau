@@ -1,6 +1,7 @@
 local test = require("@eryx/test")
 local hash = require("@eryx/crypto/hazmat/hash")
 local hex = require("@eryx/encoding/hex")
+
 local suite = test.Suite.new("hash")
 
 local function h(b: buffer): string
@@ -11,132 +12,144 @@ local function buf(s: string): buffer
 	return buffer.fromstring(s)
 end
 
+local function digest(algorithm: string, chunks: { buffer }): buffer
+	local ctx = hash.new(algorithm)
+	for _, chunk in chunks do
+		ctx:update(chunk)
+	end
+	return ctx:final()
+end
+
 suite:test("md5: output is 16 bytes", function()
-	test.expect(buffer.len(hash.md5(buf("")))):toBe(16)
+	test.expect(buffer.len(digest("md5", { buf("") }))):toBe(16)
 end)
 
 suite:test("sha1: output is 20 bytes", function()
-	test.expect(buffer.len(hash.sha1(buf("")))):toBe(20)
+	test.expect(buffer.len(digest("sha1", { buf("") }))):toBe(20)
 end)
 
 suite:test("sha224: output is 28 bytes", function()
-	test.expect(buffer.len(hash.sha224(buf("")))):toBe(28)
+	test.expect(buffer.len(digest("sha224", { buf("") }))):toBe(28)
 end)
 
 suite:test("sha256: output is 32 bytes", function()
-	test.expect(buffer.len(hash.sha256(buf("")))):toBe(32)
+	test.expect(buffer.len(digest("sha256", { buf("") }))):toBe(32)
 end)
 
 suite:test("sha384: output is 48 bytes", function()
-	test.expect(buffer.len(hash.sha384(buf("")))):toBe(48)
+	test.expect(buffer.len(digest("sha384", { buf("") }))):toBe(48)
 end)
 
 suite:test("sha512: output is 64 bytes", function()
-	test.expect(buffer.len(hash.sha512(buf("")))):toBe(64)
+	test.expect(buffer.len(digest("sha512", { buf("") }))):toBe(64)
 end)
 
 suite:test("sha3_224: output is 28 bytes", function()
-	test.expect(buffer.len(hash.sha3_224(buf("")))):toBe(28)
+	test.expect(buffer.len(digest("sha3_224", { buf("") }))):toBe(28)
 end)
 
 suite:test("sha3_256: output is 32 bytes", function()
-	test.expect(buffer.len(hash.sha3_256(buf("")))):toBe(32)
+	test.expect(buffer.len(digest("sha3_256", { buf("") }))):toBe(32)
 end)
 
 suite:test("sha3_384: output is 48 bytes", function()
-	test.expect(buffer.len(hash.sha3_384(buf("")))):toBe(48)
+	test.expect(buffer.len(digest("sha3_384", { buf("") }))):toBe(48)
 end)
 
 suite:test("sha3_512: output is 64 bytes", function()
-	test.expect(buffer.len(hash.sha3_512(buf("")))):toBe(64)
+	test.expect(buffer.len(digest("sha3_512", { buf("") }))):toBe(64)
 end)
 
--- ── hash: known test vectors ─────────────────────────────────────────────────
+suite:test("streaming sha256 matches split updates", function()
+	test.expect(digest("sha256", { buf("hel"), buf("lo") })):toBe(digest("sha256", { buf("hello") }))
+end)
 
--- MD5 vectors (RFC 1321)
+suite:test("streaming sha3_256 handles empty updates", function()
+	test.expect(h(digest("sha3_256", { buf(""), buf("abc") })))
+		:toBe("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
+end)
+
 suite:test("md5: empty string", function()
-	test.expect(h(hash.md5(buf("")))):toBe("d41d8cd98f00b204e9800998ecf8427e")
+	test.expect(h(digest("md5", { buf("") }))):toBe("d41d8cd98f00b204e9800998ecf8427e")
 end)
 
 suite:test("md5: 'abc'", function()
-	test.expect(h(hash.md5(buf("abc")))):toBe("900150983cd24fb0d6963f7d28e17f72")
+	test.expect(h(digest("md5", { buf("abc") }))):toBe("900150983cd24fb0d6963f7d28e17f72")
 end)
 
--- SHA-1 vectors (FIPS 180-4)
 suite:test("sha1: empty string", function()
-	test.expect(h(hash.sha1(buf("")))):toBe("da39a3ee5e6b4b0d3255bfef95601890afd80709")
+	test.expect(h(digest("sha1", { buf("") }))):toBe("da39a3ee5e6b4b0d3255bfef95601890afd80709")
 end)
 
 suite:test("sha1: 'abc'", function()
-	test.expect(h(hash.sha1(buf("abc")))):toBe("a9993e364706816aba3e25717850c26c9cd0d89d")
+	test.expect(h(digest("sha1", { buf("abc") }))):toBe("a9993e364706816aba3e25717850c26c9cd0d89d")
 end)
 
--- SHA-256 vectors (FIPS 180-4)
 suite:test("sha256: empty string", function()
-	test.expect(h(hash.sha256(buf("")))):toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
+	test.expect(h(digest("sha256", { buf("") })))
+		:toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855")
 end)
 
 suite:test("sha256: 'hello'", function()
-	test.expect(h(hash.sha256(buf("hello")))):toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+	test.expect(h(digest("sha256", { buf("hello") })))
+		:toBe("2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
 end)
 
 suite:test("sha256: 'abc'", function()
-	test.expect(h(hash.sha256(buf("abc")))):toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+	test.expect(h(digest("sha256", { buf("abc") })))
+		:toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 end)
 
 suite:test("sha256: 448-bit message", function()
-	-- "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
-	test.expect(h(hash.sha256(buf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))))
+	test.expect(h(digest("sha256", { buf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq") })))
 		:toBe("248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1")
 end)
 
--- SHA-512 vectors (FIPS 180-4)
 suite:test("sha512: empty string", function()
-	test.expect(h(hash.sha512(buf("")))):toBe(
+	test.expect(h(digest("sha512", { buf("") }))):toBe(
 		"cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
 	)
 end)
 
 suite:test("sha512: 'abc'", function()
-	test.expect(h(hash.sha512(buf("abc")))):toBe(
+	test.expect(h(digest("sha512", { buf("abc") }))):toBe(
 		"ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
 	)
 end)
 
--- SHA3-256 vectors (FIPS 202)
 suite:test("sha3_256: empty string", function()
-	test.expect(h(hash.sha3_256(buf("")))):toBe("a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
+	test.expect(h(digest("sha3_256", { buf("") })))
+		:toBe("a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a")
 end)
 
 suite:test("sha3_256: 'abc'", function()
-	test.expect(h(hash.sha3_256(buf("abc")))):toBe("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
+	test.expect(h(digest("sha3_256", { buf("abc") })))
+		:toBe("3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532")
 end)
 
--- ── hash: determinism ────────────────────────────────────────────────────────
-
 suite:test("sha256: same input always same output", function()
-	local a = h(hash.sha256(buf("test")))
-	local b = h(hash.sha256(buf("test")))
+	local a = h(digest("sha256", { buf("te"), buf("st") }))
+	local b = h(digest("sha256", { buf("test") }))
 	test.expect(a):toBe(b)
 end)
 
 suite:test("sha256: different inputs give different hashes", function()
-	local a = h(hash.sha256(buf("hello")))
-	local b = h(hash.sha256(buf("world")))
+	local a = h(digest("sha256", { buf("hello") }))
+	local b = h(digest("sha256", { buf("world") }))
 	test.expect(a):toNotBe(b)
 end)
 
 suite:test("sha3_224: 'abc'", function()
-	test.expect(h(hash.sha3_224(buf("abc")))):toBe("e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf")
+	test.expect(h(digest("sha3_224", { buf("abc") }))):toBe("e642824c3f8cf24ad09234ee7d3c766fc9a3a5168d0c94ad73b46fdf")
 end)
 
 suite:test("sha3_384: empty string", function()
-	test.expect(h(hash.sha3_384(buf(""))))
+	test.expect(h(digest("sha3_384", { buf("") })))
 		:toBe("0c63a75b845e4f7d01107d852e4c2485c51a50aaaa94fc61995e71bbee983a2ac3713831264adb47fb6bd1e058d5f004")
 end)
 
 suite:test("sha3_512: empty string", function()
-	test.expect(h(hash.sha3_512(buf("")))):toBe(
+	test.expect(h(digest("sha3_512", { buf("") }))):toBe(
 		"a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26"
 	)
 end)
