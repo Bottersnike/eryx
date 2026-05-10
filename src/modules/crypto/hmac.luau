@@ -27,7 +27,9 @@ local hmac = {}
 local MAC_TAG = "$m$"
 
 local function taggedMac(key: buffer, data: buffer): buffer
-	return buffer.fromstring(MAC_TAG .. buffer.tostring(hazmatHmac.sha256(key, data)))
+	local ctx = hazmatHmac.new("sha256", key)
+	ctx:update(data)
+	return buffer.fromstring(MAC_TAG .. buffer.tostring(ctx:final()))
 end
 
 local function constantTimeEqual(left: buffer, right: buffer): boolean

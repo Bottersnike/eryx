@@ -20,88 +20,50 @@
 	local nonce = buffer.create(12)  -- 12 zero bytes
 
 	-- Authenticated encryption
-	local ct, tag = chacha20.poly1305_encrypt(key, nonce, buffer.fromstring("secret"))
-	local pt = chacha20.poly1305_decrypt(key, nonce, ct, tag)
+	local enc = chacha20.new(key, "poly1305", "encrypt", nonce)
+	local ct = enc:update(buffer.fromstring("secret"))
+	local tail = enc:final()
+	local tag = enc:getTag()
+
+	local dec = chacha20.new(key, "poly1305", "decrypt", nonce)
+	dec:setTag(tag)
+	local pt = dec:update(ct)
+	local ptTail = dec:final()
 	```
 ]=]
 
 local _cc = require("@eryx/crypto/hazmat/_crypto").chacha20
 
+export type Mode = "stream" | "poly1305"
+export type Operation = "encrypt" | "decrypt"
+export type Context = {
+	update: (self: Context, data: buffer) -> buffer,
+	updateAAD: (self: Context, aad: buffer) -> (),
+	setTag: (self: Context, tag: buffer) -> (),
+	getTag: (self: Context) -> buffer,
+	final: (self: Context) -> buffer,
+	close: (self: Context) -> (),
+}
+
 local chacha20 = {}
 
 --[=[
-	Encrypts `data` with ChaCha20 (unauthenticated stream cipher).
+	Creates a streaming ChaCha20 context.
 
-	The output is the same length as the input. A given (key, nonce) pair
-	must never be reused; generate a fresh random nonce per message.
+	For `stream`, the nonce must be 12 bytes and the context behaves like a
+	raw stream cipher with no authentication.
+	For `poly1305`, the nonce must also be 12 bytes and you can use
+	[[Context.updateAAD]], [[Context.setTag]], and [[Context.getTag]] for
+	AEAD operation.
 
-	For authenticated encryption, use [[poly1305_encrypt]] instead.
-
-	@param key   32-byte ChaCha20 key.
+	@param key 32-byte ChaCha20 key.
+	@param mode `"stream"` or `"poly1305"`.
+	@param operation `"encrypt"` or `"decrypt"`.
 	@param nonce 12-byte nonce.
-	@param data  Plaintext to encrypt.
-	@return buffer -- Ciphertext (same length as input).
+	@return Context -- Streaming ChaCha20 context.
 ]=]
-function chacha20.encrypt(key: buffer, nonce: buffer, data: buffer): buffer
-	return _cc.encrypt(key, nonce, data)
+function chacha20.new(key: buffer, mode: Mode, operation: Operation, nonce: buffer): Context
+	return _cc.new(key, mode, operation, nonce)
 end
 
---[=[
-	Decrypts ChaCha20 ciphertext (unauthenticated).
-
-	ChaCha20 decryption is identical to encryption; this function is
-	provided for API symmetry.
-
-	@param key   32-byte ChaCha20 key.
-	@param nonce 12-byte nonce.
-	@param data  Ciphertext to decrypt.
-	@return buffer -- Plaintext (same length as input).
-]=]
-function chacha20.decrypt(key: buffer, nonce: buffer, data: buffer): buffer
-	return _cc.decrypt(key, nonce, data)
-end
-
---[=[
-	Encrypts `data` with ChaCha20-Poly1305 (authenticated encryption).
-
-	Returns the ciphertext and a 16-byte Poly1305 authentication tag
-	separately. The tag covers the ciphertext and any additional
-	authenticated data (`aad`).
-
-	This is the recommended variant when you need both confidentiality
-	and integrity.
-
-	```luau
-	local ct, tag = chacha20.poly1305_encrypt(key, nonce, plain, aad)
-	local pt = chacha20.poly1305_decrypt(key, nonce, ct, tag, aad)
-	```
-
-	@param key   32-byte ChaCha20 key.
-	@param nonce 12-byte nonce.
-	@param data  Plaintext to encrypt.
-	@param aad   Additional authenticated data (not encrypted).
-	@return buffer -- Ciphertext.
-	@return buffer -- 16-byte Poly1305 authentication tag.
-]=]
-function chacha20.encryptPoly1305(key: buffer, nonce: buffer, data: buffer, aad: buffer?): (buffer, buffer)
-	return _cc.poly1305_encrypt(key, nonce, data, aad)
-end
-
---[=[
-	Decrypts ChaCha20-Poly1305 ciphertext and verifies the tag.
-
-	Raises an error if the authentication tag does not match (data
-	has been tampered with, or wrong key/nonce/aad was used).
-
-	@param key   32-byte ChaCha20 key.
-	@param nonce 12-byte nonce - must match the value used during encryption.
-	@param ct    Ciphertext.
-	@param tag   16-byte Poly1305 authentication tag.
-	@param aad   Additional authenticated data (must match encryption).
-	@return buffer -- Plaintext.
-]=]
-function chacha20.decryptPoly1305(key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?): buffer
-	return _cc.poly1305_decrypt(key, nonce, ct, tag, aad)
-end
-
-return chacha20
+return table.freeze(chacha20)

@@ -113,7 +113,12 @@ end
 function secretbox.seal(message: buffer, key: buffer?): (buffer, buffer)
 	local boxKey = key or secretbox.keygen()
 	local nonce = random.bytes(NONCE_LEN)
-	local ciphertext, tag = chacha20.encryptPoly1305(boxKey, nonce, message)
+	local ctx = chacha20.new(boxKey, "poly1305", "encrypt", nonce)
+	local ciphertext = concat({
+		ctx:update(message),
+		ctx:final(),
+	})
+	local tag = ctx:getTag()
 
 	return concat({
 		buffer.fromstring(CIPHERTEXT_TAG),
@@ -139,8 +144,12 @@ end
 ]=]
 function secretbox.open(ciphertext: buffer, key: buffer): buffer
 	local nonce, body, tag = parseCiphertext(ciphertext)
-
-	return chacha20.decryptPoly1305(key, nonce, body, tag)
+	local ctx = chacha20.new(key, "poly1305", "decrypt", nonce)
+	ctx:setTag(tag)
+	return concat({
+		ctx:update(body),
+		ctx:final(),
+	})
 end
 
 return table.freeze(secretbox)

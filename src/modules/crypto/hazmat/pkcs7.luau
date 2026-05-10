@@ -9,9 +9,13 @@
 	local aes = require("@eryx/crypto/hazmat/aes")
 	local pkcs7 = require("@eryx/crypto/hazmat/pkcs7")
 
+	local key = buffer.create(16)
+	local iv = buffer.create(16)
 	local padded = pkcs7.pad(buffer.fromstring("hello"), 16)
-	local ct = aes.encryptCBC(key, iv, padded)
-	local pt = pkcs7.unpad(aes.decryptCBC(key, iv, ct), 16)
+	local encrypt = aes.new(key, "cbc", "encrypt", iv)
+	local ct = buffer.concat({ encrypt:update(padded), encrypt:final() })
+	local decrypt = aes.new(key, "cbc", "decrypt", iv)
+	local pt = pkcs7.unpad(buffer.concat({ decrypt:update(ct), decrypt:final() }), 16)
 	```
 ]=]
 

@@ -1,135 +1,44 @@
 --[=[
 	HMAC (Hash-based Message Authentication Code).
 
-	Computes an authentication tag over `data` using a secret `key` and the
-	chosen hash algorithm. The output length equals the digest size of the
-	underlying hash.
+	Computes an authentication tag over streamed data using a secret `key`
+	and the chosen hash algorithm. The output length equals the digest size
+	of the underlying hash.
 
 	```luau
 	local hmac = require("@eryx/crypto/hazmat/hmac")
 	local hex  = require("@eryx/encoding/hex")
 
 	local key = buffer.fromstring("secret")
-	local msg = buffer.fromstring("hello")
-	print(hex.encode(hmac.sha256(key, msg)))
+	local ctx = hmac.new("sha256", key)
+	ctx:update(buffer.fromstring("hello"))
+	print(hex.encode(ctx:final()))
 	```
 ]=]
 
 local _hm = require("@eryx/crypto/hazmat/_crypto").hmac
 
+export type Context = {
+	update: (self: Context, data: buffer) -> (),
+	final: (self: Context) -> buffer,
+	close: (self: Context) -> (),
+}
+
 local hmac = {}
 
 --[=[
-	Computes HMAC-MD5 over `data` with `key`.
+	Creates a streaming HMAC context.
 
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 16-byte MAC.
+	Supported algorithms currently include `"md5"`, `"sha1"`, `"sha224"`,
+	`"sha256"`, `"sha384"`, `"sha512"`, `"sha3_224"`, `"sha3_256"`,
+	`"sha3_384"`, and `"sha3_512"`.
+
+	@param algorithm Hash algorithm name.
+	@param key Secret key (any length).
+	@return Context -- Streaming HMAC context.
 ]=]
-function hmac.md5(key: buffer, data: buffer): buffer
-	return _hm.md5(key, data)
+function hmac.new(algorithm: string, key: buffer): Context
+	return _hm.new(algorithm, key)
 end
 
---[=[
-	Computes HMAC-SHA1 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 20-byte MAC.
-]=]
-function hmac.sha1(key: buffer, data: buffer): buffer
-	return _hm.sha1(key, data)
-end
-
---[=[
-	Computes HMAC-SHA224 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 28-byte MAC.
-]=]
-function hmac.sha224(key: buffer, data: buffer): buffer
-	return _hm.sha224(key, data)
-end
-
---[=[
-	Computes HMAC-SHA256 over `data` with `key`.
-
-	The most common HMAC variant. Suitable for API authentication,
-	signed cookies, and TOTP/HOTP tokens.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 32-byte MAC.
-]=]
-function hmac.sha256(key: buffer, data: buffer): buffer
-	return _hm.sha256(key, data)
-end
-
---[=[
-	Computes HMAC-SHA384 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 48-byte MAC.
-]=]
-function hmac.sha384(key: buffer, data: buffer): buffer
-	return _hm.sha384(key, data)
-end
-
---[=[
-	Computes HMAC-SHA512 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 64-byte MAC.
-]=]
-function hmac.sha512(key: buffer, data: buffer): buffer
-	return _hm.sha512(key, data)
-end
-
---[=[
-	Computes HMAC-SHA3-224 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 28-byte MAC.
-]=]
-function hmac.sha3_224(key: buffer, data: buffer): buffer
-	return _hm.sha3_224(key, data)
-end
-
---[=[
-	Computes HMAC-SHA3-256 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 32-byte MAC.
-]=]
-function hmac.sha3_256(key: buffer, data: buffer): buffer
-	return _hm.sha3_256(key, data)
-end
-
---[=[
-	Computes HMAC-SHA3-384 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 48-byte MAC.
-]=]
-function hmac.sha3_384(key: buffer, data: buffer): buffer
-	return _hm.sha3_384(key, data)
-end
-
---[=[
-	Computes HMAC-SHA3-512 over `data` with `key`.
-
-	@param key  Secret key (any length).
-	@param data Input data.
-	@return buffer -- 64-byte MAC.
-]=]
-function hmac.sha3_512(key: buffer, data: buffer): buffer
-	return _hm.sha3_512(key, data)
-end
-
-return hmac
+return table.freeze(hmac)

@@ -370,7 +370,11 @@ static std::string get_ec_group_name(lua_State* L, EVP_PKEY* pkey, const char* o
 }
 
 static const char* HASH_CTX_METATABLE = "crypto.hash.ctx";
+static const char* HMAC_CTX_METATABLE = "crypto.hmac.ctx";
 static const char* AES_CTX_METATABLE = "crypto.aes.ctx";
+static const char* CAMELLIA_CTX_METATABLE = "crypto.camellia.ctx";
+static const char* DES_CTX_METATABLE = "crypto.des.ctx";
+static const char* CHACHA20_CTX_METATABLE = "crypto.chacha20.ctx";
 
 struct LuaHashCtx {
     EVP_MD_CTX* ctx;
@@ -459,7 +463,7 @@ static int hash_new(lua_State* L) {
     return 1;
 }
 
-enum class AesStreamMode {
+enum class EvpCipherStreamMode {
     ECB,
     CBC,
     CTR,
@@ -468,9 +472,16 @@ enum class AesStreamMode {
     GCM,
 };
 
-struct LuaAesCtx {
+struct LuaHmacCtx {
+    HMAC_CTX* ctx;
+    bool closed;
+    bool finalized;
+};
+
+struct LuaCipherCtx {
     EVP_CIPHER_CTX* ctx;
-    AesStreamMode mode;
+    EvpCipherStreamMode mode;
+    const char* family;
     bool encrypt;
     bool closed;
     bool finalized;
@@ -478,8 +489,23 @@ struct LuaAesCtx {
     bool tagSet;
 };
 
-static void aes_ctx_dtor(void* ud) {
-    auto* ctx = (LuaAesCtx*)ud;
+static void hmac_ctx_dtor(void* ud) {
+    auto* ctx = (LuaHmacCtx*)ud;
+    if (ctx->ctx) {
+        HMAC_CTX_free(ctx->ctx);
+        ctx->ctx = nullptr;
+    }
+    ctx->closed = true;
+}
+
+static LuaHmacCtx* check_hmac_ctx(lua_State* L) {
+    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    if (ctx->closed || !ctx->ctx) luaL_error(L, "hmac context is closed");
+    return ctx;
+}
+
+static void cipher_ctx_dtor(void* ud) {
+    auto* ctx = (LuaCipherCtx*)ud;
     if (ctx->ctx) {
         EVP_CIPHER_CTX_free(ctx->ctx);
         ctx->ctx = nullptr;
@@ -487,17 +513,19 @@ static void aes_ctx_dtor(void* ud) {
     ctx->closed = true;
 }
 
-static LuaAesCtx* check_aes_ctx(lua_State* L) {
-    auto* ctx = (LuaAesCtx*)luaL_checkudata(L, 1, AES_CTX_METATABLE);
-    if (ctx->closed || !ctx->ctx) luaL_error(L, "aes context is closed");
+static LuaCipherCtx* check_cipher_ctx(lua_State* L, const char* metatable) {
+    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
+    if (ctx->closed || !ctx->ctx) luaL_error(L, "%s context is closed", ctx->family);
     return ctx;
 }
 
-static bool aes_mode_is_aead(AesStreamMode mode) { return mode == AesStreamMode::GCM; }
+static bool cipher_mode_is_aead(EvpCipherStreamMode mode) {
+    return mode == EvpCipherStreamMode::GCM;
+}
 
-static int aes_ctx_update(lua_State* L) {
-    auto* ctx = check_aes_ctx(L);
-    if (ctx->finalized) luaL_error(L, "aes context is already finalized");
+static int cipher_ctx_update(lua_State* L, const char* metatable) {
+    auto* ctx = check_cipher_ctx(L, metatable);
+    if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
 
     size_t inputLen = 0;
     const void* input = luaL_checkbuffer(L, 2, &inputLen);
@@ -512,7 +540,8 @@ static int aes_ctx_update(lua_State* L) {
                                           (const unsigned char*)input, (int)inputLen)
                       : EVP_DecryptUpdate(ctx->ctx, (unsigned char*)out, &out_len,
                                           (const unsigned char*)input, (int)inputLen)) != 1) {
-        push_openssl_error(L, "aes.update");
+        std::string op = std::string(ctx->family) + ".update";
+        push_openssl_error(L, op.c_str());
     }
 
     ctx->aadLocked = true;
@@ -520,11 +549,12 @@ static int aes_ctx_update(lua_State* L) {
     return 1;
 }
 
-static int aes_ctx_update_aad(lua_State* L) {
-    auto* ctx = check_aes_ctx(L);
-    if (ctx->finalized) luaL_error(L, "aes context is already finalized");
-    if (!aes_mode_is_aead(ctx->mode)) luaL_error(L, "aes.updateAAD is only supported for GCM mode");
-    if (ctx->aadLocked) luaL_error(L, "aes.updateAAD must be called before update");
+static int cipher_ctx_update_aad(lua_State* L, const char* metatable) {
+    auto* ctx = check_cipher_ctx(L, metatable);
+    if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
+    if (!cipher_mode_is_aead(ctx->mode))
+        luaL_error(L, "%s.updateAAD is only supported for GCM mode", ctx->family);
+    if (ctx->aadLocked) luaL_error(L, "%s.updateAAD must be called before update", ctx->family);
 
     size_t aadLen = 0;
     const void* aad = luaL_checkbuffer(L, 2, &aadLen);
@@ -535,17 +565,19 @@ static int aes_ctx_update_aad(lua_State* L) {
                                           (int)aadLen)
                       : EVP_DecryptUpdate(ctx->ctx, nullptr, &out_len, (const unsigned char*)aad,
                                           (int)aadLen)) != 1) {
-        push_openssl_error(L, "aes.updateAAD");
+        std::string op = std::string(ctx->family) + ".updateAAD";
+        push_openssl_error(L, op.c_str());
     }
 
     return 0;
 }
 
-static int aes_ctx_set_tag(lua_State* L) {
-    auto* ctx = check_aes_ctx(L);
-    if (ctx->encrypt) luaL_error(L, "aes.setTag is only supported on decrypt contexts");
-    if (!aes_mode_is_aead(ctx->mode)) luaL_error(L, "aes.setTag is only supported for GCM mode");
-    if (ctx->finalized) luaL_error(L, "aes context is already finalized");
+static int cipher_ctx_set_tag(lua_State* L, const char* metatable) {
+    auto* ctx = check_cipher_ctx(L, metatable);
+    if (ctx->encrypt) luaL_error(L, "%s.setTag is only supported on decrypt contexts", ctx->family);
+    if (!cipher_mode_is_aead(ctx->mode))
+        luaL_error(L, "%s.setTag is only supported for GCM mode", ctx->family);
+    if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
 
     size_t tagLen = 0;
     const void* tag = luaL_checkbuffer(L, 2, &tagLen);
@@ -553,33 +585,38 @@ static int aes_ctx_set_tag(lua_State* L) {
     check_openssl_input_len(L, tagLen, "tag");
 
     if (EVP_CIPHER_CTX_ctrl(ctx->ctx, EVP_CTRL_AEAD_SET_TAG, (int)tagLen, (void*)tag) != 1) {
-        push_openssl_error(L, "aes.setTag");
+        std::string op = std::string(ctx->family) + ".setTag";
+        push_openssl_error(L, op.c_str());
     }
 
     ctx->tagSet = true;
     return 0;
 }
 
-static int aes_ctx_get_tag(lua_State* L) {
-    auto* ctx = check_aes_ctx(L);
-    if (!ctx->encrypt) luaL_error(L, "aes.getTag is only supported on encrypt contexts");
-    if (!aes_mode_is_aead(ctx->mode)) luaL_error(L, "aes.getTag is only supported for GCM mode");
-    if (!ctx->finalized) luaL_error(L, "aes.getTag requires final to be called first");
+static int cipher_ctx_get_tag(lua_State* L, const char* metatable) {
+    auto* ctx = check_cipher_ctx(L, metatable);
+    if (!ctx->encrypt)
+        luaL_error(L, "%s.getTag is only supported on encrypt contexts", ctx->family);
+    if (!cipher_mode_is_aead(ctx->mode))
+        luaL_error(L, "%s.getTag is only supported for GCM mode", ctx->family);
+    if (!ctx->finalized) luaL_error(L, "%s.getTag requires final to be called first", ctx->family);
 
     constexpr int tagLen = 16;
     void* out = lua_newbuffer(L, tagLen);
     if (EVP_CIPHER_CTX_ctrl(ctx->ctx, EVP_CTRL_AEAD_GET_TAG, tagLen, out) != 1) {
-        push_openssl_error(L, "aes.getTag");
+        std::string op = std::string(ctx->family) + ".getTag";
+        push_openssl_error(L, op.c_str());
     }
 
     return 1;
 }
 
-static int aes_ctx_final(lua_State* L) {
-    auto* ctx = check_aes_ctx(L);
-    if (ctx->finalized) luaL_error(L, "aes context is already finalized");
-    if (!ctx->encrypt && aes_mode_is_aead(ctx->mode) && !ctx->tagSet) {
-        luaL_error(L, "aes.final requires setTag to be called first for GCM decryption");
+static int cipher_ctx_final(lua_State* L, const char* metatable) {
+    auto* ctx = check_cipher_ctx(L, metatable);
+    if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
+    if (!ctx->encrypt && cipher_mode_is_aead(ctx->mode) && !ctx->tagSet) {
+        luaL_error(L, "%s.final requires setTag to be called first for GCM decryption",
+                   ctx->family);
     }
 
     int block_size = EVP_CIPHER_CTX_get_block_size(ctx->ctx);
@@ -589,10 +626,11 @@ static int aes_ctx_final(lua_State* L) {
     int ok = ctx->encrypt ? EVP_EncryptFinal_ex(ctx->ctx, (unsigned char*)out, &out_len)
                           : EVP_DecryptFinal_ex(ctx->ctx, (unsigned char*)out, &out_len);
     if (ok != 1) {
-        if (!ctx->encrypt && aes_mode_is_aead(ctx->mode)) {
-            luaL_error(L, "aes.final: authentication tag mismatch");
+        if (!ctx->encrypt && cipher_mode_is_aead(ctx->mode)) {
+            luaL_error(L, "%s.final: authentication tag mismatch", ctx->family);
         }
-        luaL_error(L, "aes.final failed (input was not aligned to the cipher block size)");
+        luaL_error(L, "%s.final failed (input was not aligned to the cipher block size)",
+                   ctx->family);
     }
 
     ctx->finalized = true;
@@ -600,8 +638,8 @@ static int aes_ctx_final(lua_State* L) {
     return 1;
 }
 
-static int aes_ctx_close(lua_State* L) {
-    auto* ctx = (LuaAesCtx*)luaL_checkudata(L, 1, AES_CTX_METATABLE);
+static int cipher_ctx_close(lua_State* L, const char* metatable) {
+    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
     if (ctx->ctx) {
         EVP_CIPHER_CTX_free(ctx->ctx);
         ctx->ctx = nullptr;
@@ -610,11 +648,64 @@ static int aes_ctx_close(lua_State* L) {
     return 0;
 }
 
-static int aes_ctx_tostring(lua_State* L) {
-    auto* ctx = (LuaAesCtx*)luaL_checkudata(L, 1, AES_CTX_METATABLE);
+static int cipher_ctx_tostring(lua_State* L, const char* metatable) {
+    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
     const char* state = ctx->closed ? "closed" : (ctx->finalized ? "finalized" : "open");
     const char* op = ctx->encrypt ? "encrypt" : "decrypt";
-    lua_pushfstring(L, "crypto.aes(%s,%s)", op, state);
+    lua_pushfstring(L, "crypto.%s(%s,%s)", ctx->family, op, state);
+    return 1;
+}
+
+static int push_cipher_ctx(lua_State* L, const char* metatable, const char* family,
+                           const EVP_CIPHER* cipher, EvpCipherStreamMode mode, bool encrypt,
+                           const void* key, const void* iv, size_t ivLen) {
+    if ((size_t)EVP_CIPHER_iv_length(cipher) != ivLen && mode != EvpCipherStreamMode::GCM) {
+        luaL_error(L, "invalid IV length");
+    }
+
+    auto* ctx = (LuaCipherCtx*)lua_newuserdatadtor(L, sizeof(LuaCipherCtx), cipher_ctx_dtor);
+    ctx->ctx = EVP_CIPHER_CTX_new();
+    ctx->mode = mode;
+    ctx->family = family;
+    ctx->encrypt = encrypt;
+    ctx->closed = false;
+    ctx->finalized = false;
+    ctx->aadLocked = false;
+    ctx->tagSet = false;
+    if (!ctx->ctx) {
+        std::string op = std::string(family) + ".new";
+        push_openssl_error(L, op.c_str());
+    }
+
+    int ok = 0;
+    if (mode == EvpCipherStreamMode::GCM) {
+        ok = (encrypt ? EVP_EncryptInit_ex(ctx->ctx, cipher, nullptr, nullptr, nullptr)
+                      : EVP_DecryptInit_ex(ctx->ctx, cipher, nullptr, nullptr, nullptr));
+        if (ok == 1)
+            ok = EVP_CIPHER_CTX_ctrl(ctx->ctx, EVP_CTRL_AEAD_SET_IVLEN, (int)ivLen, nullptr);
+        if (ok == 1) {
+            ok =
+                (encrypt ? EVP_EncryptInit_ex(ctx->ctx, nullptr, nullptr, (const unsigned char*)key,
+                                              (const unsigned char*)iv)
+                         : EVP_DecryptInit_ex(ctx->ctx, nullptr, nullptr, (const unsigned char*)key,
+                                              (const unsigned char*)iv));
+        }
+    } else {
+        ok = (encrypt ? EVP_EncryptInit_ex(ctx->ctx, cipher, nullptr, (const unsigned char*)key,
+                                           (const unsigned char*)iv)
+                      : EVP_DecryptInit_ex(ctx->ctx, cipher, nullptr, (const unsigned char*)key,
+                                           (const unsigned char*)iv));
+        if (ok == 1) ok = EVP_CIPHER_CTX_set_padding(ctx->ctx, 0);
+    }
+
+    if (ok != 1) {
+        cipher_ctx_dtor(ctx);
+        std::string op = std::string(family) + ".new";
+        push_openssl_error(L, op.c_str());
+    }
+
+    luaL_getmetatable(L, metatable);
+    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -636,29 +727,29 @@ static int aes_new(lua_State* L) {
     }
 
     const EVP_CIPHER* cipher = nullptr;
-    AesStreamMode mode;
+    EvpCipherStreamMode mode;
     if (strcmp(mode_name, "ecb") == 0) {
-        mode = AesStreamMode::ECB;
+        mode = EvpCipherStreamMode::ECB;
         cipher = aes_ecb_cipher_for_key_len(L, keyLen);
         if (iv != nullptr) luaL_error(L, "AES-ECB does not use an IV or nonce");
     } else if (strcmp(mode_name, "cbc") == 0) {
-        mode = AesStreamMode::CBC;
+        mode = EvpCipherStreamMode::CBC;
         cipher = aes_cbc_cipher_for_key_len(L, keyLen);
         if (iv == nullptr) luaL_error(L, "AES-CBC requires an IV");
     } else if (strcmp(mode_name, "ctr") == 0) {
-        mode = AesStreamMode::CTR;
+        mode = EvpCipherStreamMode::CTR;
         cipher = aes_ctr_cipher_for_key_len(L, keyLen);
         if (iv == nullptr) luaL_error(L, "AES-CTR requires an IV");
     } else if (strcmp(mode_name, "cfb128") == 0) {
-        mode = AesStreamMode::CFB;
+        mode = EvpCipherStreamMode::CFB;
         cipher = aes_cfb128_cipher_for_key_len(L, keyLen);
         if (iv == nullptr) luaL_error(L, "AES-CFB128 requires an IV");
     } else if (strcmp(mode_name, "ofb") == 0) {
-        mode = AesStreamMode::OFB;
+        mode = EvpCipherStreamMode::OFB;
         cipher = aes_ofb_cipher_for_key_len(L, keyLen);
         if (iv == nullptr) luaL_error(L, "AES-OFB requires an IV");
     } else if (strcmp(mode_name, "gcm") == 0) {
-        mode = AesStreamMode::GCM;
+        mode = EvpCipherStreamMode::GCM;
         cipher = aes_gcm_cipher_for_key_len(L, keyLen);
         if (iv == nullptr) luaL_error(L, "AES-GCM requires a nonce");
     } else if (strcmp(mode_name, "ccm") == 0) {
@@ -667,120 +758,236 @@ static int aes_new(lua_State* L) {
         luaL_error(L, "unsupported AES mode '%s'", mode_name);
     }
 
-    if ((size_t)EVP_CIPHER_iv_length(cipher) != ivLen && mode != AesStreamMode::GCM) {
-        luaL_error(L, "invalid IV length");
-    }
+    return push_cipher_ctx(L, AES_CTX_METATABLE, "aes", cipher, mode, encrypt, key, iv, ivLen);
+}
 
-    auto* ctx = (LuaAesCtx*)lua_newuserdatadtor(L, sizeof(LuaAesCtx), aes_ctx_dtor);
-    ctx->ctx = EVP_CIPHER_CTX_new();
-    ctx->mode = mode;
-    ctx->encrypt = encrypt;
-    ctx->closed = false;
-    ctx->finalized = false;
-    ctx->aadLocked = false;
-    ctx->tagSet = false;
-    if (!ctx->ctx) push_openssl_error(L, "aes.new");
+static int camellia_new(lua_State* L) {
+    size_t keyLen = 0;
+    const void* key = luaL_checkbuffer(L, 1, &keyLen);
+    const char* mode_name = luaL_checkstring(L, 2);
+    const char* op_name = luaL_checkstring(L, 3);
+    size_t ivLen = 0;
+    const void* iv = lua_isnoneornil(L, 4) ? nullptr : luaL_checkbuffer(L, 4, &ivLen);
 
-    int ok = 0;
-    if (mode == AesStreamMode::GCM) {
-        ok = (encrypt ? EVP_EncryptInit_ex(ctx->ctx, cipher, nullptr, nullptr, nullptr)
-                      : EVP_DecryptInit_ex(ctx->ctx, cipher, nullptr, nullptr, nullptr));
-        if (ok == 1)
-            ok = EVP_CIPHER_CTX_ctrl(ctx->ctx, EVP_CTRL_AEAD_SET_IVLEN, (int)ivLen, nullptr);
-        if (ok == 1) {
-            ok =
-                (encrypt ? EVP_EncryptInit_ex(ctx->ctx, nullptr, nullptr, (const unsigned char*)key,
-                                              (const unsigned char*)iv)
-                         : EVP_DecryptInit_ex(ctx->ctx, nullptr, nullptr, (const unsigned char*)key,
-                                              (const unsigned char*)iv));
-        }
+    bool encrypt = false;
+    if (strcmp(op_name, "encrypt") == 0) {
+        encrypt = true;
+    } else if (strcmp(op_name, "decrypt") == 0) {
+        encrypt = false;
     } else {
-        ok = (encrypt ? EVP_EncryptInit_ex(ctx->ctx, cipher, nullptr, (const unsigned char*)key,
-                                           (const unsigned char*)iv)
-                      : EVP_DecryptInit_ex(ctx->ctx, cipher, nullptr, (const unsigned char*)key,
-                                           (const unsigned char*)iv));
-        if (ok == 1) ok = EVP_CIPHER_CTX_set_padding(ctx->ctx, 0);
+        luaL_error(L, "Camellia operation must be 'encrypt' or 'decrypt'");
     }
 
-    if (ok != 1) {
-        aes_ctx_dtor(ctx);
-        push_openssl_error(L, "aes.new");
+    const EVP_CIPHER* cipher = nullptr;
+    EvpCipherStreamMode mode;
+    if (strcmp(mode_name, "cbc") == 0) {
+        mode = EvpCipherStreamMode::CBC;
+        cipher = camellia_cbc_cipher_for_key_len(L, keyLen);
+        if (iv == nullptr) luaL_error(L, "Camellia-CBC requires an IV");
+    } else if (strcmp(mode_name, "ctr") == 0) {
+        mode = EvpCipherStreamMode::CTR;
+        cipher = camellia_ctr_cipher_for_key_len(L, keyLen);
+        if (iv == nullptr) luaL_error(L, "Camellia-CTR requires an IV");
+    } else if (strcmp(mode_name, "gcm") == 0) {
+        mode = EvpCipherStreamMode::GCM;
+        cipher = camellia_gcm_cipher_for_key_len(L, keyLen);
+        if (iv == nullptr) luaL_error(L, "Camellia-GCM requires a nonce");
+    } else {
+        luaL_error(L, "unsupported Camellia mode '%s'", mode_name);
     }
 
-    luaL_getmetatable(L, AES_CTX_METATABLE);
-    lua_setmetatable(L, -2);
-    return 1;
+    return push_cipher_ctx(L, CAMELLIA_CTX_METATABLE, "camellia", cipher, mode, encrypt, key, iv,
+                           ivLen);
 }
 
-// ---------------------------------------------------------------------------
-// Hash
-// ---------------------------------------------------------------------------
+static int des_new(lua_State* L) {
+    size_t keyLen = 0;
+    const void* key = luaL_checkbuffer(L, 1, &keyLen);
+    const char* mode_name = luaL_checkstring(L, 2);
+    const char* op_name = luaL_checkstring(L, 3);
+    size_t ivLen = 0;
+    const void* iv = luaL_checkbuffer(L, 4, &ivLen);
 
-static int hash_impl(lua_State* L, const EVP_MD* md) {
-    size_t inputLen = 0;
-    const void* input = luaL_checkbuffer(L, 1, &inputLen);
-    int digest_size_i = EVP_MD_get_size(md);
-    if (digest_size_i <= 0) luaL_error(L, "hash algorithm not available");
-
-    unsigned int digest_size = (unsigned int)digest_size_i;
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (!ctx) push_openssl_error(L, "hash");
-
-    void* out = lua_newbuffer(L, digest_size);
-    if (EVP_DigestInit_ex(ctx, md, nullptr) != 1 || EVP_DigestUpdate(ctx, input, inputLen) != 1 ||
-        EVP_DigestFinal_ex(ctx, (unsigned char*)out, &digest_size) != 1) {
-        EVP_MD_CTX_free(ctx);
-        push_openssl_error(L, "hash");
+    bool encrypt = false;
+    if (strcmp(op_name, "encrypt") == 0) {
+        encrypt = true;
+    } else if (strcmp(op_name, "decrypt") == 0) {
+        encrypt = false;
+    } else {
+        luaL_error(L, "3DES operation must be 'encrypt' or 'decrypt'");
     }
 
-    EVP_MD_CTX_free(ctx);
+    if (strcmp(mode_name, "cbc") != 0) {
+        luaL_error(L, "unsupported 3DES mode '%s'", mode_name);
+    }
 
-    return 1;
+    return push_cipher_ctx(L, DES_CTX_METATABLE, "des", des3_cbc_cipher_for_key_len(L, keyLen),
+                           EvpCipherStreamMode::CBC, encrypt, key, iv, ivLen);
 }
 
-static int hash_md5(lua_State* L) { return hash_impl(L, EVP_md5()); }
-static int hash_sha1(lua_State* L) { return hash_impl(L, EVP_sha1()); }
-static int hash_sha224(lua_State* L) { return hash_impl(L, EVP_sha224()); }
-static int hash_sha256(lua_State* L) { return hash_impl(L, EVP_sha256()); }
-static int hash_sha384(lua_State* L) { return hash_impl(L, EVP_sha384()); }
-static int hash_sha512(lua_State* L) { return hash_impl(L, EVP_sha512()); }
-static int hash_sha3_224(lua_State* L) { return hash_impl(L, EVP_sha3_224()); }
-static int hash_sha3_256(lua_State* L) { return hash_impl(L, EVP_sha3_256()); }
-static int hash_sha3_384(lua_State* L) { return hash_impl(L, EVP_sha3_384()); }
-static int hash_sha3_512(lua_State* L) { return hash_impl(L, EVP_sha3_512()); }
+static int chacha20_new(lua_State* L) {
+    size_t keyLen = 0;
+    const void* key = luaL_checkbuffer(L, 1, &keyLen);
+    const char* mode_name = luaL_checkstring(L, 2);
+    const char* op_name = luaL_checkstring(L, 3);
+    size_t nonceLen = 0;
+    const void* nonce = luaL_checkbuffer(L, 4, &nonceLen);
+
+    bool encrypt = false;
+    if (strcmp(op_name, "encrypt") == 0) {
+        encrypt = true;
+    } else if (strcmp(op_name, "decrypt") == 0) {
+        encrypt = false;
+    } else {
+        luaL_error(L, "ChaCha20 operation must be 'encrypt' or 'decrypt'");
+    }
+
+    if (strcmp(mode_name, "stream") == 0) {
+        if (nonceLen != 12) luaL_error(L, "ChaCha20 nonce must be 12 bytes");
+
+        unsigned char iv[16] = { 0 };
+        memcpy(iv + 4, nonce, nonceLen);
+        return push_cipher_ctx(L, CHACHA20_CTX_METATABLE, "chacha20",
+                               chacha20_cipher_for_key_len(L, keyLen), EvpCipherStreamMode::CTR,
+                               encrypt, key, iv, sizeof(iv));
+    }
+
+    if (strcmp(mode_name, "poly1305") == 0) {
+        if (nonceLen != 12) luaL_error(L, "ChaCha20-Poly1305 nonce must be 12 bytes");
+        return push_cipher_ctx(L, CHACHA20_CTX_METATABLE, "chacha20",
+                               chacha20_poly1305_cipher_for_key_len(L, keyLen),
+                               EvpCipherStreamMode::GCM, encrypt, key, nonce, nonceLen);
+    }
+
+    luaL_error(L, "unsupported ChaCha20 mode '%s'", mode_name);
+    return 0;
+}
 
 // ---------------------------------------------------------------------------
 // HMAC
 // ---------------------------------------------------------------------------
 
-static int hmac_impl(lua_State* L, const EVP_MD* md) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
+static int hmac_ctx_update(lua_State* L) {
+    auto* ctx = check_hmac_ctx(L);
+    if (ctx->finalized) luaL_error(L, "hmac context is already finalized");
+
     size_t dataLen = 0;
     const void* data = luaL_checkbuffer(L, 2, &dataLen);
+    check_openssl_input_len(L, dataLen, "data");
 
-    unsigned int mac_len = EVP_MD_get_size(md);
-    void* out = lua_newbuffer(L, mac_len);
-
-    if (!HMAC(md, key, (int)keyLen, (const unsigned char*)data, dataLen, (unsigned char*)out,
-              &mac_len)) {
-        push_openssl_error(L, "hmac");
+    if (HMAC_Update(ctx->ctx, (const unsigned char*)data, dataLen) != 1) {
+        push_openssl_error(L, "hmac.update");
     }
 
-    resize_top_buffer(L, mac_len);
+    return 0;
+}
+
+static int hmac_ctx_final(lua_State* L) {
+    auto* ctx = check_hmac_ctx(L);
+    if (ctx->finalized) luaL_error(L, "hmac context is already finalized");
+
+    unsigned int macLen = HMAC_size(ctx->ctx);
+    void* out = lua_newbuffer(L, macLen);
+    if (HMAC_Final(ctx->ctx, (unsigned char*)out, &macLen) != 1) {
+        push_openssl_error(L, "hmac.final");
+    }
+
+    ctx->finalized = true;
+    resize_top_buffer(L, macLen);
     return 1;
 }
 
-static int hmac_md5(lua_State* L) { return hmac_impl(L, EVP_md5()); }
-static int hmac_sha1(lua_State* L) { return hmac_impl(L, EVP_sha1()); }
-static int hmac_sha224(lua_State* L) { return hmac_impl(L, EVP_sha224()); }
-static int hmac_sha256(lua_State* L) { return hmac_impl(L, EVP_sha256()); }
-static int hmac_sha384(lua_State* L) { return hmac_impl(L, EVP_sha384()); }
-static int hmac_sha512(lua_State* L) { return hmac_impl(L, EVP_sha512()); }
-static int hmac_sha3_224(lua_State* L) { return hmac_impl(L, EVP_sha3_224()); }
-static int hmac_sha3_256(lua_State* L) { return hmac_impl(L, EVP_sha3_256()); }
-static int hmac_sha3_384(lua_State* L) { return hmac_impl(L, EVP_sha3_384()); }
-static int hmac_sha3_512(lua_State* L) { return hmac_impl(L, EVP_sha3_512()); }
+static int hmac_ctx_close(lua_State* L) {
+    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    if (ctx->ctx) {
+        HMAC_CTX_free(ctx->ctx);
+        ctx->ctx = nullptr;
+    }
+    ctx->closed = true;
+    return 0;
+}
+
+static int hmac_ctx_tostring(lua_State* L) {
+    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    const char* state = ctx->closed ? "closed" : (ctx->finalized ? "finalized" : "open");
+    lua_pushfstring(L, "crypto.hmac(%s)", state);
+    return 1;
+}
+
+static int hmac_new(lua_State* L) {
+    const char* hash_name = luaL_checkstring(L, 1);
+    size_t keyLen = 0;
+    const void* key = luaL_checkbuffer(L, 2, &keyLen);
+    const EVP_MD* md = openssl_md_from_name(L, hash_name);
+    check_openssl_input_len(L, keyLen, "key");
+
+    auto* ctx = (LuaHmacCtx*)lua_newuserdatadtor(L, sizeof(LuaHmacCtx), hmac_ctx_dtor);
+    ctx->ctx = HMAC_CTX_new();
+    ctx->closed = false;
+    ctx->finalized = false;
+    if (!ctx->ctx) push_openssl_error(L, "hmac.new");
+
+    if (HMAC_Init_ex(ctx->ctx, key, (int)keyLen, md, nullptr) != 1) {
+        hmac_ctx_dtor(ctx);
+        push_openssl_error(L, "hmac.new");
+    }
+
+    luaL_getmetatable(L, HMAC_CTX_METATABLE);
+    lua_setmetatable(L, -2);
+    return 1;
+}
+
+static int aes_ctx_update(lua_State* L) { return cipher_ctx_update(L, AES_CTX_METATABLE); }
+static int aes_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, AES_CTX_METATABLE); }
+static int aes_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, AES_CTX_METATABLE); }
+static int aes_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, AES_CTX_METATABLE); }
+static int aes_ctx_final(lua_State* L) { return cipher_ctx_final(L, AES_CTX_METATABLE); }
+static int aes_ctx_close(lua_State* L) { return cipher_ctx_close(L, AES_CTX_METATABLE); }
+static int aes_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, AES_CTX_METATABLE); }
+
+static int camellia_ctx_update(lua_State* L) {
+    return cipher_ctx_update(L, CAMELLIA_CTX_METATABLE);
+}
+static int camellia_ctx_update_aad(lua_State* L) {
+    return cipher_ctx_update_aad(L, CAMELLIA_CTX_METATABLE);
+}
+static int camellia_ctx_set_tag(lua_State* L) {
+    return cipher_ctx_set_tag(L, CAMELLIA_CTX_METATABLE);
+}
+static int camellia_ctx_get_tag(lua_State* L) {
+    return cipher_ctx_get_tag(L, CAMELLIA_CTX_METATABLE);
+}
+static int camellia_ctx_final(lua_State* L) { return cipher_ctx_final(L, CAMELLIA_CTX_METATABLE); }
+static int camellia_ctx_close(lua_State* L) { return cipher_ctx_close(L, CAMELLIA_CTX_METATABLE); }
+static int camellia_ctx_tostring(lua_State* L) {
+    return cipher_ctx_tostring(L, CAMELLIA_CTX_METATABLE);
+}
+
+static int des_ctx_update(lua_State* L) { return cipher_ctx_update(L, DES_CTX_METATABLE); }
+static int des_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, DES_CTX_METATABLE); }
+static int des_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, DES_CTX_METATABLE); }
+static int des_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, DES_CTX_METATABLE); }
+static int des_ctx_final(lua_State* L) { return cipher_ctx_final(L, DES_CTX_METATABLE); }
+static int des_ctx_close(lua_State* L) { return cipher_ctx_close(L, DES_CTX_METATABLE); }
+static int des_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, DES_CTX_METATABLE); }
+
+static int chacha20_ctx_update(lua_State* L) {
+    return cipher_ctx_update(L, CHACHA20_CTX_METATABLE);
+}
+static int chacha20_ctx_update_aad(lua_State* L) {
+    return cipher_ctx_update_aad(L, CHACHA20_CTX_METATABLE);
+}
+static int chacha20_ctx_set_tag(lua_State* L) {
+    return cipher_ctx_set_tag(L, CHACHA20_CTX_METATABLE);
+}
+static int chacha20_ctx_get_tag(lua_State* L) {
+    return cipher_ctx_get_tag(L, CHACHA20_CTX_METATABLE);
+}
+static int chacha20_ctx_final(lua_State* L) { return cipher_ctx_final(L, CHACHA20_CTX_METATABLE); }
+static int chacha20_ctx_close(lua_State* L) { return cipher_ctx_close(L, CHACHA20_CTX_METATABLE); }
+static int chacha20_ctx_tostring(lua_State* L) {
+    return cipher_ctx_tostring(L, CHACHA20_CTX_METATABLE);
+}
 
 // ---------------------------------------------------------------------------
 // Symmetric cipher helpers (AES, Camellia, 3DES, ChaCha20)
@@ -1080,68 +1287,6 @@ static int aead_ccm_decrypt(lua_State* L,
     return 1;
 }
 
-// ---------------------------------------------------------------------------
-// AES
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// AES ECB mode (no padding)
-// ---------------------------------------------------------------------------
-
-static int aes_ecb_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 2, &ptLen);
-    require_block_aligned(L, ptLen, 16, "aes_ecb_encrypt", "plaintext");
-    return evp_cipher_crypt(L, "aes_ecb_encrypt", aes_ecb_cipher_for_key_len(L, keyLen), true, key,
-                            nullptr, 0, pt, ptLen, false);
-}
-
-static int aes_ecb_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 2, &ctLen);
-    require_block_aligned(L, ctLen, 16, "aes_ecb_decrypt", "ciphertext");
-    return evp_cipher_crypt(L, "aes_ecb_decrypt", aes_ecb_cipher_for_key_len(L, keyLen), false, key,
-                            nullptr, 0, ct, ctLen, false);
-}
-
-static int aes_cbc_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 3, &ptLen);
-    require_block_aligned(L, ptLen, 16, "aes_cbc_encrypt", "plaintext");
-    return evp_cipher_crypt(L, "aes_cbc_encrypt", aes_cbc_cipher_for_key_len(L, keyLen), true, key,
-                            iv, ivLen, pt, ptLen, false);
-}
-static int aes_cbc_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 3, &ctLen);
-    require_block_aligned(L, ctLen, 16, "aes_cbc_decrypt", "ciphertext");
-    return evp_cipher_crypt(L, "aes_cbc_decrypt", aes_cbc_cipher_for_key_len(L, keyLen), false, key,
-                            iv, ivLen, ct, ctLen, false);
-}
-static int aes_ctr_encrypt(lua_State* L) {
-    return cipher_encrypt(L, "aes_ctr_encrypt", aes_ctr_cipher_for_key_len, false);
-}
-static int aes_ctr_decrypt(lua_State* L) {
-    return cipher_decrypt(L, "aes_ctr_decrypt", aes_ctr_cipher_for_key_len, false);
-}
-static int aes_gcm_encrypt(lua_State* L) {
-    return aead_encrypt(L, "aes_gcm_encrypt", aes_gcm_cipher_for_key_len);
-}
-static int aes_gcm_decrypt(lua_State* L) {
-    return aead_decrypt(L, "aes_gcm_decrypt", aes_gcm_cipher_for_key_len);
-}
 static int aes_ccm_encrypt(lua_State* L) { return aead_ccm_encrypt(L, aes_ccm_cipher_for_key_len); }
 static int aes_ccm_decrypt(lua_State* L) { return aead_ccm_decrypt(L, aes_ccm_cipher_for_key_len); }
 
@@ -1153,302 +1298,30 @@ static void push_aes_table(lua_State* L) {
     lua_setfield(L, -2, "ccm_encrypt");
     lua_pushcfunction(L, aes_ccm_decrypt, "ccm_decrypt");
     lua_setfield(L, -2, "ccm_decrypt");
-
-    // Legacy one-shot AES helpers kept commented out during the
-    // streaming API transition.
-    /*
-    lua_pushcfunction(L, aes_ecb_encrypt, "ecb_encrypt");
-    lua_setfield(L, -2, "ecb_encrypt");
-    lua_pushcfunction(L, aes_ecb_decrypt, "ecb_decrypt");
-    lua_setfield(L, -2, "ecb_decrypt");
-    lua_pushcfunction(L, aes_cbc_encrypt, "cbc_encrypt");
-    lua_setfield(L, -2, "cbc_encrypt");
-    lua_pushcfunction(L, aes_cbc_decrypt, "cbc_decrypt");
-    lua_setfield(L, -2, "cbc_decrypt");
-    lua_pushcfunction(L, aes_ctr_encrypt, "ctr_encrypt");
-    lua_setfield(L, -2, "ctr_encrypt");
-    lua_pushcfunction(L, aes_ctr_decrypt, "ctr_decrypt");
-    lua_setfield(L, -2, "ctr_decrypt");
-    lua_pushcfunction(L, aes_gcm_encrypt, "gcm_encrypt");
-    lua_setfield(L, -2, "gcm_encrypt");
-    lua_pushcfunction(L, aes_gcm_decrypt, "gcm_decrypt");
-    lua_setfield(L, -2, "gcm_decrypt");
-    */
-}
-
-// ---------------------------------------------------------------------------
-// Camellia (CBC, CTR, GCM)
-// ---------------------------------------------------------------------------
-
-static int camellia_cbc_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 3, &ptLen);
-    require_block_aligned(L, ptLen, 16, "camellia_cbc_encrypt", "plaintext");
-    return evp_cipher_crypt(L, "camellia_cbc_encrypt", camellia_cbc_cipher_for_key_len(L, keyLen),
-                            true, key, iv, ivLen, pt, ptLen, false);
-}
-static int camellia_cbc_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 3, &ctLen);
-    require_block_aligned(L, ctLen, 16, "camellia_cbc_decrypt", "ciphertext");
-    return evp_cipher_crypt(L, "camellia_cbc_decrypt", camellia_cbc_cipher_for_key_len(L, keyLen),
-                            false, key, iv, ivLen, ct, ctLen, false);
-}
-static int camellia_ctr_encrypt(lua_State* L) {
-    return cipher_encrypt(L, "camellia_ctr_encrypt", camellia_ctr_cipher_for_key_len, false);
-}
-static int camellia_ctr_decrypt(lua_State* L) {
-    return cipher_decrypt(L, "camellia_ctr_decrypt", camellia_ctr_cipher_for_key_len, false);
-}
-static int camellia_gcm_encrypt(lua_State* L) {
-    return aead_encrypt(L, "camellia_gcm_encrypt", camellia_gcm_cipher_for_key_len);
-}
-static int camellia_gcm_decrypt(lua_State* L) {
-    return aead_decrypt(L, "camellia_gcm_decrypt", camellia_gcm_cipher_for_key_len);
 }
 
 static void push_camellia_table(lua_State* L) {
     lua_newtable(L);
-    lua_pushcfunction(L, camellia_cbc_encrypt, "cbc_encrypt");
-    lua_setfield(L, -2, "cbc_encrypt");
-    lua_pushcfunction(L, camellia_cbc_decrypt, "cbc_decrypt");
-    lua_setfield(L, -2, "cbc_decrypt");
-    lua_pushcfunction(L, camellia_ctr_encrypt, "ctr_encrypt");
-    lua_setfield(L, -2, "ctr_encrypt");
-    lua_pushcfunction(L, camellia_ctr_decrypt, "ctr_decrypt");
-    lua_setfield(L, -2, "ctr_decrypt");
-    lua_pushcfunction(L, camellia_gcm_encrypt, "gcm_encrypt");
-    lua_setfield(L, -2, "gcm_encrypt");
-    lua_pushcfunction(L, camellia_gcm_decrypt, "gcm_decrypt");
-    lua_setfield(L, -2, "gcm_decrypt");
-}
-
-// ---------------------------------------------------------------------------
-// 3DES - PSA_KEY_TYPE_DES with a 24-byte (192-bit) key
-// ECB and CBC only; stream modes are not defined for DES in PSA.
-// ---------------------------------------------------------------------------
-
-static int des3_cbc_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 3, &ptLen);
-    require_block_aligned(L, ptLen, 8, "des3_cbc_encrypt", "plaintext");
-    return evp_cipher_crypt(L, "des3_cbc_encrypt", des3_cbc_cipher_for_key_len(L, keyLen), true,
-                            key, iv, ivLen, pt, ptLen, false);
-}
-static int des3_cbc_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t ivLen = 0;
-    const void* iv = luaL_checkbuffer(L, 2, &ivLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 3, &ctLen);
-    require_block_aligned(L, ctLen, 8, "des3_cbc_decrypt", "ciphertext");
-    return evp_cipher_crypt(L, "des3_cbc_decrypt", des3_cbc_cipher_for_key_len(L, keyLen), false,
-                            key, iv, ivLen, ct, ctLen, false);
+    lua_pushcfunction(L, camellia_new, "new");
+    lua_setfield(L, -2, "new");
 }
 
 static void push_des_table(lua_State* L) {
     lua_newtable(L);
-    lua_pushcfunction(L, des3_cbc_encrypt, "cbc_encrypt");
-    lua_setfield(L, -2, "cbc_encrypt");
-    lua_pushcfunction(L, des3_cbc_decrypt, "cbc_decrypt");
-    lua_setfield(L, -2, "cbc_decrypt");
-}
-
-// ---------------------------------------------------------------------------
-// ChaCha20 (stream) and ChaCha20-Poly1305 (AEAD)
-// ChaCha20 nonce: 12 bytes.  Counter starts at 0 (PSA manages internally).
-// ---------------------------------------------------------------------------
-
-static int chacha20_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t nonceLen = 0;
-    const void* nonce = luaL_checkbuffer(L, 2, &nonceLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 3, &ptLen);
-    if (nonceLen != 12) luaL_error(L, "ChaCha20 nonce must be 12 bytes");
-
-    unsigned char iv[16] = { 0 };
-    memcpy(iv + 4, nonce, nonceLen);
-    return evp_cipher_crypt(L, "chacha20_encrypt", chacha20_cipher_for_key_len(L, keyLen), true,
-                            key, iv, sizeof(iv), pt, ptLen, false);
-}
-static int chacha20_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t nonceLen = 0;
-    const void* nonce = luaL_checkbuffer(L, 2, &nonceLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 3, &ctLen);
-    if (nonceLen != 12) luaL_error(L, "ChaCha20 nonce must be 12 bytes");
-
-    unsigned char iv[16] = { 0 };
-    memcpy(iv + 4, nonce, nonceLen);
-    return evp_cipher_crypt(L, "chacha20_decrypt", chacha20_cipher_for_key_len(L, keyLen), false,
-                            key, iv, sizeof(iv), ct, ctLen, false);
-}
-static int chacha20_poly1305_encrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t nonceLen = 0;
-    const void* nonce = luaL_checkbuffer(L, 2, &nonceLen);
-    size_t ptLen = 0;
-    const void* pt = luaL_checkbuffer(L, 3, &ptLen);
-    size_t aadLen = 0;
-    const void* aad = lua_isnoneornil(L, 4) ? nullptr : luaL_checkbuffer(L, 4, &aadLen);
-
-    if (keyLen != 32) luaL_error(L, "ChaCha20-Poly1305 key must be 32 bytes");
-    if (nonceLen != 12) luaL_error(L, "ChaCha20-Poly1305 nonce must be 12 bytes");
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) push_openssl_error(L, "chacha20_poly1305_encrypt");
-
-    constexpr int tagLen = 16;
-    int outLen = 0;
-    int totalLen = 0;
-    void* ct_buf = lua_newbuffer(L, ptLen);
-    void* tag_buf = lua_newbuffer(L, tagLen);
-
-    if (EVP_EncryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, nullptr, nullptr) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, (int)nonceLen, nullptr) != 1 ||
-        EVP_EncryptInit_ex(ctx, nullptr, nullptr, (const unsigned char*)key,
-                           (const unsigned char*)nonce) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_encrypt");
-    }
-
-    if (aadLen > 0 &&
-        EVP_EncryptUpdate(ctx, nullptr, &outLen, (const unsigned char*)aad, (int)aadLen) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_encrypt");
-    }
-
-    if (ptLen > 0 && EVP_EncryptUpdate(ctx, (unsigned char*)ct_buf, &outLen,
-                                       (const unsigned char*)pt, (int)ptLen) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_encrypt");
-    }
-    totalLen = outLen;
-
-    if (EVP_EncryptFinal_ex(ctx, (unsigned char*)ct_buf + totalLen, &outLen) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_GET_TAG, tagLen, tag_buf) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_encrypt");
-    }
-
-    totalLen += outLen;
-    EVP_CIPHER_CTX_free(ctx);
-    if ((size_t)totalLen != ptLen) {
-        void* resized_ct = lua_newbuffer(L, totalLen);
-        memcpy(resized_ct, ct_buf, totalLen);
-        lua_replace(L, -3);
-    }
-    return 2;
-}
-static int chacha20_poly1305_decrypt(lua_State* L) {
-    size_t keyLen = 0;
-    const void* key = luaL_checkbuffer(L, 1, &keyLen);
-    size_t nonceLen = 0;
-    const void* nonce = luaL_checkbuffer(L, 2, &nonceLen);
-    size_t ctLen = 0;
-    const void* ct = luaL_checkbuffer(L, 3, &ctLen);
-    size_t tagLen = 0;
-    const void* tag = luaL_checkbuffer(L, 4, &tagLen);
-    size_t aadLen = 0;
-    const void* aad = lua_isnoneornil(L, 5) ? nullptr : luaL_checkbuffer(L, 5, &aadLen);
-
-    if (keyLen != 32) luaL_error(L, "ChaCha20-Poly1305 key must be 32 bytes");
-    if (nonceLen != 12) luaL_error(L, "ChaCha20-Poly1305 nonce must be 12 bytes");
-
-    EVP_CIPHER_CTX* ctx = EVP_CIPHER_CTX_new();
-    if (!ctx) push_openssl_error(L, "chacha20_poly1305_decrypt");
-
-    int outLen = 0;
-    int totalLen = 0;
-    void* pt_buf = lua_newbuffer(L, ctLen);
-
-    if (EVP_DecryptInit_ex(ctx, EVP_chacha20_poly1305(), nullptr, nullptr, nullptr) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_IVLEN, (int)nonceLen, nullptr) != 1 ||
-        EVP_DecryptInit_ex(ctx, nullptr, nullptr, (const unsigned char*)key,
-                           (const unsigned char*)nonce) != 1 ||
-        EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_AEAD_SET_TAG, (int)tagLen, (void*)tag) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_decrypt");
-    }
-
-    if (aadLen > 0 &&
-        EVP_DecryptUpdate(ctx, nullptr, &outLen, (const unsigned char*)aad, (int)aadLen) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_decrypt");
-    }
-
-    if (ctLen > 0 && EVP_DecryptUpdate(ctx, (unsigned char*)pt_buf, &outLen,
-                                       (const unsigned char*)ct, (int)ctLen) != 1) {
-        EVP_CIPHER_CTX_free(ctx);
-        push_openssl_error(L, "chacha20_poly1305_decrypt");
-    }
-    totalLen = outLen;
-
-    int finalOk = EVP_DecryptFinal_ex(ctx, (unsigned char*)pt_buf + totalLen, &outLen);
-    EVP_CIPHER_CTX_free(ctx);
-    if (finalOk != 1) luaL_error(L, "aead_decrypt: authentication tag mismatch");
-
-    totalLen += outLen;
-    if ((size_t)totalLen != ctLen) {
-        void* resized_pt = lua_newbuffer(L, totalLen);
-        memcpy(resized_pt, pt_buf, totalLen);
-        lua_replace(L, -2);
-    }
-    return 1;
+    lua_pushcfunction(L, des_new, "new");
+    lua_setfield(L, -2, "new");
 }
 
 static void push_chacha20_table(lua_State* L) {
     lua_newtable(L);
-    lua_pushcfunction(L, chacha20_encrypt, "encrypt");
-    lua_setfield(L, -2, "encrypt");
-    lua_pushcfunction(L, chacha20_decrypt, "decrypt");
-    lua_setfield(L, -2, "decrypt");
-    lua_pushcfunction(L, chacha20_poly1305_encrypt, "poly1305_encrypt");
-    lua_setfield(L, -2, "poly1305_encrypt");
-    lua_pushcfunction(L, chacha20_poly1305_decrypt, "poly1305_decrypt");
-    lua_setfield(L, -2, "poly1305_decrypt");
+    lua_pushcfunction(L, chacha20_new, "new");
+    lua_setfield(L, -2, "new");
 }
 
 static void push_hmac_table(lua_State* L) {
     lua_newtable(L);
-    lua_pushcfunction(L, hmac_md5, "md5");
-    lua_setfield(L, -2, "md5");
-    lua_pushcfunction(L, hmac_sha1, "sha1");
-    lua_setfield(L, -2, "sha1");
-    lua_pushcfunction(L, hmac_sha224, "sha224");
-    lua_setfield(L, -2, "sha224");
-    lua_pushcfunction(L, hmac_sha256, "sha256");
-    lua_setfield(L, -2, "sha256");
-    lua_pushcfunction(L, hmac_sha384, "sha384");
-    lua_setfield(L, -2, "sha384");
-    lua_pushcfunction(L, hmac_sha512, "sha512");
-    lua_setfield(L, -2, "sha512");
-    lua_pushcfunction(L, hmac_sha3_224, "sha3_224");
-    lua_setfield(L, -2, "sha3_224");
-    lua_pushcfunction(L, hmac_sha3_256, "sha3_256");
-    lua_setfield(L, -2, "sha3_256");
-    lua_pushcfunction(L, hmac_sha3_384, "sha3_384");
-    lua_setfield(L, -2, "sha3_384");
-    lua_pushcfunction(L, hmac_sha3_512, "sha3_512");
-    lua_setfield(L, -2, "sha3_512");
+    lua_pushcfunction(L, hmac_new, "new");
+    lua_setfield(L, -2, "new");
 }
 
 // ---------------------------------------------------------------------------
@@ -1471,11 +1344,14 @@ static int kdf_hkdf(lua_State* L, const EVP_MD* md) {
     }
 
     const char* digest_name = EVP_MD_get0_name(md);
+    unsigned char empty = 0;
+    void* saltParam = const_cast<void*>(salt ? salt : &empty);
+    void* infoParam = const_cast<void*>(info ? info : &empty);
     OSSL_PARAM params[] = {
         OSSL_PARAM_construct_utf8_string(OSSL_KDF_PARAM_DIGEST, const_cast<char*>(digest_name), 0),
         OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_KEY, const_cast<void*>(ikm), ikmLen),
-        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, const_cast<void*>(salt), saltLen),
-        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, const_cast<void*>(info), infoLen),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_SALT, saltParam, saltLen),
+        OSSL_PARAM_construct_octet_string(OSSL_KDF_PARAM_INFO, infoParam, infoLen),
         OSSL_PARAM_construct_end(),
     };
 
@@ -2619,6 +2495,27 @@ LUAU_MODULE_EXPORT int luauopen__crypto(lua_State* L) {
     }
     lua_pop(L, 1);
 
+    luaL_newmetatable(L, HMAC_CTX_METATABLE);
+    {
+        static const luaL_Reg hmac_methods[] = {
+            { "update", hmac_ctx_update },
+            { "final", hmac_ctx_final },
+            { "close", hmac_ctx_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = hmac_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, hmac_ctx_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, hmac_ctx_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
     luaL_newmetatable(L, AES_CTX_METATABLE);
     {
         static const luaL_Reg aes_methods[] = {
@@ -2636,6 +2533,75 @@ LUAU_MODULE_EXPORT int luauopen__crypto(lua_State* L) {
         lua_pushcfunction(L, aes_ctx_close, "__gc");
         lua_setfield(L, -2, "__gc");
         lua_pushcfunction(L, aes_ctx_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, CAMELLIA_CTX_METATABLE);
+    {
+        static const luaL_Reg camellia_methods[] = {
+            { "update", camellia_ctx_update },
+            { "updateAAD", camellia_ctx_update_aad },
+            { "setTag", camellia_ctx_set_tag },
+            { "getTag", camellia_ctx_get_tag },
+            { "final", camellia_ctx_final },
+            { "close", camellia_ctx_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = camellia_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, camellia_ctx_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, camellia_ctx_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, DES_CTX_METATABLE);
+    {
+        static const luaL_Reg des_methods[] = {
+            { "update", des_ctx_update },  { "updateAAD", des_ctx_update_aad },
+            { "setTag", des_ctx_set_tag }, { "getTag", des_ctx_get_tag },
+            { "final", des_ctx_final },    { "close", des_ctx_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = des_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, des_ctx_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, des_ctx_tostring, "__tostring");
+        lua_setfield(L, -2, "__tostring");
+    }
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, CHACHA20_CTX_METATABLE);
+    {
+        static const luaL_Reg chacha20_methods[] = {
+            { "update", chacha20_ctx_update },
+            { "updateAAD", chacha20_ctx_update_aad },
+            { "setTag", chacha20_ctx_set_tag },
+            { "getTag", chacha20_ctx_get_tag },
+            { "final", chacha20_ctx_final },
+            { "close", chacha20_ctx_close },
+            { nullptr, nullptr },
+        };
+        lua_newtable(L);
+        for (const luaL_Reg* m = chacha20_methods; m->name; m++) {
+            lua_pushcfunction(L, m->func, m->name);
+            lua_setfield(L, -2, m->name);
+        }
+        lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, chacha20_ctx_close, "__gc");
+        lua_setfield(L, -2, "__gc");
+        lua_pushcfunction(L, chacha20_ctx_tostring, "__tostring");
         lua_setfield(L, -2, "__tostring");
     }
     lua_pop(L, 1);

@@ -15,33 +15,16 @@ export type HashContext = {
 
 export type HashLib = {
 	new: (algorithm: string) -> HashContext,
-	-- Legacy one-shot hash helpers kept commented out during the
-	-- streaming API transition.
-	--[==[
-	md5: (data: buffer) -> buffer,
-	sha1: (data: buffer) -> buffer,
-	sha224: (data: buffer) -> buffer,
-	sha256: (data: buffer) -> buffer,
-	sha384: (data: buffer) -> buffer,
-	sha512: (data: buffer) -> buffer,
-	sha3_224: (data: buffer) -> buffer,
-	sha3_256: (data: buffer) -> buffer,
-	sha3_384: (data: buffer) -> buffer,
-	sha3_512: (data: buffer) -> buffer,
-	]==]
+}
+
+export type HmacContext = {
+	update: (self: HmacContext, data: buffer) -> (),
+	final: (self: HmacContext) -> buffer,
+	close: (self: HmacContext) -> (),
 }
 
 export type HmacLib = {
-	md5: (key: buffer, data: buffer) -> buffer,
-	sha1: (key: buffer, data: buffer) -> buffer,
-	sha224: (key: buffer, data: buffer) -> buffer,
-	sha256: (key: buffer, data: buffer) -> buffer,
-	sha384: (key: buffer, data: buffer) -> buffer,
-	sha512: (key: buffer, data: buffer) -> buffer,
-	sha3_224: (key: buffer, data: buffer) -> buffer,
-	sha3_256: (key: buffer, data: buffer) -> buffer,
-	sha3_384: (key: buffer, data: buffer) -> buffer,
-	sha3_512: (key: buffer, data: buffer) -> buffer,
+	new: (algorithm: string, key: buffer) -> HmacContext,
 }
 
 export type AesContext = {
@@ -58,41 +41,19 @@ export type AesLib = {
 	new: (key: buffer, mode: string, operation: "encrypt" | "decrypt", iv_or_nonce: buffer?) -> AesContext,
 	ccm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?, tag_len: number?) -> (buffer, buffer),
 	ccm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
-	-- Legacy one-shot AES helpers kept commented out during the
-	-- streaming API transition. CCM stays exposed because its API is
-	-- intentionally one-shot.
-	--[==[
-	ecb_encrypt: (key: buffer, data: buffer) -> buffer,
-	ecb_decrypt: (key: buffer, data: buffer) -> buffer,
-	cbc_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	cbc_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	ctr_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	ctr_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	gcm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?) -> (buffer, buffer),
-	gcm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
-	]==]
 }
 
 export type CamelliaLib = {
-	cbc_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	cbc_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	ctr_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	ctr_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	gcm_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?) -> (buffer, buffer),
-	gcm_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
+	new: (key: buffer, mode: string, operation: "encrypt" | "decrypt", iv_or_nonce: buffer?) -> AesContext,
 }
 
 -- 3DES only; key must be 24 bytes
 export type DesLib = {
-	cbc_encrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
-	cbc_decrypt: (key: buffer, iv: buffer, data: buffer) -> buffer,
+	new: (key: buffer, mode: string, operation: "encrypt" | "decrypt", iv_or_nonce: buffer?) -> AesContext,
 }
 
 export type ChaCha20Lib = {
-	encrypt: (key: buffer, nonce: buffer, data: buffer) -> buffer,
-	decrypt: (key: buffer, nonce: buffer, data: buffer) -> buffer,
-	poly1305_encrypt: (key: buffer, nonce: buffer, data: buffer, aad: buffer?) -> (buffer, buffer),
-	poly1305_decrypt: (key: buffer, nonce: buffer, ct: buffer, tag: buffer, aad: buffer?) -> buffer,
+	new: (key: buffer, mode: string, operation: "encrypt" | "decrypt", nonce: buffer) -> AesContext,
 }
 
 export type KdfLib = {

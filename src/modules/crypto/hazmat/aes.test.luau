@@ -69,7 +69,7 @@ local function parseRsp(source: string): { RspSection }
 			return
 		end
 
-		table.insert(currentSection.cases, currentCase)
+		table.insert(currentSection.cases, currentCase :: RspCase)
 		currentCase = nil
 	end
 
@@ -107,7 +107,7 @@ local function parseRsp(source: string): { RspSection }
 
 			for entry in header:gmatch("[^,]+") do
 				local sectionKey, sectionValue = trim(entry):match("^(.-)%s*=%s*(.-)$")
-				if sectionKey == nil then
+				if sectionKey == nil or sectionValue == nil then
 					error(`Unsupported RSP header entry: {entry}`)
 				end
 				currentSection.metadata[trim(sectionKey)] = trim(sectionValue)
@@ -122,7 +122,7 @@ local function parseRsp(source: string): { RspSection }
 					fail = false,
 				}
 			end
-			currentCase.fail = true
+			(currentCase :: RspCase).fail = true
 			flushCase()
 			continue
 		end
@@ -944,10 +944,10 @@ for _, file in zip.list(ccmArchive) do
 
 		for _, section in sections do
 			local key = hex.decode(section.sharedFields.Key or "")
-			local alen = getSectionNumber(section, "Alen") or lastAlen
-			local plen = getSectionNumber(section, "Plen") or lastPlen
-			local tlen = getSectionNumber(section, "Tlen") or lastTlen
-			local nlen = getSectionNumber(section, "Nlen") or lastNlen
+			local alen = (getSectionNumber(section, "Alen") or lastAlen) :: number
+			local plen = (getSectionNumber(section, "Plen") or lastPlen) :: number
+			local tlen = (getSectionNumber(section, "Tlen") or lastTlen) :: number
+			local nlen = (getSectionNumber(section, "Nlen") or lastNlen) :: number
 
 			test.expect(alen):toNotBeNil()
 			test.expect(plen):toNotBeNil()
