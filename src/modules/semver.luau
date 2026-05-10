@@ -1,12 +1,6 @@
 --[=[
 	Semantic version parsing, comparison, and range matching.
 
-	This module implements SemVer 2.0.0 core ordering:
-	- `major.minor.patch` are required and must be non-negative integers
-	  without leading zeroes.
-	- prerelease identifiers sort before the corresponding release.
-	- build metadata is parsed and preserved, but ignored for precedence.
-
 	Supported range selectors:
 	- exact: `1.2.3`, `=1.2.3`
 	- comparators: `<1.2.3`, `<=1.2.3`, `>1.2.3`, `>=1.2.3`

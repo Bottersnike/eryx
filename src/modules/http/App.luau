@@ -757,7 +757,7 @@ end
 	A higher-level HTTP app/router layer built on top of [[HttpServer]].
 
 	Use [[App.get]], [[App.post]], middleware, groups, and mounts to build
-	Flask/FastAPI-style request routing without dropping to the low-level
+	simple request routing without dropping to the low-level
 	request-handler callback for every endpoint.
 ]=]
 function App.new(options: HttpServer.HttpServerOptions?): App

@@ -11,13 +11,13 @@ The following document outlines a basic style guide for Luau code, followed by t
 - Local variables always use `camelCase`
 - Constants always use `SHOUTING_SNAKE_CASE`
 - "Private" variables and functions are designated by prefixing their name with an underscore (`_`)
-- *Really* "private" variables and functions are designed by prefixing their name with two underscores (`__`). Avoid accessing these when at all possible.
+- *Really* "private" variables and functions are designated by prefixing their name with two underscores (`__`). Avoid accessing these when at all possible.
 - Types are always named in `PascalCase`. Prefixing a type name with `T` for disambiguation is performed occasionally, but discouraged when not strictly required.
 - When an acronym is present in a name (eg `HTTP`), only the first letter (if any) should be capitalised. For example, `makeHttpRequest` or `httpStatusCode`. Abbreviations representing sets (such as `HSV` or `RGB`) are an exception to this.
 
 ## Use of whitespace
 
-- All Luau scripts must be intended using the tab character
+- All Luau scripts must be indented using the tab character
 - When possible, lines should be under 100 characters. 120 characters is the absolute allowable limit.
 - Comments should be wrapped at the 79 character mark
 - Whitespace is not allowable at the end of a line
@@ -45,4 +45,4 @@ type MyClassProps = {...}
 type MyClass = setmetatable<MyClassProps, typeof(MyClass)>
 ```
 
-`MyClassProps` can be inlined into the `setmetatable<>` call when not required as a seperate type.
+`MyClassProps` can be inlined into the `setmetatable<>` call when not required as a separate type.

@@ -29,7 +29,7 @@ Modules with multiple returns or dynamic assignment to their returned table will
 
 ## Documenting modules
 
-A documentation comment at the very first line is considered a documentation comment.
+A comment at the very first line is considered a documentation comment.
 
 If a code line is present immediately below this documentation comment, and that code line is documentable, the comment will be associated with that code line. As such, it's recommended to always leave a blank line after a module comment.
 

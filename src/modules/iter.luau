@@ -1,7 +1,7 @@
 --[=[
 Utilities for working with sequence-like data through a small iterator API.
 
-This module accepts three kinds of iterable input:
+Functions in this module accept three kinds of iterable input:
 
 1. Dense array-like tables such as `{ "a", "b", "c" }`
 2. Simple iterator functions of the form `() -> (index?, value)`

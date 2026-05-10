@@ -1,8 +1,5 @@
 --[=[
 	Access to read-only Luau sources baked into embedded or hybrid builds.
-
-	This module intentionally returns strings rather than File handles; embedded
-	sources are not real filesystem files.
 ]=]
 
 local embedded = {}

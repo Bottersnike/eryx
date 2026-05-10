@@ -1,11 +1,11 @@
 --[=[
 	Project manifest and lockfile helpers.
 
-	This module intentionally parses `eryx.toml` and `eryx.lock` through the
-	TOML CST API. The typed `manifest` / `lockfile` views are for validation and
-	convenient reads; the original CST document remains available for edits so
-	comments, whitespace, unknown Eryx fields, and third-party `[tool.*]` tables
-	can be preserved when the file is written back.
+	As the project manifest is a TOML file, programmatic changes can
+	cause a complete re-formatting of the file. As such, this library
+	exposes a CST view for the manifest, and is it strongly recommended
+	to make edits within the CST view. See the [[toml]] documentation
+	for more details on this.
 ]=]
 
 local fs = require("@eryx/fs")

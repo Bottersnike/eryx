@@ -34,7 +34,7 @@ return suite
 To run a single test file, use:
 
 ```sh
-eryx test <name>.luau.test
+eryx test <name>.test.luau
 ```
 
 Alternatively, to test an entire folder, use:

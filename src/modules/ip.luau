@@ -2220,7 +2220,7 @@ function IPv4Range.iter(self: IPv4Range): () -> IPv4Address?
 				current = seg.start
 				finish = seg.finish
 			end
-			if current :: number <= finish :: number then
+			if (current :: number) <= (finish :: number) then
 				local out = createIPv4AddressFromInt(current :: number)
 				current = (current :: number) + 1
 				return out
