@@ -1,5 +1,5 @@
 --[=[
-	TLS/SSL support for Luau, powered by Mbed TLS.
+	TLS/SSL support for Luau, powered by OpenSSL.
 
 	Provides encrypted communication over sockets using TLS 1.2+. Includes
 	both client and server context creation, certificate generation, and
@@ -42,8 +42,9 @@ export type SslContext = {
 		Wraps an existing connected [[_socket.Socket]] into a TLS connection.
 
 		The `SslSocket` takes ownership of the underlying file descriptor.
-		For client connections, pass `serverHostname` to enable SNI
-		(Server Name Indication) and certificate hostname verification.
+		For verified client connections, `serverHostname` is required to
+		enable SNI (Server Name Indication) and certificate hostname
+		verification.
 
 		@param sock A connected `_socket.Socket`.
 		@param serverHostname Hostname for SNI and certificate verification.
@@ -55,8 +56,8 @@ export type SslContext = {
 		Loads a PEM-encoded CA certificate file for server certificate
 		verification.
 
-		Call this to trust a custom CA instead of (or in addition to) the
-		system certificate store.
+		Call this to switch the context from system certificate store
+		verification to the supplied custom CA bundle.
 
 		@param cafile Path to a PEM file containing one or more CA certificates.
 	]=]
@@ -180,8 +181,9 @@ type PathLike = path.PathLike
 --[=[
 	Creates a new [[SslContext]] with sensible defaults for **client** mode.
 
-	The context is preconfigured with system CA certificates and requires
+	The context is preconfigured for system CA verification and requires
 	TLS 1.2 or later. Server certificate verification is enabled by default.
+	When verification is enabled, `wrapSocket` requires a hostname.
 
 	```luau
 	local ctx = _ssl.createDefaultContext()
@@ -233,6 +235,7 @@ end
 
 	@param sock A connected `_socket.Socket`.
 	@param hostname Hostname for SNI and certificate verification.
+		Required when verification is enabled.
 	@return SslSocket -- The wrapped TLS socket.
 ]=]
 function _ssl.wrapSocket(sock: any, hostname: string?): SslSocket

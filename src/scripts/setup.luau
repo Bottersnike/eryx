@@ -1,6 +1,6 @@
 local json = require("@eryx/data/json")
 local fs = require("@eryx/fs")
-local luau = require("@eryx/luau/analyze")
+local luau = require("@eryx/luau/analysis")
 local os = require("@eryx/os")
 
 -- Resolve the path to a built-in module, but with a bogus CWD, to ensure we enter internal module resolution

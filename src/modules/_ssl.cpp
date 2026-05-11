@@ -1,7 +1,7 @@
-// _ssl.cpp  –  TLS wrapper for _socket, using mbedTLS (Win32)
+// _ssl.cpp  -  TLS wrapper for _socket, using OpenSSL
 //
-//   ssl.wrap_socket(sock [, options]) -> SSLSocket
-//   ssl.create_default_context()      -> SSLContext   (client)
+//   ssl.wrap_socket(sock [, hostname]) -> SSLSocket
+//   ssl.create_default_context()       -> SSLContext   (client)
 //   ssl.create_server_context(certfile, keyfile [, password]) -> SSLContext (server)
 //
 //   SSLContext:wrap_socket(sock [, server_hostname]) -> SSLSocket
@@ -26,6 +26,8 @@
 // Platform socket compatibility (mirrors _socket.hpp)
 // ---------------------------------------------------------------------------
 #ifndef _WIN32
+#include <arpa/inet.h>
+#include <errno.h>
 #include <netdb.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -34,30 +36,36 @@ using SOCKET = int;
 #define SOCKET_ERROR (-1)
 #define sock_fd_close(fd) close(fd)
 #else
+#include <ws2tcpip.h>
 #define sock_fd_close(fd) closesocket(fd)
 #endif
 
+#include <openssl/bio.h>
+#include <openssl/bn.h>
+#include <openssl/buffer.h>
+#include <openssl/core_names.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/params.h>
+#include <openssl/pem.h>
+#include <openssl/rand.h>
+#include <openssl/rsa.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+#include <openssl/x509v3.h>
+
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <vector>
 
-// mbedTLS headers
-#include "mbedtls/debug.h"
-#include "mbedtls/error.h"
-#include "mbedtls/md.h"
-#include "mbedtls/net_sockets.h"
-#include "mbedtls/pk.h"
-#include "mbedtls/ssl.h"
-#include "mbedtls/x509_crt.h"
-#include "mbedtls/x509_csr.h"
-
-// mbedTLS 4.0: RNG is handled internally via PSA Crypto
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "psa/crypto.h"
 
 // ---------------------------------------------------------------------------
 // Module metadata
@@ -69,44 +77,33 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-// ---------------------------------------------------------------------------
-// Metatables
-// ---------------------------------------------------------------------------
 static const char* SSLCTX_METATABLE = "SSLContext";
 static const char* SSLSOCKET_METATABLE = "SSLSocket";
 
-// ---------------------------------------------------------------------------
-// SSLContext  –  shared configuration (verify mode)
-// In mbedTLS 4.0, RNG is handled internally by PSA Crypto.
-// Certificate verification is delegated to Windows CryptoAPI.
-// ---------------------------------------------------------------------------
+static constexpr int SSL_VERIFY_NONE_LUA = 0;
+static constexpr int SSL_VERIFY_REQUIRED_LUA = 2;
+
 struct LuaSSLContext {
-    mbedtls_ssl_config conf;
-    mbedtls_x509_crt cacert;    // for explicit load_verify_locations
-    mbedtls_x509_crt own_cert;  // server certificate chain
-    mbedtls_pk_context pk_key;  // server private key
-    bool use_system_verify;     // true -> delegate to Win CryptoAPI
-    int verify_mode;            // MBEDTLS_SSL_VERIFY_NONE / REQUIRED
-    bool is_server;             // true for server contexts
-    bool has_own_cert;          // true when own_cert/pk_key are loaded
+    SSL_CTX* ctx;
+    bool use_system_verify;
+    int verify_mode;
+    bool is_server;
+};
+
+struct LuaSSLSocket {
+    SSL* ssl;
+    SOCKET fd;
+    LuaSSLContext* ctx;
+    int ctx_ref;
+    bool connected;
+    bool closed;
+    std::string hostname;
+    lua_State* L;
 };
 
 static LuaSSLContext* check_sslctx(lua_State* L, int idx) {
     return (LuaSSLContext*)luaL_checkudata(L, idx, SSLCTX_METATABLE);
 }
-
-// ---------------------------------------------------------------------------
-// SSLSocket  –  a TLS-wrapped socket
-// ---------------------------------------------------------------------------
-struct LuaSSLSocket {
-    mbedtls_ssl_context ssl;
-    mbedtls_net_context net;
-    LuaSSLContext* ctx;  // borrowed pointer (kept alive by Lua ref)
-    int ctx_ref;         // LUA_REGISTRYINDEX ref to keep ctx alive
-    bool connected;
-    std::string hostname;
-    lua_State* L;  // stored for dtor cleanup (lua_unref)
-};
 
 static LuaSSLSocket* check_sslsocket(lua_State* L, int idx) {
     return (LuaSSLSocket*)luaL_checkudata(L, idx, SSLSOCKET_METATABLE);
@@ -118,43 +115,354 @@ static const char* sslsock_check_bytes_arg(lua_State* L, int idx, size_t* len) {
     return luaL_checklstring(L, idx, len);
 }
 
-// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
 static void sslctx_dtor(void* ud);
 static void sslsock_dtor(void* ud);
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-// Raise a Lua error with an mbedTLS error string.
-static int mbedtls_lua_error(lua_State* L, const char* prefix, int ret) {
-    char buf[256];
-    mbedtls_strerror(ret, buf, sizeof(buf));
-    luaL_error(L, "%s: [%d] %s", prefix, ret, buf);
+static void push_openssl_error(lua_State* L, const char* op) {
+    unsigned long err = ERR_get_error();
+    if (err != 0) {
+        char buf[256];
+        ERR_error_string_n(err, buf, sizeof(buf));
+        luaL_error(L, "%s failed (%s)", op, buf);
+    }
+
+    luaL_error(L, "%s failed", op);
+}
+
+static int ssl_lua_error_code(lua_State* L, const char* op, int ssl_err);
+
+static int ssl_lua_error(lua_State* L, const char* op, SSL* ssl, int ret) {
+    int ssl_err = SSL_get_error(ssl, ret);
+    return ssl_lua_error_code(L, op, ssl_err);
+}
+
+static int ssl_lua_error_code(lua_State* L, const char* op, int ssl_err) {
+    unsigned long err = ERR_get_error();
+    if (err != 0) {
+        char buf[256];
+        ERR_error_string_n(err, buf, sizeof(buf));
+        luaL_error(L, "%s failed (%s)", op, buf);
+        return 0;
+    }
+
+    if (ssl_err == SSL_ERROR_SYSCALL) {
+#ifdef _WIN32
+        luaL_error(L, "%s failed (syscall error %d)", op, (int)WSAGetLastError());
+#else
+        luaL_error(L, "%s failed (syscall error %d)", op, errno);
+#endif
+        return 0;
+    }
+
+    luaL_error(L, "%s failed (ssl error %d)", op, ssl_err);
     return 0;
 }
 
-// ---------------------------------------------------------------------------
-// System certificate verification  (post-handshake, all platforms)
-//
-// On Windows:  Windows CryptoAPI  (browser-identical trust anchors)
-// On macOS:    Security framework (SecTrustEvaluateWithError)
-// On Linux:    mbedtls_x509_crt_verify against a probed CA bundle file
-// ---------------------------------------------------------------------------
+static void check_openssl_input_len(lua_State* L, size_t len, const char* arg_name) {
+    if (len > INT_MAX) luaL_error(L, "%s is too large for OpenSSL", arg_name);
+}
+
+static std::string bio_to_string(lua_State* L, BIO* bio, const char* op) {
+    BUF_MEM* mem = nullptr;
+    BIO_get_mem_ptr(bio, &mem);
+    if (!mem || !mem->data) luaL_error(L, "%s failed", op);
+
+    return std::string(mem->data, mem->length);
+}
+
+static bool looks_like_ipv4(const char* s) {
+    int dots = 0;
+    for (const char* p = s; *p; ++p) {
+        if (*p == '.')
+            dots++;
+        else if (*p < '0' || *p > '9')
+            return false;
+    }
+    return dots == 3;
+}
+
+static std::string trim_copy(const std::string& value) {
+    size_t start = 0;
+    size_t end = value.size();
+    while (start < end && (value[start] == ' ' || value[start] == '\t')) start++;
+    while (end > start && (value[end - 1] == ' ' || value[end - 1] == '\t')) end--;
+    return value.substr(start, end - start);
+}
+
+static std::string format_asn1_time(lua_State* L, const ASN1_TIME* value, const char* op) {
+    struct tm tm_value {};
+    if (ASN1_TIME_to_tm(value, &tm_value) != 1) push_openssl_error(L, op);
+
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%04d-%02d-%02d %02d:%02d:%02d", tm_value.tm_year + 1900,
+             tm_value.tm_mon + 1, tm_value.tm_mday, tm_value.tm_hour, tm_value.tm_min,
+             tm_value.tm_sec);
+    return std::string(buf);
+}
+
+static std::string format_x509_name(lua_State* L, X509_NAME* name, const char* op) {
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) push_openssl_error(L, op);
+
+    if (X509_NAME_print_ex(bio, name, 0, XN_FLAG_RFC2253) < 0) {
+        BIO_free(bio);
+        push_openssl_error(L, op);
+    }
+
+    std::string out = bio_to_string(L, bio, op);
+    BIO_free(bio);
+    return out;
+}
+
+static std::string format_cert_info(lua_State* L, X509* cert, const char* op) {
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) push_openssl_error(L, op);
+
+    if (X509_print_ex(bio, cert, 0, X509_FLAG_COMPAT) != 1) {
+        BIO_free(bio);
+        push_openssl_error(L, op);
+    }
+
+    std::string out = bio_to_string(L, bio, op);
+    BIO_free(bio);
+    return out;
+}
+
+static std::string format_serial_hex(X509* cert) {
+    ASN1_INTEGER* serial = X509_get_serialNumber(cert);
+    const unsigned char* data = ASN1_STRING_get0_data((ASN1_STRING*)serial);
+    int len = ASN1_STRING_length((ASN1_STRING*)serial);
+
+    std::string hex;
+    for (int i = 0; i < len; i++) {
+        char part[4];
+        snprintf(part, sizeof(part), "%02X", data[i]);
+        if (i > 0) hex += ':';
+        hex += part;
+    }
+
+    return hex;
+}
+
+static int pem_password_callback(char* buf, int size, int, void* userdata) {
+    const char* password = (const char*)userdata;
+    if (!password) return 0;
+
+    int len = (int)strlen(password);
+    if (len > size) len = size;
+    memcpy(buf, password, len);
+    return len;
+}
+
+static EVP_PKEY* load_private_key_pem(lua_State* L, const char* op, const char* pem,
+                                      const char* password) {
+    BIO* bio = BIO_new_mem_buf(pem, -1);
+    if (!bio) push_openssl_error(L, op);
+
+    EVP_PKEY* pkey = PEM_read_bio_PrivateKey(
+        bio, nullptr, password ? pem_password_callback : nullptr, (void*)password);
+    BIO_free(bio);
+    if (!pkey) push_openssl_error(L, op);
+
+    return pkey;
+}
+
+static void apply_ctx_verify_mode(LuaSSLContext* ctx) {
+    int mode = SSL_VERIFY_NONE;
+    if (!ctx->use_system_verify && ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA) {
+        mode =
+            ctx->is_server ? (SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT) : SSL_VERIFY_PEER;
+    }
+
+    SSL_CTX_set_verify(ctx->ctx, mode, nullptr);
+}
+
+static LuaSSLContext* new_sslctx_userdata(lua_State* L) {
+    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
+    new (ctx) LuaSSLContext();
+    ctx->ctx = nullptr;
+    ctx->use_system_verify = true;
+    ctx->verify_mode = SSL_VERIFY_REQUIRED_LUA;
+    ctx->is_server = false;
+
+    luaL_getmetatable(L, SSLCTX_METATABLE);
+    lua_setmetatable(L, -2);
+    return ctx;
+}
+
+static LuaSSLSocket* new_sslsocket_userdata(lua_State* L) {
+    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
+    new (ss) LuaSSLSocket();
+    ss->ssl = nullptr;
+    ss->fd = INVALID_SOCKET;
+    ss->ctx = nullptr;
+    ss->ctx_ref = LUA_NOREF;
+    ss->connected = false;
+    ss->closed = true;
+    ss->L = L;
+    return ss;
+}
+
+static SSL_CTX* make_base_context(lua_State* L, bool is_server) {
+    SSL_CTX* ssl_ctx = SSL_CTX_new(is_server ? TLS_server_method() : TLS_client_method());
+    if (!ssl_ctx) push_openssl_error(L, "SSL_CTX_new");
+
+    if (SSL_CTX_set_min_proto_version(ssl_ctx, TLS1_2_VERSION) != 1) {
+        SSL_CTX_free(ssl_ctx);
+        push_openssl_error(L, "SSL_CTX_set_min_proto_version");
+    }
+
+    return ssl_ctx;
+}
+
+static LuaSSLContext* create_client_context(lua_State* L) {
+    LuaSSLContext* ctx = new_sslctx_userdata(L);
+    ctx->ctx = make_base_context(L, false);
+    ctx->use_system_verify = true;
+    ctx->verify_mode = SSL_VERIFY_REQUIRED_LUA;
+    ctx->is_server = false;
+    apply_ctx_verify_mode(ctx);
+    return ctx;
+}
+
+static void load_cert_chain_from_memory(lua_State* L, SSL_CTX* ctx, const char* pem,
+                                        const char* op) {
+    BIO* bio = BIO_new_mem_buf(pem, -1);
+    if (!bio) push_openssl_error(L, op);
+
+    X509* cert = PEM_read_bio_X509_AUX(bio, nullptr, nullptr, nullptr);
+    if (!cert) {
+        BIO_free(bio);
+        push_openssl_error(L, op);
+    }
+
+    if (SSL_CTX_use_certificate(ctx, cert) != 1) {
+        X509_free(cert);
+        BIO_free(bio);
+        push_openssl_error(L, op);
+    }
+    X509_free(cert);
+
+    while (true) {
+        X509* extra = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+        if (!extra) {
+            ERR_clear_error();
+            break;
+        }
+
+        if (SSL_CTX_add_extra_chain_cert(ctx, extra) != 1) {
+            X509_free(extra);
+            BIO_free(bio);
+            push_openssl_error(L, op);
+        }
+    }
+
+    BIO_free(bio);
+}
+
+static LuaSSLContext* create_server_context_common(lua_State* L) {
+    LuaSSLContext* ctx = new_sslctx_userdata(L);
+    ctx->ctx = make_base_context(L, true);
+    ctx->use_system_verify = false;
+    ctx->verify_mode = SSL_VERIFY_NONE_LUA;
+    ctx->is_server = true;
+    apply_ctx_verify_mode(ctx);
+    return ctx;
+}
+
+static LuaSSLContext* create_server_context_from_files(lua_State* L, const std::string& certfile,
+                                                       const std::string& keyfile,
+                                                       const char* password) {
+    {
+        FILE* f = fopen(certfile.c_str(), "rb");
+        if (!f)
+            luaL_error(L, "ssl: certificate file not found: %s", certfile.c_str());
+        else
+            fclose(f);
+    }
+    {
+        FILE* f = fopen(keyfile.c_str(), "rb");
+        if (!f)
+            luaL_error(L, "ssl: private key file not found: %s", keyfile.c_str());
+        else
+            fclose(f);
+    }
+
+    LuaSSLContext* ctx = create_server_context_common(L);
+    SSL_CTX_set_default_passwd_cb(ctx->ctx, pem_password_callback);
+    SSL_CTX_set_default_passwd_cb_userdata(ctx->ctx, (void*)password);
+
+    if (SSL_CTX_use_certificate_chain_file(ctx->ctx, certfile.c_str()) != 1) {
+        push_openssl_error(L, "load server certificate");
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx->ctx, keyfile.c_str(), SSL_FILETYPE_PEM) != 1) {
+        push_openssl_error(L, "load server private key");
+    }
+    if (SSL_CTX_check_private_key(ctx->ctx) != 1) {
+        push_openssl_error(L, "server certificate/private key mismatch");
+    }
+
+    return ctx;
+}
+
+static LuaSSLContext* create_server_context_from_memory(lua_State* L, const char* cert_pem,
+                                                        const char* key_pem, const char* password) {
+    LuaSSLContext* ctx = create_server_context_common(L);
+    load_cert_chain_from_memory(L, ctx->ctx, cert_pem, "parse server certificate PEM");
+
+    EVP_PKEY* pkey = load_private_key_pem(L, "parse server private key PEM", key_pem, password);
+    if (SSL_CTX_use_PrivateKey(ctx->ctx, pkey) != 1) {
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "parse server private key PEM");
+    }
+    EVP_PKEY_free(pkey);
+
+    if (SSL_CTX_check_private_key(ctx->ctx) != 1) {
+        push_openssl_error(L, "server certificate/private key mismatch");
+    }
+
+    return ctx;
+}
+
+static STACK_OF(X509) * ssl_get_peer_chain(SSL* ssl) {
+#if defined(OPENSSL_VERSION_NUMBER) && OPENSSL_VERSION_NUMBER >= 0x10100000L
+    return SSL_get_peer_cert_chain(ssl);
+#else
+    return SSL_get_peer_cert_chain(ssl);
+#endif
+}
 
 #ifdef _WIN32
 #include <wincrypt.h>
+#ifdef X509_NAME
+#undef X509_NAME
+#endif
 #pragma comment(lib, "crypt32.lib")
 
-static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
-    const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) {
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+    X509* leaf = SSL_get1_peer_certificate(ssl);
+    if (!leaf) {
         luaL_error(L, "ssl: server sent no certificate");
         return -1;
     }
 
+    int cert_len = i2d_X509(leaf, nullptr);
+    if (cert_len <= 0) {
+        X509_free(leaf);
+        push_openssl_error(L, "i2d_X509");
+    }
+
+    std::vector<unsigned char> cert_buf((size_t)cert_len);
+    unsigned char* cert_ptr = cert_buf.data();
+    i2d_X509(leaf, &cert_ptr);
+
     PCCERT_CONTEXT pCert = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
-                                                        peer->raw.p, (DWORD)peer->raw.len);
+                                                        cert_buf.data(), (DWORD)cert_buf.size());
     if (!pCert) {
+        X509_free(leaf);
         luaL_error(L, "ssl: CertCreateCertificateContext failed (%lu)", GetLastError());
         return -1;
     }
@@ -163,13 +471,31 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
         CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0, CERT_STORE_CREATE_NEW_FLAG, nullptr);
     if (!hStore) {
         CertFreeCertificateContext(pCert);
+        X509_free(leaf);
         luaL_error(L, "ssl: CertOpenStore failed");
         return -1;
     }
 
-    for (const mbedtls_x509_crt* c = peer; c != nullptr; c = c->next) {
-        CertAddEncodedCertificateToStore(hStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, c->raw.p,
-                                         (DWORD)c->raw.len, CERT_STORE_ADD_USE_EXISTING, nullptr);
+    auto add_cert = [&](X509* cert) {
+        int len = i2d_X509(cert, nullptr);
+        if (len <= 0) return;
+        std::vector<unsigned char> der((size_t)len);
+        unsigned char* der_ptr = der.data();
+        i2d_X509(cert, &der_ptr);
+        CertAddEncodedCertificateToStore(hStore, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                         der.data(), (DWORD)der.size(), CERT_STORE_ADD_USE_EXISTING,
+                                         nullptr);
+    };
+
+    add_cert(leaf);
+    STACK_OF(X509)* chain = ssl_get_peer_chain(ssl);
+    if (chain) {
+        int count = sk_X509_num(chain);
+        for (int i = 0; i < count; i++) {
+            X509* cert = sk_X509_value(chain, i);
+            if (X509_cmp(cert, leaf) == 0) continue;
+            add_cert(cert);
+        }
     }
 
     CERT_CHAIN_PARA chainPara{};
@@ -181,6 +507,7 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
     if (!chainOk || !pChainCtx) {
         CertCloseStore(hStore, 0);
         CertFreeCertificateContext(pCert);
+        X509_free(leaf);
         luaL_error(L, "ssl: CertGetCertificateChain failed (%lu)", GetLastError());
         return -1;
     }
@@ -201,16 +528,19 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 
     BOOL policyOk = CertVerifyCertificateChainPolicy(CERT_CHAIN_POLICY_SSL, pChainCtx, &policyPara,
                                                      &policyStatus);
+
     delete[] whostname;
     CertFreeCertificateChain(pChainCtx);
     CertCloseStore(hStore, 0);
     CertFreeCertificateContext(pCert);
+    X509_free(leaf);
 
     if (!policyOk || policyStatus.dwError != 0) {
         luaL_error(L, "ssl: certificate verification failed (Windows error 0x%08lX)",
                    policyStatus.dwError);
         return -1;
     }
+
     return 0;
 }
 
@@ -218,26 +548,42 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 
-static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
-    const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) {
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+    X509* leaf = SSL_get1_peer_certificate(ssl);
+    if (!leaf) {
         luaL_error(L, "ssl: server sent no certificate");
         return -1;
     }
 
-    // Build a CFArray of SecCertificateRef from the DER chain
     CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
-    for (const mbedtls_x509_crt* c = peer; c != nullptr; c = c->next) {
-        CFDataRef der = CFDataCreate(kCFAllocatorDefault, c->raw.p, (CFIndex)c->raw.len);
-        SecCertificateRef cert = SecCertificateCreateWithData(kCFAllocatorDefault, der);
-        CFRelease(der);
-        if (cert) {
-            CFArrayAppendValue(certs, cert);
-            CFRelease(cert);
+    auto append_cert = [&](X509* cert) {
+        int len = i2d_X509(cert, nullptr);
+        if (len <= 0) return;
+        std::vector<unsigned char> der((size_t)len);
+        unsigned char* der_ptr = der.data();
+        i2d_X509(cert, &der_ptr);
+
+        CFDataRef data = CFDataCreate(kCFAllocatorDefault, der.data(), (CFIndex)der.size());
+        if (!data) return;
+        SecCertificateRef sec_cert = SecCertificateCreateWithData(kCFAllocatorDefault, data);
+        CFRelease(data);
+        if (sec_cert) {
+            CFArrayAppendValue(certs, sec_cert);
+            CFRelease(sec_cert);
+        }
+    };
+
+    append_cert(leaf);
+    STACK_OF(X509)* chain = ssl_get_peer_chain(ssl);
+    if (chain) {
+        int count = sk_X509_num(chain);
+        for (int i = 0; i < count; i++) {
+            X509* cert = sk_X509_value(chain, i);
+            if (X509_cmp(cert, leaf) == 0) continue;
+            append_cert(cert);
         }
     }
 
-    // Create a trust object with the SSL server policy and hostname
     CFStringRef cfhost =
         CFStringCreateWithCString(kCFAllocatorDefault, hostname, kCFStringEncodingUTF8);
     SecPolicyRef policy = SecPolicyCreateSSL(true, cfhost);
@@ -247,6 +593,7 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
     OSStatus status = SecTrustCreateWithCertificates(certs, policy, &trust);
     CFRelease(policy);
     CFRelease(certs);
+    X509_free(leaf);
 
     if (status != errSecSuccess || !trust) {
         if (trust) CFRelease(trust);
@@ -271,21 +618,22 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
         }
         return -1;
     }
+
     return 0;
 }
 
-#else  // Linux and other POSIX
+#else
 
-static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char* hostname) {
-    // Probe well-known CA bundle paths (same set as curl)
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
     static const char* const candidates[] = {
-        "/etc/ssl/certs/ca-certificates.crt",                 // Debian, Ubuntu, Arch
-        "/etc/pki/tls/certs/ca-bundle.crt",                   // RHEL, Fedora, CentOS
-        "/etc/ssl/ca-bundle.pem",                             // OpenSUSE
-        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",  // RHEL 7+
-        "/etc/ssl/cert.pem",                                  // Alpine, some others
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+        "/etc/ssl/ca-bundle.pem",
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/cert.pem",
         nullptr,
     };
+
     const char* bundle = nullptr;
     for (int i = 0; candidates[i]; ++i) {
         FILE* f = fopen(candidates[i], "rb");
@@ -295,401 +643,380 @@ static int verify_cert_system(lua_State* L, mbedtls_ssl_context* ssl, const char
             break;
         }
     }
+
     if (!bundle) {
         luaL_error(L, "ssl: no system CA bundle found (install ca-certificates)");
         return -1;
     }
 
-    const mbedtls_x509_crt* peer = mbedtls_ssl_get_peer_cert(ssl);
-    if (!peer) {
+    X509* leaf = SSL_get1_peer_certificate(ssl);
+    if (!leaf) {
         luaL_error(L, "ssl: server sent no certificate");
         return -1;
     }
 
-    mbedtls_x509_crt ca;
-    mbedtls_x509_crt_init(&ca);
-    int ret = mbedtls_x509_crt_parse_file(&ca, bundle);
-    if (ret < 0) {
-        mbedtls_x509_crt_free(&ca);
-        char err[256];
-        mbedtls_strerror(ret, err, sizeof(err));
-        luaL_error(L, "ssl: failed to load CA bundle %s: %s", bundle, err);
+    X509_STORE* store = X509_STORE_new();
+    if (!store) {
+        X509_free(leaf);
+        push_openssl_error(L, "X509_STORE_new");
+    }
+
+    if (X509_STORE_load_locations(store, bundle, nullptr) != 1) {
+        X509_STORE_free(store);
+        X509_free(leaf);
+        push_openssl_error(L, "load system CA bundle");
+    }
+
+    STACK_OF(X509)* untrusted = sk_X509_new_null();
+    if (!untrusted) {
+        X509_STORE_free(store);
+        X509_free(leaf);
+        push_openssl_error(L, "sk_X509_new_null");
+    }
+
+    STACK_OF(X509)* chain = ssl_get_peer_chain(ssl);
+    if (chain) {
+        int count = sk_X509_num(chain);
+        for (int i = 0; i < count; i++) {
+            X509* cert = sk_X509_value(chain, i);
+            if (X509_cmp(cert, leaf) == 0) continue;
+            X509_up_ref(cert);
+            sk_X509_push(untrusted, cert);
+        }
+    }
+
+    X509_STORE_CTX* store_ctx = X509_STORE_CTX_new();
+    if (!store_ctx) {
+        sk_X509_pop_free(untrusted, X509_free);
+        X509_STORE_free(store);
+        X509_free(leaf);
+        push_openssl_error(L, "X509_STORE_CTX_new");
+    }
+
+    if (X509_STORE_CTX_init(store_ctx, store, leaf, untrusted) != 1) {
+        X509_STORE_CTX_free(store_ctx);
+        sk_X509_pop_free(untrusted, X509_free);
+        X509_STORE_free(store);
+        X509_free(leaf);
+        push_openssl_error(L, "X509_STORE_CTX_init");
+    }
+
+    X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(store_ctx);
+    X509_VERIFY_PARAM_set_hostflags(param, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
+    if (X509_VERIFY_PARAM_set1_host(param, hostname, 0) != 1) {
+        X509_STORE_CTX_free(store_ctx);
+        sk_X509_pop_free(untrusted, X509_free);
+        X509_STORE_free(store);
+        X509_free(leaf);
+        push_openssl_error(L, "X509_VERIFY_PARAM_set1_host");
+    }
+
+    int verify_ok = X509_verify_cert(store_ctx);
+    if (verify_ok != 1) {
+        int err = X509_STORE_CTX_get_error(store_ctx);
+        const char* msg = X509_verify_cert_error_string(err);
+        X509_STORE_CTX_free(store_ctx);
+        sk_X509_pop_free(untrusted, X509_free);
+        X509_STORE_free(store);
+        X509_free(leaf);
+        luaL_error(L, "ssl: certificate verification failed: %s", msg ? msg : "unknown error");
         return -1;
     }
 
-    uint32_t flags = 0;
-    ret = mbedtls_x509_crt_verify((mbedtls_x509_crt*)peer, &ca, nullptr, hostname, &flags, nullptr,
-                                  nullptr);
-    mbedtls_x509_crt_free(&ca);
-
-    if (ret != 0 || flags != 0) {
-        char info[512];
-        mbedtls_x509_crt_verify_info(info, sizeof(info), "", flags);
-        luaL_error(L, "ssl: certificate verification failed: %s", info);
-        return -1;
-    }
+    X509_STORE_CTX_free(store_ctx);
+    sk_X509_pop_free(untrusted, X509_free);
+    X509_STORE_free(store);
+    X509_free(leaf);
     return 0;
 }
 
-#endif  // platform verify
-
-// ---------------------------------------------------------------------------
-// Custom BIO send/recv callbacks that operate on an existing socket fd
-// (passed in through mbedtls_net_context.fd).
-// ---------------------------------------------------------------------------
-static int bio_send(void* ctx, const unsigned char* buf, size_t len) {
-    mbedtls_net_context* net = (mbedtls_net_context*)ctx;
-    int ret = ::send((SOCKET)net->fd, (const char*)buf, (int)len, 0);
-    if (ret < 0) {
-#ifdef _WIN32
-        if (WSAGetLastError() == WSAEWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_WRITE;
-#else
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_WRITE;
 #endif
-        return MBEDTLS_ERR_NET_SEND_FAILED;
+
+static int ssl_do_handshake(lua_State* L, SSL* ssl) {
+    while (true) {
+        int ret = SSL_do_handshake(ssl);
+        if (ret == 1) return 0;
+
+        int ssl_err = SSL_get_error(ssl, ret);
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        return ssl_lua_error(L, "ssl_handshake", ssl, ret);
     }
-    return ret;
 }
 
-static int bio_recv(void* ctx, unsigned char* buf, size_t len) {
-    mbedtls_net_context* net = (mbedtls_net_context*)ctx;
-    int ret = ::recv((SOCKET)net->fd, (char*)buf, (int)len, 0);
-    if (ret < 0) {
-#ifdef _WIN32
-        if (WSAGetLastError() == WSAEWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_READ;
-#else
-        if (errno == EAGAIN || errno == EWOULDBLOCK) return MBEDTLS_ERR_SSL_WANT_READ;
-#endif
-        return MBEDTLS_ERR_NET_RECV_FAILED;
-    }
-    if (ret == 0) return MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY;
-    return ret;
-}
+static void sslsock_close_impl(LuaSSLSocket* ss) {
+    if (!ss || ss->closed) return;
 
-// ---------------------------------------------------------------------------
-// SSLContext methods
-// ---------------------------------------------------------------------------
-
-// ssl.create_default_context() -> SSLContext  (client mode)
-static int ssl_create_default_context(lua_State* L) {
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
-    new (ctx) LuaSSLContext();
-
-    mbedtls_ssl_config_init(&ctx->conf);
-    mbedtls_x509_crt_init(&ctx->cacert);
-    mbedtls_x509_crt_init(&ctx->own_cert);
-    mbedtls_pk_init(&ctx->pk_key);
-    ctx->use_system_verify = true;
-    ctx->verify_mode = MBEDTLS_SSL_VERIFY_REQUIRED;
-    ctx->is_server = false;
-    ctx->has_own_cert = false;
-
-    // Configure as TLS client with default ciphersuites
-    // mbedTLS 4.0: RNG is set up internally by PSA Crypto (psa_crypto_init)
-    int ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_CLIENT,
-                                          MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_config_defaults", ret);
-
-    // System verify: let mbedTLS do the handshake without CA verification
-    // (we verify post-handshake via Windows CryptoAPI)
-    mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
-
-    luaL_getmetatable(L, SSLCTX_METATABLE);
-    lua_setmetatable(L, -2);
-    return 1;
-}
-
-// ssl.create_server_context(certfile, keyfile [, password]) -> SSLContext  (server mode)
-//
-// Creates an SSLContext configured for TLS server operation.
-// `certfile` is a PEM file containing the server certificate chain.
-// `keyfile` is a PEM file containing the server private key.
-// Optional `password` for encrypted private keys.
-static int ssl_create_server_context(lua_State* L) {
-    std::string certfile = luaL_checkpathlike(L, 1);
-    std::string keyfile = luaL_checkpathlike(L, 2);
-    const char* password = luaL_optstring(L, 3, nullptr);
-
-    // Check files exist before calling mbedTLS (which gives cryptic errors)
-    {
-        FILE* f = fopen(certfile.c_str(), "rb");
-        if (!f)
-            luaL_error(L, "ssl: certificate file not found: %s", certfile.c_str());
-        else
-            fclose(f);
-    }
-    {
-        FILE* f = fopen(keyfile.c_str(), "rb");
-        if (!f)
-            luaL_error(L, "ssl: private key file not found: %s", keyfile.c_str());
-        else
-            fclose(f);
+    if (ss->ssl) {
+        if (ss->connected) {
+            int ret = SSL_shutdown(ss->ssl);
+            if (ret == 0) SSL_shutdown(ss->ssl);
+        }
+        SSL_free(ss->ssl);
+        ss->ssl = nullptr;
     }
 
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
-    new (ctx) LuaSSLContext();
-
-    mbedtls_ssl_config_init(&ctx->conf);
-    mbedtls_x509_crt_init(&ctx->cacert);
-    mbedtls_x509_crt_init(&ctx->own_cert);
-    mbedtls_pk_init(&ctx->pk_key);
-    ctx->use_system_verify = false;
-    ctx->verify_mode = MBEDTLS_SSL_VERIFY_NONE;  // servers don't verify client certs by default
-    ctx->is_server = true;
-    ctx->has_own_cert = false;
-
-    // Configure as TLS server
-    int ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_SERVER,
-                                          MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_config_defaults (server)", ret);
-
-    // Server doesn't verify client certificates by default
-    mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
-
-    // Load server certificate chain
-    ret = mbedtls_x509_crt_parse_file(&ctx->own_cert, certfile.c_str());
-    if (ret < 0) return mbedtls_lua_error(L, "load server certificate", ret);
-
-    // Load server private key
-    ret = mbedtls_pk_parse_keyfile(&ctx->pk_key, keyfile.c_str(), password);
-    if (ret != 0) return mbedtls_lua_error(L, "load server private key", ret);
-
-    // Attach certificate + key to the config
-    ret = mbedtls_ssl_conf_own_cert(&ctx->conf, &ctx->own_cert, &ctx->pk_key);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_conf_own_cert", ret);
-    ctx->has_own_cert = true;
-
-    luaL_getmetatable(L, SSLCTX_METATABLE);
-    lua_setmetatable(L, -2);
-    return 1;
-}
-
-// SSLContext:load_verify_locations(cafile)
-// Switches from system (Windows CryptoAPI) verification to mbedTLS-based
-// verification using the supplied CA file.
-static int sslctx_load_verify_locations(lua_State* L) {
-    LuaSSLContext* ctx = check_sslctx(L, 1);
-    std::string cafile = luaL_checkpathlike(L, 2);
-
-    int ret = mbedtls_x509_crt_parse_file(&ctx->cacert, cafile.c_str());
-    if (ret < 0) {
-        FILE* f = fopen(cafile.c_str(), "rb");
-        if (!f)
-            luaL_error(L, "ssl: CA file not found: %s", cafile.c_str());
-        else
-            fclose(f);
-        return mbedtls_lua_error(L, "load_verify_locations", ret);
+    if (ss->fd != INVALID_SOCKET) {
+        sock_fd_close(ss->fd);
+        ss->fd = INVALID_SOCKET;
     }
 
-    // Switch to mbedTLS verification with the loaded CA chain
-    ctx->use_system_verify = false;
-    mbedtls_ssl_conf_ca_chain(&ctx->conf, &ctx->cacert, nullptr);
-    mbedtls_ssl_conf_authmode(&ctx->conf, ctx->verify_mode);
-    return 0;
-}
-
-// SSLContext:set_verify(mode)  -- 0 = VERIFY_NONE, 2 = VERIFY_REQUIRED
-static int sslctx_set_verify(lua_State* L) {
-    LuaSSLContext* ctx = check_sslctx(L, 1);
-    int mode = luaL_checkinteger(L, 2);
-    ctx->verify_mode = mode;
-    // Only change mbedTLS authmode if we're using mbedTLS-based verification
-    // (i.e. custom CA via load_verify_locations).  When using system verify,
-    // mbedTLS stays at VERIFY_NONE and we do post-handshake verification.
-    if (!ctx->use_system_verify) {
-        mbedtls_ssl_conf_authmode(&ctx->conf, mode);
-    }
-    return 0;
-}
-
-// SSLContext:wrap_socket(socket_ud [, server_hostname]) -> SSLSocket
-//
-// Takes ownership of the underlying SOCKET fd.  The original Lua Socket
-// userdata should not be used for I/O after wrapping (close is fine).
-static int sslctx_wrap_socket(lua_State* L) {
-    LuaSSLContext* ctx = check_sslctx(L, 1);
-
-    // The second argument is a Socket userdata – we read its fd field.
-    // Socket struct: { SOCKET fd; int family; int type; int proto; double timeout; }
-    // We use luaL_checkudata with "Socket" metatable.
-    void* raw_socket = luaL_checkudata(L, 2, "Socket");
-    SOCKET fd = *(SOCKET*)raw_socket;  // fd is the first field
-
-    // Take ownership: prevent the original Socket's __gc from closing the fd
-    *(SOCKET*)raw_socket = INVALID_SOCKET;
-
-    const char* hostname = luaL_optstring(L, 3, nullptr);
-
-    // Allocate SSLSocket userdata
-    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
-    new (ss) LuaSSLSocket();
-
-    mbedtls_ssl_init(&ss->ssl);
-    mbedtls_net_init(&ss->net);
-    ss->ctx = ctx;
     ss->connected = false;
-    ss->L = L;
+    ss->closed = true;
+}
+
+static int wrap_socket_with_context(lua_State* L, int ctx_idx, int sock_idx, int hostname_idx) {
+    ctx_idx = lua_absindex(L, ctx_idx);
+    sock_idx = lua_absindex(L, sock_idx);
+    hostname_idx = lua_absindex(L, hostname_idx);
+
+    LuaSSLContext* ctx = check_sslctx(L, ctx_idx);
+    void* raw_socket = luaL_checkudata(L, sock_idx, "Socket");
+    SOCKET fd = *(SOCKET*)raw_socket;
+    if (fd == INVALID_SOCKET) luaL_error(L, "ssl: socket is closed");
+
+    const char* hostname =
+        lua_isnoneornil(L, hostname_idx) ? nullptr : luaL_checkstring(L, hostname_idx);
+    if (!ctx->is_server && ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA && !hostname) {
+        luaL_error(L, "ssl: verified client connections require serverHostname");
+    }
+
+    SSL* ssl = SSL_new(ctx->ctx);
+    if (!ssl) push_openssl_error(L, "SSL_new");
+
+    if (!ctx->is_server) {
+        if (hostname && SSL_set_tlsext_host_name(ssl, hostname) != 1) {
+            SSL_free(ssl);
+            push_openssl_error(L, "SSL_set_tlsext_host_name");
+        }
+
+        if (!ctx->use_system_verify && ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA) {
+            if (SSL_set1_host(ssl, hostname) != 1) {
+                SSL_free(ssl);
+                push_openssl_error(L, "SSL_set1_host");
+            }
+        }
+
+        SSL_set_connect_state(ssl);
+    } else {
+        SSL_set_accept_state(ssl);
+    }
+
+    SSL_set_mode(ssl, SSL_MODE_ENABLE_PARTIAL_WRITE);
+
+    if (SSL_set_fd(ssl, (int)(intptr_t)fd) != 1) {
+        SSL_free(ssl);
+        push_openssl_error(L, "SSL_set_fd");
+    }
+
+    while (true) {
+        int ret = SSL_do_handshake(ssl);
+        if (ret == 1) break;
+
+        int ssl_err = SSL_get_error(ssl, ret);
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        SSL_free(ssl);
+        return ssl_lua_error_code(L, "ssl_handshake", ssl_err);
+    }
+
+    if (!ctx->is_server && ctx->use_system_verify && ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA) {
+        if (verify_cert_system(L, ssl, hostname) != 0) {
+            SSL_free(ssl);
+            return 0;
+        }
+    }
+
+    LuaSSLSocket* ss = new_sslsocket_userdata(L);
+    ss->ssl = ssl;
+    ss->fd = fd;
+    ss->ctx = ctx;
+    ss->connected = true;
+    ss->closed = false;
     if (hostname) ss->hostname = hostname;
 
-    // Keep a strong reference to the SSLContext so it stays alive
-    lua_pushvalue(L, 1);
+    lua_pushvalue(L, ctx_idx);
     ss->ctx_ref = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    // Transfer the raw SOCKET fd into mbedtls_net_context
-    ss->net.fd = (int)(intptr_t)fd;
-
-    // Setup SSL from the shared config
-    int ret = mbedtls_ssl_setup(&ss->ssl, &ctx->conf);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_setup", ret);
-
-    // Set hostname for SNI (client mode only)
-    if (!ctx->is_server && hostname) {
-        ret = mbedtls_ssl_set_hostname(&ss->ssl, hostname);
-        if (ret != 0) return mbedtls_lua_error(L, "ssl_set_hostname", ret);
-    }
-
-    // Wire up our custom BIO callbacks
-    mbedtls_ssl_set_bio(&ss->ssl, &ss->net, bio_send, bio_recv, nullptr);
-
-    // Perform the TLS handshake
-    while ((ret = mbedtls_ssl_handshake(&ss->ssl)) != 0) {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
-            return mbedtls_lua_error(L, "ssl_handshake", ret);
-    }
-
-    // Post-handshake: verify certificate via system trust store (client mode only)
-    if (!ctx->is_server && ctx->use_system_verify &&
-        ctx->verify_mode == MBEDTLS_SSL_VERIFY_REQUIRED && hostname) {
-        verify_cert_system(L, &ss->ssl, hostname);
-    }
-
-    ss->connected = true;
+    *(SOCKET*)raw_socket = INVALID_SOCKET;
 
     luaL_getmetatable(L, SSLSOCKET_METATABLE);
     lua_setmetatable(L, -2);
     return 1;
 }
 
-// __tostring
+// ---------------------------------------------------------------------------
+// SSLContext methods
+// ---------------------------------------------------------------------------
+static int ssl_create_default_context(lua_State* L) {
+    create_client_context(L);
+    return 1;
+}
+
+static int ssl_create_server_context(lua_State* L) {
+    std::string certfile = luaL_checkpathlike(L, 1);
+    std::string keyfile = luaL_checkpathlike(L, 2);
+    const char* password = luaL_optstring(L, 3, nullptr);
+    create_server_context_from_files(L, certfile, keyfile, password);
+    return 1;
+}
+
+static int ssl_create_server_context_pem(lua_State* L) {
+    const char* cert_pem = luaL_checkstring(L, 1);
+    const char* key_pem = luaL_checkstring(L, 2);
+    const char* password = luaL_optstring(L, 3, nullptr);
+    create_server_context_from_memory(L, cert_pem, key_pem, password);
+    return 1;
+}
+
+static int sslctx_load_verify_locations(lua_State* L) {
+    LuaSSLContext* ctx = check_sslctx(L, 1);
+    std::string cafile = luaL_checkpathlike(L, 2);
+
+    FILE* f = fopen(cafile.c_str(), "rb");
+    if (!f) luaL_error(L, "ssl: CA file not found: %s", cafile.c_str());
+    fclose(f);
+
+    if (SSL_CTX_load_verify_locations(ctx->ctx, cafile.c_str(), nullptr) != 1) {
+        push_openssl_error(L, "load_verify_locations");
+    }
+
+    ctx->use_system_verify = false;
+    apply_ctx_verify_mode(ctx);
+    return 0;
+}
+
+static int sslctx_set_verify(lua_State* L) {
+    LuaSSLContext* ctx = check_sslctx(L, 1);
+    int mode = (int)luaL_checkinteger(L, 2);
+    if (mode != SSL_VERIFY_NONE_LUA && mode != SSL_VERIFY_REQUIRED_LUA) {
+        luaL_error(L, "ssl: invalid verify mode %d", mode);
+        return 0;
+    }
+
+    ctx->verify_mode = mode;
+    apply_ctx_verify_mode(ctx);
+    return 0;
+}
+
+static int sslctx_wrap_socket(lua_State* L) { return wrap_socket_with_context(L, 1, 2, 3); }
+
 static int sslctx_tostring(lua_State* L) {
     LuaSSLContext* ctx = check_sslctx(L, 1);
     char buf[128];
     snprintf(buf, sizeof(buf), "SSLContext(%s, verify=%s, ca=%s)",
              ctx->is_server ? "server" : "client",
-             ctx->verify_mode == MBEDTLS_SSL_VERIFY_REQUIRED ? "REQUIRED" : "NONE",
+             ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA ? "REQUIRED" : "NONE",
              ctx->use_system_verify ? "system" : "custom");
     lua_pushstring(L, buf);
     return 1;
 }
 
-// Destructor called by Luau GC (lua_newuserdatadtor).
 static void sslctx_dtor(void* ud) {
     LuaSSLContext* ctx = (LuaSSLContext*)ud;
-    if (ctx->has_own_cert) {
-        mbedtls_pk_free(&ctx->pk_key);
-        mbedtls_x509_crt_free(&ctx->own_cert);
+    if (ctx->ctx) {
+        SSL_CTX_free(ctx->ctx);
+        ctx->ctx = nullptr;
     }
-    mbedtls_x509_crt_free(&ctx->cacert);
-    mbedtls_ssl_config_free(&ctx->conf);
     ctx->~LuaSSLContext();
 }
 
 // ---------------------------------------------------------------------------
 // SSLSocket methods
 // ---------------------------------------------------------------------------
-
-// SSLSocket:send(buf) -> bytes_sent
 static int sslsock_send(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
+    if (ss->closed || !ss->ssl) luaL_error(L, "ssl socket is closed");
+
     size_t len = 0;
     const char* data = sslsock_check_bytes_arg(L, 2, &len);
+    check_openssl_input_len(L, len, "data");
 
-    int ret;
-    do {
-        ret = mbedtls_ssl_write(&ss->ssl, (const unsigned char*)data, len);
-    } while (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ ||
-             ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET);
-    if (ret < 0) return mbedtls_lua_error(L, "ssl_write", ret);
+    while (true) {
+        int ret = SSL_write(ss->ssl, data, (int)len);
+        if (ret > 0) {
+            lua_pushinteger(L, ret);
+            return 1;
+        }
 
-    lua_pushinteger(L, ret);
-    return 1;
+        int ssl_err = SSL_get_error(ss->ssl, ret);
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        return ssl_lua_error(L, "ssl_write", ss->ssl, ret);
+    }
 }
 
-// SSLSocket:sendall(buf)
 static int sslsock_sendall(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
+    if (ss->closed || !ss->ssl) luaL_error(L, "ssl socket is closed");
+
     size_t len = 0;
     const char* data = sslsock_check_bytes_arg(L, 2, &len);
+    check_openssl_input_len(L, len, "data");
 
     size_t total = 0;
     while (total < len) {
-        int ret = mbedtls_ssl_write(&ss->ssl, (const unsigned char*)(data + total), len - total);
-        if (ret == MBEDTLS_ERR_SSL_WANT_WRITE || ret == MBEDTLS_ERR_SSL_WANT_READ ||
-            ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET)
+        int chunk_len = (int)((len - total) > (size_t)INT_MAX ? (size_t)INT_MAX : (len - total));
+        int ret = SSL_write(ss->ssl, data + total, chunk_len);
+        if (ret > 0) {
+            total += (size_t)ret;
             continue;
-        if (ret < 0) return mbedtls_lua_error(L, "ssl_write", ret);
-        total += ret;
+        }
+
+        int ssl_err = SSL_get_error(ss->ssl, ret);
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        return ssl_lua_error(L, "ssl_write", ss->ssl, ret);
     }
+
     return 0;
 }
 
-// SSLSocket:recv(bufsize) -> buffer
 static int sslsock_recv(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
-    int bufsize = luaL_checkinteger(L, 2);
+    if (ss->closed || !ss->ssl) luaL_error(L, "ssl socket is closed");
+
+    int bufsize = (int)luaL_checkinteger(L, 2);
     if (bufsize <= 0) luaL_argerror(L, 2, "bufsize must be > 0");
 
     char stackbuf[8192];
     char* tmp = (bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[bufsize];
 
-    int ret;
-    do {
-        ret = mbedtls_ssl_read(&ss->ssl, (unsigned char*)tmp, bufsize);
-    } while (ret == MBEDTLS_ERR_SSL_WANT_READ ||
-             ret == MBEDTLS_ERR_SSL_RECEIVED_NEW_SESSION_TICKET);
+    while (true) {
+        int ret = SSL_read(ss->ssl, tmp, bufsize);
+        if (ret > 0) {
+            void* out = lua_newbuffer(L, ret);
+            memcpy(out, tmp, ret);
+            if (tmp != stackbuf) delete[] tmp;
+            return 1;
+        }
 
-    if (ret == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY || ret == 0) {
-        // Connection closed cleanly - return empty buffer
-        void* out = lua_newbuffer(L, 0);
-        if (tmp != stackbuf) delete[] tmp;
-        return 1;
-    }
-    if (ret < 0) {
-        if (tmp != stackbuf) delete[] tmp;
-        return mbedtls_lua_error(L, "ssl_read", ret);
-    }
+        int ssl_err = SSL_get_error(ss->ssl, ret);
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        if (ssl_err == SSL_ERROR_ZERO_RETURN || ret == 0) {
+            void* out = lua_newbuffer(L, 0);
+            (void)out;
+            if (tmp != stackbuf) delete[] tmp;
+            return 1;
+        }
 
-    void* out = lua_newbuffer(L, ret);
-    memcpy(out, tmp, ret);
-    if (tmp != stackbuf) delete[] tmp;
-    return 1;
+        if (tmp != stackbuf) delete[] tmp;
+        return ssl_lua_error(L, "ssl_read", ss->ssl, ret);
+    }
 }
 
-// SSLSocket:close()
 static int sslsock_close(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
-    if (ss->connected) {
-        mbedtls_ssl_close_notify(&ss->ssl);
-        ss->connected = false;
-    }
-    if (ss->net.fd >= 0) {
-        sock_fd_close((SOCKET)(intptr_t)ss->net.fd);
-        ss->net.fd = -1;
-    }
+    sslsock_close_impl(ss);
     return 0;
 }
 
-// SSLSocket:getpeername() -> host, port
 static int sslsock_getpeername(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     struct sockaddr_storage addr {};
     socklen_t addrlen = sizeof(addr);
-    if (getpeername((SOCKET)(intptr_t)ss->net.fd, (struct sockaddr*)&addr, &addrlen) ==
-        SOCKET_ERROR) {
+    if (getpeername(ss->fd, (struct sockaddr*)&addr, &addrlen) == SOCKET_ERROR) {
         luaL_error(L, "getpeername failed");
         return 0;
     }
+
     char host[NI_MAXHOST];
     char serv[NI_MAXSERV];
     getnameinfo((struct sockaddr*)&addr, addrlen, host, sizeof(host), serv, sizeof(serv),
@@ -699,16 +1026,15 @@ static int sslsock_getpeername(lua_State* L) {
     return 2;
 }
 
-// SSLSocket:getsockname() -> host, port
 static int sslsock_getsockname(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     struct sockaddr_storage addr {};
     socklen_t addrlen = sizeof(addr);
-    if (getsockname((SOCKET)(intptr_t)ss->net.fd, (struct sockaddr*)&addr, &addrlen) ==
-        SOCKET_ERROR) {
+    if (getsockname(ss->fd, (struct sockaddr*)&addr, &addrlen) == SOCKET_ERROR) {
         luaL_error(L, "getsockname failed");
         return 0;
     }
+
     char host[NI_MAXHOST];
     char serv[NI_MAXSERV];
     getnameinfo((struct sockaddr*)&addr, addrlen, host, sizeof(host), serv, sizeof(serv),
@@ -718,38 +1044,27 @@ static int sslsock_getsockname(lua_State* L) {
     return 2;
 }
 
-// SSLSocket:fileno() -> number
 static int sslsock_fileno(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
-    lua_pushnumber(L, (double)(uintptr_t)ss->net.fd);
+    lua_pushnumber(L, (double)(uintptr_t)ss->fd);
     return 1;
 }
 
-// __tostring
 static int sslsock_tostring(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     char buf[128];
-    if (!ss->connected)
+    if (ss->closed)
         snprintf(buf, sizeof(buf), "SSLSocket(closed)");
     else
-        snprintf(buf, sizeof(buf), "SSLSocket(fd=%d, host=%s)", ss->net.fd, ss->hostname.c_str());
+        snprintf(buf, sizeof(buf), "SSLSocket(fd=%d, host=%s)", (int)(intptr_t)ss->fd,
+                 ss->hostname.c_str());
     lua_pushstring(L, buf);
     return 1;
 }
 
-// Destructor called by Luau GC (lua_newuserdatadtor).
 static void sslsock_dtor(void* ud) {
     LuaSSLSocket* ss = (LuaSSLSocket*)ud;
-    if (ss->connected) {
-        mbedtls_ssl_close_notify(&ss->ssl);
-        ss->connected = false;
-    }
-    mbedtls_ssl_free(&ss->ssl);
-    if (ss->net.fd >= 0) {
-        sock_fd_close((SOCKET)(intptr_t)ss->net.fd);
-        ss->net.fd = -1;
-    }
-    // Release the SSLContext reference (safe during both normal GC and lua_close)
+    sslsock_close_impl(ss);
     if (ss->ctx_ref != LUA_NOREF && ss->L) {
         lua_unref(ss->L, ss->ctx_ref);
         ss->ctx_ref = LUA_NOREF;
@@ -758,170 +1073,149 @@ static void sslsock_dtor(void* ud) {
 }
 
 // ---------------------------------------------------------------------------
-// Module-level convenience: ssl.wrap_socket(sock [, hostname])
-// Creates a default context and wraps in one call.
+// Module-level convenience: ssl.wrapSocket(sock [, hostname])
 // ---------------------------------------------------------------------------
 static int ssl_wrap_socket(lua_State* L) {
-    // arg1 = Socket userdata, arg2 = optional hostname
-    void* raw_socket = luaL_checkudata(L, 1, "Socket");
-    (void)raw_socket;
-    const char* hostname = luaL_optstring(L, 2, nullptr);
-    SOCKET fd = *(SOCKET*)raw_socket;
-
-    // Take ownership: prevent the original Socket's __gc from closing the fd
-    *(SOCKET*)raw_socket = INVALID_SOCKET;
-
-    // Create a default context (system verify, VERIFY_REQUIRED)
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
-    new (ctx) LuaSSLContext();
-    mbedtls_ssl_config_init(&ctx->conf);
-    mbedtls_x509_crt_init(&ctx->cacert);
-    mbedtls_x509_crt_init(&ctx->own_cert);
-    mbedtls_pk_init(&ctx->pk_key);
-    ctx->use_system_verify = true;
-    ctx->verify_mode = MBEDTLS_SSL_VERIFY_REQUIRED;
-    ctx->is_server = false;
-    ctx->has_own_cert = false;
-
-    int ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_CLIENT,
-                                          MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_config_defaults", ret);
-
-    // System verify: let mbedTLS do the handshake without CA verification
-    mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
-
-    luaL_getmetatable(L, SSLCTX_METATABLE);
-    lua_setmetatable(L, -2);
-    // Stack: sock, [hostname], ctx
+    create_client_context(L);
     int ctx_idx = lua_gettop(L);
-
-    // Allocate SSLSocket
-    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
-    new (ss) LuaSSLSocket();
-    mbedtls_ssl_init(&ss->ssl);
-    mbedtls_net_init(&ss->net);
-    ss->ctx = ctx;
-    ss->connected = false;
-    ss->L = L;
-    if (hostname) ss->hostname = hostname;
-
-    // Keep context alive via Lua ref
-    lua_pushvalue(L, ctx_idx);
-    ss->ctx_ref = lua_ref(L, -1);
-    lua_pop(L, 1);
-
-    ss->net.fd = (int)(intptr_t)fd;
-
-    ret = mbedtls_ssl_setup(&ss->ssl, &ctx->conf);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_setup", ret);
-
-    // Set hostname for certificate verification (and SNI for DNS names)
-    if (hostname) {
-        ret = mbedtls_ssl_set_hostname(&ss->ssl, hostname);
-        if (ret != 0) return mbedtls_lua_error(L, "ssl_set_hostname", ret);
-    }
-
-    mbedtls_ssl_set_bio(&ss->ssl, &ss->net, bio_send, bio_recv, nullptr);
-
-    while ((ret = mbedtls_ssl_handshake(&ss->ssl)) != 0) {
-        if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE)
-            return mbedtls_lua_error(L, "ssl_handshake", ret);
-    }
-
-    // Post-handshake: verify certificate via system trust store
-    if (ctx->use_system_verify && ctx->verify_mode == MBEDTLS_SSL_VERIFY_REQUIRED && hostname) {
-        verify_cert_system(L, &ss->ssl, hostname);
-    }
-
-    ss->connected = true;
-
-    luaL_getmetatable(L, SSLSOCKET_METATABLE);
-    lua_setmetatable(L, -2);
-    return 1;  // return SSLSocket only
+    return wrap_socket_with_context(L, ctx_idx, 1, 2);
 }
 
 // ---------------------------------------------------------------------------
 // Certificate / Key Generation
 // ---------------------------------------------------------------------------
+static X509_NAME* parse_subject_name(lua_State* L, const char* subject, const char* op) {
+    X509_NAME* name = X509_NAME_new();
+    if (!name) push_openssl_error(L, op);
 
-// Helper: crude check for IPv4 literal ("1.2.3.4")
-static bool looks_like_ipv4(const char* s) {
-    int dots = 0;
-    for (const char* p = s; *p; ++p) {
-        if (*p == '.')
-            dots++;
-        else if (*p < '0' || *p > '9')
-            return false;
+    std::string input(subject ? subject : "");
+    size_t pos = 0;
+    bool added_any = false;
+    while (pos < input.size()) {
+        size_t next = input.find(',', pos);
+        std::string part = trim_copy(
+            input.substr(pos, next == std::string::npos ? std::string::npos : next - pos));
+        pos = next == std::string::npos ? input.size() : next + 1;
+        if (part.empty()) continue;
+
+        size_t eq = part.find('=');
+        if (eq == std::string::npos) {
+            X509_NAME_free(name);
+            luaL_error(L, "%s: invalid subject component '%s'", op, part.c_str());
+            return nullptr;
+        }
+
+        std::string key = trim_copy(part.substr(0, eq));
+        std::string value = trim_copy(part.substr(eq + 1));
+        if (key.empty() || value.empty()) {
+            X509_NAME_free(name);
+            luaL_error(L, "%s: invalid subject component '%s'", op, part.c_str());
+            return nullptr;
+        }
+
+        if (X509_NAME_add_entry_by_txt(name, key.c_str(), MBSTRING_ASC,
+                                       (const unsigned char*)value.c_str(), -1, -1, 0) != 1) {
+            X509_NAME_free(name);
+            push_openssl_error(L, op);
+        }
+
+        added_any = true;
     }
-    return dots == 3;
+
+    if (!added_any) {
+        X509_NAME_free(name);
+        luaL_error(L, "%s: subject must not be empty", op);
+        return nullptr;
+    }
+
+    return name;
 }
 
-// ssl.generate_key(type?, bits?) -> pem_string
-//   type: "rsa" (default) or "ec"
-//   bits: 2048 default for RSA, 256 default for EC (secp256r1)
+static void add_v3_ext(lua_State* L, X509* cert, int nid, const char* value, const char* op) {
+    X509_EXTENSION* ext = X509V3_EXT_conf_nid(nullptr, nullptr, nid, (char*)value);
+    if (!ext) push_openssl_error(L, op);
+
+    if (X509_add_ext(cert, ext, -1) != 1) {
+        X509_EXTENSION_free(ext);
+        push_openssl_error(L, op);
+    }
+
+    X509_EXTENSION_free(ext);
+}
+
 static int ssl_generate_key(lua_State* L) {
     const char* type = luaL_optstring(L, 1, "rsa");
 
-    psa_key_attributes_t attrs = PSA_KEY_ATTRIBUTES_INIT;
-    psa_set_key_usage_flags(&attrs, PSA_KEY_USAGE_SIGN_HASH | PSA_KEY_USAGE_SIGN_MESSAGE |
-                                        PSA_KEY_USAGE_VERIFY_HASH | PSA_KEY_USAGE_EXPORT);
-    psa_set_key_lifetime(&attrs, PSA_KEY_LIFETIME_VOLATILE);
-
+    EVP_PKEY_CTX* ctx = nullptr;
     if (strcmp(type, "rsa") == 0) {
         int bits = (int)luaL_optinteger(L, 2, 2048);
-        psa_set_key_type(&attrs, PSA_KEY_TYPE_RSA_KEY_PAIR);
-        psa_set_key_bits(&attrs, (size_t)bits);
-        psa_set_key_algorithm(&attrs, PSA_ALG_RSA_PKCS1V15_SIGN(PSA_ALG_SHA_256));
+        ctx = EVP_PKEY_CTX_new_from_name(nullptr, "RSA", nullptr);
+        if (!ctx) push_openssl_error(L, "generate_key");
+        if (EVP_PKEY_keygen_init(ctx) != 1 || EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, bits) != 1) {
+            EVP_PKEY_CTX_free(ctx);
+            push_openssl_error(L, "generate_key");
+        }
     } else if (strcmp(type, "ec") == 0) {
         int bits = (int)luaL_optinteger(L, 2, 256);
-        psa_set_key_type(&attrs, PSA_KEY_TYPE_ECC_KEY_PAIR(PSA_ECC_FAMILY_SECP_R1));
-        psa_set_key_bits(&attrs, (size_t)bits);
-        psa_set_key_algorithm(&attrs, PSA_ALG_ECDSA(PSA_ALG_SHA_256));
+        if (bits != 256) luaL_error(L, "generate_key: only 256-bit EC keys are supported");
+
+        ctx = EVP_PKEY_CTX_new_from_name(nullptr, "EC", nullptr);
+        if (!ctx) push_openssl_error(L, "generate_key");
+        if (EVP_PKEY_keygen_init(ctx) != 1) {
+            EVP_PKEY_CTX_free(ctx);
+            push_openssl_error(L, "generate_key");
+        }
+
+        const char* group_name = "prime256v1";
+        OSSL_PARAM params[] = {
+            OSSL_PARAM_construct_utf8_string(OSSL_PKEY_PARAM_GROUP_NAME, (char*)group_name, 0),
+            OSSL_PARAM_construct_end(),
+        };
+        if (EVP_PKEY_CTX_set_params(ctx, params) != 1) {
+            EVP_PKEY_CTX_free(ctx);
+            push_openssl_error(L, "generate_key");
+        }
     } else {
         luaL_error(L, "generate_key: unsupported type '%s' (expected 'rsa' or 'ec')", type);
         return 0;
     }
 
-    mbedtls_svc_key_id_t key_id;
-    psa_status_t status = psa_generate_key(&attrs, &key_id);
-    psa_reset_key_attributes(&attrs);
-    if (status != PSA_SUCCESS) {
-        luaL_error(L, "generate_key: psa_generate_key failed (%d)", (int)status);
-        return 0;
+    EVP_PKEY* pkey = nullptr;
+    if (EVP_PKEY_generate(ctx, &pkey) != 1) {
+        EVP_PKEY_CTX_free(ctx);
+        push_openssl_error(L, "generate_key");
+    }
+    EVP_PKEY_CTX_free(ctx);
+
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generate_key");
     }
 
-    // Copy PSA key into PK context so we can write PEM
-    mbedtls_pk_context pk;
-    mbedtls_pk_init(&pk);
-    int ret = mbedtls_pk_copy_from_psa(key_id, &pk);
-    psa_destroy_key(key_id);
-    if (ret != 0) {
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_key", ret);
+    if (PEM_write_bio_PrivateKey(bio, pkey, nullptr, nullptr, 0, nullptr, nullptr) != 1) {
+        BIO_free(bio);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generate_key");
     }
 
-    unsigned char buf[16384];
-    ret = mbedtls_pk_write_key_pem(&pk, buf, sizeof(buf));
-    mbedtls_pk_free(&pk);
-    if (ret != 0) return mbedtls_lua_error(L, "generate_key", ret);
+    std::string pem = bio_to_string(L, bio, "generate_key");
+    BIO_free(bio);
+    EVP_PKEY_free(pkey);
 
-    lua_pushstring(L, (const char*)buf);
+    lua_pushlstring(L, pem.data(), pem.size());
     return 1;
 }
 
-// ssl.generate_self_signed_cert({ key, subject?, days?, san?, is_ca? }) -> cert_pem
 static int ssl_generate_self_signed_cert(lua_State* L) {
     luaL_checktype(L, 1, LUA_TTABLE);
 
-    // Required: key  (PEM string)
     lua_getfield(L, 1, "key");
     if (!lua_isstring(L, -1))
-        luaL_error(L, "generate_self_signed_cert: 'key' field (PEM string) is required");
+        luaL_error(L, "generateSelfSignedCert: 'key' field (PEM string) is required");
     const char* key_pem = lua_tostring(L, -1);
-    size_t key_pem_len = lua_objlen(L, -1);
     lua_pop(L, 1);
 
-    // Optional fields
     lua_getfield(L, 1, "subject");
     const char* subject = luaL_optstring(L, -1, "CN=localhost");
     lua_pop(L, 1);
@@ -930,274 +1224,199 @@ static int ssl_generate_self_signed_cert(lua_State* L) {
     int days = lua_isnumber(L, -1) ? (int)lua_tointeger(L, -1) : 365;
     lua_pop(L, 1);
 
-    lua_getfield(L, 1, "is_ca");
+    lua_getfield(L, 1, "isCa");
     bool is_ca = lua_isboolean(L, -1) ? (lua_toboolean(L, -1) != 0) : false;
     lua_pop(L, 1);
 
-    // Parse the private key from PEM
-    mbedtls_pk_context pk;
-    mbedtls_pk_init(&pk);
-    int ret = mbedtls_pk_parse_key(&pk, (const unsigned char*)key_pem, key_pem_len + 1, nullptr, 0);
-    if (ret != 0) {
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: parse key", ret);
+    EVP_PKEY* pkey = load_private_key_pem(L, "generateSelfSignedCert: parse key", key_pem, nullptr);
+
+    X509* cert = X509_new();
+    if (!cert) {
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert");
     }
 
-    // Set up x509write context
-    mbedtls_x509write_cert crt;
-    mbedtls_x509write_crt_init(&crt);
-
-    mbedtls_x509write_crt_set_version(&crt, MBEDTLS_X509_CRT_VERSION_3);
-    mbedtls_x509write_crt_set_md_alg(&crt, MBEDTLS_MD_SHA256);
-    mbedtls_x509write_crt_set_subject_key(&crt, &pk);
-    mbedtls_x509write_crt_set_issuer_key(&crt, &pk);  // self-signed
-
-    ret = mbedtls_x509write_crt_set_subject_name(&crt, subject);
-    if (ret != 0) {
-        mbedtls_x509write_crt_free(&crt);
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: set subject", ret);
-    }
-    ret = mbedtls_x509write_crt_set_issuer_name(&crt, subject);  // self-signed
-    if (ret != 0) {
-        mbedtls_x509write_crt_free(&crt);
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: set issuer", ret);
+    if (X509_set_version(cert, 2) != 1) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set version");
     }
 
-    // Random serial number
-    unsigned char serial[16];
-    psa_generate_random(serial, sizeof(serial));
-    serial[0] &= 0x7F;  // ASN.1 INTEGER must be positive
-    ret = mbedtls_x509write_crt_set_serial_raw(&crt, serial, sizeof(serial));
-    if (ret != 0) {
-        mbedtls_x509write_crt_free(&crt);
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: set serial", ret);
+    unsigned char serial_bytes[16];
+    if (RAND_bytes(serial_bytes, (int)sizeof(serial_bytes)) != 1) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set serial");
+    }
+    serial_bytes[0] &= 0x7F;
+
+    ASN1_INTEGER* serial = ASN1_INTEGER_new();
+    if (!serial) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set serial");
+    }
+    BIGNUM* serial_bn = BN_bin2bn(serial_bytes, (int)sizeof(serial_bytes), nullptr);
+    if (!serial_bn || BN_to_ASN1_INTEGER(serial_bn, serial) == nullptr ||
+        X509_set_serialNumber(cert, serial) != 1) {
+        ASN1_INTEGER_free(serial);
+        BN_free(serial_bn);
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set serial");
+    }
+    ASN1_INTEGER_free(serial);
+    BN_free(serial_bn);
+
+    if (X509_gmtime_adj(X509_get_notBefore(cert), 0) == nullptr ||
+        X509_gmtime_adj(X509_get_notAfter(cert), (long)days * 86400L) == nullptr) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set validity");
     }
 
-    // Validity: not_before = now, not_after = now + days
-    time_t now_t = time(nullptr);
-    struct tm tb;
-#ifdef _WIN32
-    gmtime_s(&tb, &now_t);
-#else
-    gmtime_r(&now_t, &tb);
-#endif
-    char not_before[16], not_after[16];
-    snprintf(not_before, sizeof(not_before), "%04d%02d%02d%02d%02d%02d", tb.tm_year + 1900,
-             tb.tm_mon + 1, tb.tm_mday, tb.tm_hour, tb.tm_min, tb.tm_sec);
-    time_t later = now_t + (time_t)days * 86400;
-#ifdef _WIN32
-    gmtime_s(&tb, &later);
-#else
-    gmtime_r(&later, &tb);
-#endif
-    snprintf(not_after, sizeof(not_after), "%04d%02d%02d%02d%02d%02d", tb.tm_year + 1900,
-             tb.tm_mon + 1, tb.tm_mday, tb.tm_hour, tb.tm_min, tb.tm_sec);
-    ret = mbedtls_x509write_crt_set_validity(&crt, not_before, not_after);
-    if (ret != 0) {
-        mbedtls_x509write_crt_free(&crt);
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: set validity", ret);
+    if (X509_set_pubkey(cert, pkey) != 1) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set public key");
     }
 
-    // Basic constraints
-    ret = mbedtls_x509write_crt_set_basic_constraints(&crt, is_ca ? 1 : 0, is_ca ? -1 : 0);
-    if (ret != 0) {
-        mbedtls_x509write_crt_free(&crt);
-        mbedtls_pk_free(&pk);
-        return mbedtls_lua_error(L, "generate_self_signed_cert: basic constraints", ret);
+    X509_NAME* name = parse_subject_name(L, subject, "generateSelfSignedCert: set subject");
+    if (X509_set_subject_name(cert, name) != 1 || X509_set_issuer_name(cert, name) != 1) {
+        X509_NAME_free(name);
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: set subject");
     }
+    X509_NAME_free(name);
 
-    // Subject Alternative Names (optional)
+    add_v3_ext(L, cert, NID_basic_constraints, is_ca ? "critical,CA:TRUE" : "CA:FALSE",
+               "generateSelfSignedCert: basic constraints");
+
     lua_getfield(L, 1, "san");
     if (lua_istable(L, -1)) {
         int san_count = (int)lua_objlen(L, -1);
         if (san_count > 64) san_count = 64;
         if (san_count > 0) {
-            // Stack-allocate SAN list nodes and IP buffers
-            mbedtls_x509_san_list* san_nodes =
-                (mbedtls_x509_san_list*)alloca(san_count * sizeof(mbedtls_x509_san_list));
-            unsigned char(*ip_bufs)[4] = (unsigned char(*)[4])alloca(san_count * 4);
-            memset(san_nodes, 0, san_count * sizeof(mbedtls_x509_san_list));
-
-            // Push each SAN string onto the Lua stack to keep it alive.
-            // Stack layout after the loop: [san_table] [str1] [str2] ...
+            std::string san_value;
             for (int i = 0; i < san_count; i++) {
-                lua_rawgeti(L, -1 - i, i + 1);  // push string
-                const char* name = luaL_checkstring(L, -1);
-
-                if (looks_like_ipv4(name)) {
-                    san_nodes[i].node.type = MBEDTLS_X509_SAN_IP_ADDRESS;
-                    inet_pton(AF_INET, name, ip_bufs[i]);
-                    san_nodes[i].node.san.unstructured_name.p = ip_bufs[i];
-                    san_nodes[i].node.san.unstructured_name.len = 4;
-                } else {
-                    san_nodes[i].node.type = MBEDTLS_X509_SAN_DNS_NAME;
-                    san_nodes[i].node.san.unstructured_name.p = (unsigned char*)name;
-                    san_nodes[i].node.san.unstructured_name.len = strlen(name);
-                }
-                san_nodes[i].next = (i + 1 < san_count) ? &san_nodes[i + 1] : nullptr;
-                // Don't pop – keep string alive on stack
+                lua_rawgeti(L, -1, i + 1);
+                const char* name_value = luaL_checkstring(L, -1);
+                if (!san_value.empty()) san_value += ',';
+                san_value += looks_like_ipv4(name_value) ? "IP:" : "DNS:";
+                san_value += name_value;
+                lua_pop(L, 1);
             }
 
-            ret = mbedtls_x509write_crt_set_subject_alternative_name(&crt, &san_nodes[0]);
-            // Pop all SAN strings
-            lua_pop(L, san_count);
-            if (ret != 0) {
-                mbedtls_x509write_crt_free(&crt);
-                mbedtls_pk_free(&pk);
-                lua_pop(L, 1);  // san table
-                return mbedtls_lua_error(L, "generate_self_signed_cert: set SAN", ret);
-            }
+            add_v3_ext(L, cert, NID_subject_alt_name, san_value.c_str(),
+                       "generateSelfSignedCert: set SAN");
         }
     }
-    lua_pop(L, 1);  // san table
+    lua_pop(L, 1);
 
-    // Write certificate PEM
-    unsigned char pem_buf[16384];
-    ret = mbedtls_x509write_crt_pem(&crt, pem_buf, sizeof(pem_buf));
-    mbedtls_x509write_crt_free(&crt);
-    mbedtls_pk_free(&pk);
-    if (ret != 0) return mbedtls_lua_error(L, "generate_self_signed_cert: write PEM", ret);
+    if (X509_sign(cert, pkey, EVP_sha256()) <= 0) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: write PEM");
+    }
 
-    lua_pushstring(L, (const char*)pem_buf);
+    BIO* bio = BIO_new(BIO_s_mem());
+    if (!bio) {
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: write PEM");
+    }
+    if (PEM_write_bio_X509(bio, cert) != 1) {
+        BIO_free(bio);
+        X509_free(cert);
+        EVP_PKEY_free(pkey);
+        push_openssl_error(L, "generateSelfSignedCert: write PEM");
+    }
+
+    std::string pem = bio_to_string(L, bio, "generateSelfSignedCert: write PEM");
+    BIO_free(bio);
+    X509_free(cert);
+    EVP_PKEY_free(pkey);
+
+    lua_pushlstring(L, pem.data(), pem.size());
     return 1;
 }
 
-// ssl.parse_certificate(pem_string) -> { subject, issuer, valid_from, valid_to, serial, version,
-// info }
 static int ssl_parse_certificate(lua_State* L) {
     const char* pem = luaL_checkstring(L, 1);
-    size_t pem_len = lua_objlen(L, -1);
 
-    mbedtls_x509_crt crt;
-    mbedtls_x509_crt_init(&crt);
+    BIO* bio = BIO_new_mem_buf(pem, -1);
+    if (!bio) push_openssl_error(L, "parseCertificate");
 
-    int ret = mbedtls_x509_crt_parse(&crt, (const unsigned char*)pem, pem_len + 1);
-    if (ret != 0) {
-        mbedtls_x509_crt_free(&crt);
-        return mbedtls_lua_error(L, "parse_certificate", ret);
-    }
+    X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
+    if (!cert) push_openssl_error(L, "parseCertificate");
 
     lua_newtable(L);
 
-    // Full info string
-    char info[4096];
-    ret = mbedtls_x509_crt_info(info, sizeof(info), "", &crt);
-    if (ret > 0) {
-        lua_pushlstring(L, info, ret);
-        lua_setfield(L, -2, "info");
-    }
+    std::string info = format_cert_info(L, cert, "parseCertificate");
+    lua_pushlstring(L, info.data(), info.size());
+    lua_setfield(L, -2, "info");
 
-    // Subject
-    char name_buf[512];
-    ret = mbedtls_x509_dn_gets(name_buf, sizeof(name_buf), &crt.subject);
-    if (ret > 0) {
-        lua_pushlstring(L, name_buf, ret);
-        lua_setfield(L, -2, "subject");
-    }
+    std::string subject = format_x509_name(L, X509_get_subject_name(cert), "parseCertificate");
+    lua_pushlstring(L, subject.data(), subject.size());
+    lua_setfield(L, -2, "subject");
 
-    // Issuer
-    ret = mbedtls_x509_dn_gets(name_buf, sizeof(name_buf), &crt.issuer);
-    if (ret > 0) {
-        lua_pushlstring(L, name_buf, ret);
-        lua_setfield(L, -2, "issuer");
-    }
+    std::string issuer = format_x509_name(L, X509_get_issuer_name(cert), "parseCertificate");
+    lua_pushlstring(L, issuer.data(), issuer.size());
+    lua_setfield(L, -2, "issuer");
 
-    // Validity
-    char time_buf[32];
-    snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d", crt.valid_from.year,
-             crt.valid_from.mon, crt.valid_from.day, crt.valid_from.hour, crt.valid_from.min,
-             crt.valid_from.sec);
-    lua_pushstring(L, time_buf);
-    lua_setfield(L, -2, "valid_from");
+    std::string valid_from = format_asn1_time(L, X509_get_notBefore(cert), "parseCertificate");
+    lua_pushlstring(L, valid_from.data(), valid_from.size());
+    lua_setfield(L, -2, "validFrom");
 
-    snprintf(time_buf, sizeof(time_buf), "%04d-%02d-%02d %02d:%02d:%02d", crt.valid_to.year,
-             crt.valid_to.mon, crt.valid_to.day, crt.valid_to.hour, crt.valid_to.min,
-             crt.valid_to.sec);
-    lua_pushstring(L, time_buf);
-    lua_setfield(L, -2, "valid_to");
+    std::string valid_to = format_asn1_time(L, X509_get_notAfter(cert), "parseCertificate");
+    lua_pushlstring(L, valid_to.data(), valid_to.size());
+    lua_setfield(L, -2, "validTo");
 
-    // Version
-    lua_pushinteger(L, crt.version);
+    lua_pushinteger(L, (lua_Integer)X509_get_version(cert) + 1);
     lua_setfield(L, -2, "version");
 
-    // Serial (hex string)
-    std::string hex;
-    for (size_t i = 0; i < crt.serial.len; i++) {
-        char h[4];
-        snprintf(h, sizeof(h), "%02X", crt.serial.p[i]);
-        if (i > 0) hex += ':';
-        hex += h;
-    }
-    lua_pushlstring(L, hex.c_str(), hex.size());
+    std::string serial = format_serial_hex(cert);
+    lua_pushlstring(L, serial.data(), serial.size());
     lua_setfield(L, -2, "serial");
 
-    mbedtls_x509_crt_free(&crt);
-    return 1;
-}
-
-// ssl.create_server_context_pem(cert_pem, key_pem [, password]) -> SSLContext
-// Same as create_server_context but takes PEM strings instead of file paths.
-static int ssl_create_server_context_pem(lua_State* L) {
-    const char* cert_pem = luaL_checkstring(L, 1);
-    size_t cert_len = lua_objlen(L, 1);
-    const char* key_pem = luaL_checkstring(L, 2);
-    size_t key_len = lua_objlen(L, 2);
-    const char* password = luaL_optstring(L, 3, nullptr);
-
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
-    new (ctx) LuaSSLContext();
-
-    mbedtls_ssl_config_init(&ctx->conf);
-    mbedtls_x509_crt_init(&ctx->cacert);
-    mbedtls_x509_crt_init(&ctx->own_cert);
-    mbedtls_pk_init(&ctx->pk_key);
-    ctx->use_system_verify = false;
-    ctx->verify_mode = MBEDTLS_SSL_VERIFY_NONE;
-    ctx->is_server = true;
-    ctx->has_own_cert = false;
-
-    int ret = mbedtls_ssl_config_defaults(&ctx->conf, MBEDTLS_SSL_IS_SERVER,
-                                          MBEDTLS_SSL_TRANSPORT_STREAM, MBEDTLS_SSL_PRESET_DEFAULT);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_config_defaults (server)", ret);
-
-    mbedtls_ssl_conf_authmode(&ctx->conf, MBEDTLS_SSL_VERIFY_NONE);
-
-    // Parse certificate from PEM buffer (needs trailing NUL)
-    ret = mbedtls_x509_crt_parse(&ctx->own_cert, (const unsigned char*)cert_pem, cert_len + 1);
-    if (ret < 0) return mbedtls_lua_error(L, "parse server certificate PEM", ret);
-
-    // Parse private key from PEM buffer
-    size_t pwd_len = password ? strlen(password) : 0;
-    ret = mbedtls_pk_parse_key(&ctx->pk_key, (const unsigned char*)key_pem, key_len + 1,
-                               (const unsigned char*)password, pwd_len);
-    if (ret != 0) return mbedtls_lua_error(L, "parse server private key PEM", ret);
-
-    ret = mbedtls_ssl_conf_own_cert(&ctx->conf, &ctx->own_cert, &ctx->pk_key);
-    if (ret != 0) return mbedtls_lua_error(L, "ssl_conf_own_cert", ret);
-    ctx->has_own_cert = true;
-
-    luaL_getmetatable(L, SSLCTX_METATABLE);
-    lua_setmetatable(L, -2);
+    X509_free(cert);
     return 1;
 }
 
 // ---------------------------------------------------------------------------
-// Registration
+// Metatables / registration
 // ---------------------------------------------------------------------------
+static int sslsocket_index(lua_State* L) {
+    LuaSSLSocket* ss = check_sslsocket(L, 1);
+    const char* key = luaL_checkstring(L, 2);
+
+    if (strcmp(key, "readable") == 0) {
+        lua_pushboolean(L, !ss->closed);
+        return 1;
+    }
+    if (strcmp(key, "writable") == 0) {
+        lua_pushboolean(L, !ss->closed);
+        return 1;
+    }
+    if (strcmp(key, "closed") == 0) {
+        lua_pushboolean(L, ss->closed);
+        return 1;
+    }
+
+    lua_pushvalue(L, 2);
+    lua_rawget(L, lua_upvalueindex(1));
+    return 1;
+}
+
 static void register_sslctx_metatable(lua_State* L) {
     luaL_newmetatable(L, SSLCTX_METATABLE);
-
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");
 
     lua_pushcfunction(L, sslctx_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, sslctx_wrap_socket, "wrapSocket");
     lua_setfield(L, -2, "wrapSocket");
@@ -1214,31 +1433,19 @@ static void register_sslctx_metatable(lua_State* L) {
 static void register_sslsocket_metatable(lua_State* L) {
     luaL_newmetatable(L, SSLSOCKET_METATABLE);
 
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-
+    lua_newtable(L);
     lua_pushcfunction(L, sslsock_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, "readable");
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, "writable");
-
     lua_pushcfunction(L, sslsock_send, "send");
     lua_setfield(L, -2, "send");
     lua_pushcfunction(L, sslsock_send, "write");
     lua_setfield(L, -2, "write");
     lua_pushcfunction(L, sslsock_send, "writeSync");
     lua_setfield(L, -2, "writeSync");
-
     lua_pushcfunction(L, sslsock_sendall, "sendAll");
     lua_setfield(L, -2, "sendAll");
     lua_pushcfunction(L, sslsock_sendall, "writeAll");
     lua_setfield(L, -2, "writeAll");
-
     lua_pushcfunction(L, sslsock_recv, "recv");
     lua_setfield(L, -2, "recv");
     lua_pushcfunction(L, sslsock_recv, "read");
@@ -1249,40 +1456,32 @@ static void register_sslsocket_metatable(lua_State* L) {
     lua_setfield(L, -2, "readBuffer");
     lua_pushcfunction(L, sslsock_recv, "readBufferSync");
     lua_setfield(L, -2, "readBufferSync");
-
     lua_pushcfunction(L, sslsock_close, "close");
     lua_setfield(L, -2, "close");
     lua_pushcfunction(L, sslsock_close, "closeSync");
     lua_setfield(L, -2, "closeSync");
-
     lua_pushcfunction(L, sslsock_getpeername, "getPeerName");
     lua_setfield(L, -2, "getPeerName");
-
     lua_pushcfunction(L, sslsock_getsockname, "getSockName");
     lua_setfield(L, -2, "getSockName");
-
     lua_pushcfunction(L, sslsock_fileno, "fileNo");
     lua_setfield(L, -2, "fileNo");
+
+    lua_pushcclosure(L, sslsocket_index, "__index", 1);
+    lua_setfield(L, -2, "__index");
+
+    lua_pushcfunction(L, sslsock_tostring, "tostring");
+    lua_setfield(L, -2, "__tostring");
 
     lua_pop(L, 1);
 }
 
 LUAU_MODULE_EXPORT int luauopen__ssl(lua_State* L) {
-    // Winsock must already be initialised by _socket
-
-    // mbedTLS 4.0: initialise PSA Crypto subsystem (handles RNG internally)
-    psa_status_t psa_ret = psa_crypto_init();
-    if (psa_ret != PSA_SUCCESS) {
-        luaL_error(L, "psa_crypto_init failed: %d", (int)psa_ret);
-        return 0;
-    }
-
     register_sslctx_metatable(L);
     register_sslsocket_metatable(L);
 
     lua_newtable(L);
 
-    // Functions
     lua_pushcfunction(L, ssl_create_default_context, "createDefaultContext");
     lua_setfield(L, -2, "createDefaultContext");
 
@@ -1304,11 +1503,10 @@ LUAU_MODULE_EXPORT int luauopen__ssl(lua_State* L) {
     lua_pushcfunction(L, ssl_parse_certificate, "parseCertificate");
     lua_setfield(L, -2, "parseCertificate");
 
-    // Constants
-    lua_pushinteger(L, MBEDTLS_SSL_VERIFY_NONE);
+    lua_pushinteger(L, SSL_VERIFY_NONE_LUA);
     lua_setfield(L, -2, "VERIFY_NONE");
 
-    lua_pushinteger(L, MBEDTLS_SSL_VERIFY_REQUIRED);
+    lua_pushinteger(L, SSL_VERIFY_REQUIRED_LUA);
     lua_setfield(L, -2, "VERIFY_REQUIRED");
 
     lua_setreadonly(L, -1, true);
