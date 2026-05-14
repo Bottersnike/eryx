@@ -44,15 +44,18 @@ Stream.__index = Stream
 -- & types.StreamThatCanSeek
 -- & types.StreamThatCanClose
 
-export type Stream = setmetatable<{
-	_data: buffer,
-	_length: number,
-	_cursor: number,
+export type Stream = setmetatable<
+	types.StreamThatCanRead & types.StreamThatCanWrite & types.StreamThatCanSeek & types.StreamThatCanClose & {
+		_data: buffer,
+		_length: number,
+		_cursor: number,
 
-	readable: boolean,
-	writable: boolean,
-	closed: boolean,
-}, typeof(Stream)>
+		readable: boolean,
+		writable: boolean,
+		closed: boolean?,
+	},
+	typeof(Stream)
+>
 
 function Stream.new(initialValue: (string | buffer)?): Stream
 	local buf: buffer

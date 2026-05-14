@@ -1,16 +1,9 @@
---[=[
-We have to use `self: any` across this whole file because otherwise
-implementations of Streams will end up incompatible.
-
-I hate that as much as you, but hopefully classes might fix this
-]=]
-
 export type StreamThatCanClose = {
 	--- Closes this stream, setting closed to true
 	--- @yields
-	read close: (self: any) -> (),
+	read close: (self: StreamThatCanClose) -> (),
 	--- Non-yielding version of [[close]]
-	read closeSync: (self: any) -> (),
+	read closeSync: (self: StreamThatCanClose) -> (),
 	--- A boolean indicating if this stream is already closed
 	read closed: boolean?,
 }
@@ -30,9 +23,9 @@ export type StringStreamThatCanRead = {
 	@return The data read, which may be shorter than `size` (including `""`), but never larger.
 	@yields
 	]=]
-	read read: (self: any, size: number?) -> string,
+	read read: (self: StringStreamThatCanRead, size: number?) -> string,
 	--- Non-yielding version of [[read]]
-	read readSync: (self: any, size: number?) -> string,
+	read readSync: (self: StringStreamThatCanRead, size: number?) -> string,
 }
 export type BufferStreamThatCanRead = {
 	--- Marks that this stream is readable
@@ -41,9 +34,9 @@ export type BufferStreamThatCanRead = {
 	Read data from the stream, returning the data as a `buffer`. See [[read]].
 	@yields
 	]=]
-	read readBuffer: (self: any, size: number?) -> buffer,
+	read readBuffer: (self: BufferStreamThatCanRead, size: number?) -> buffer,
 	--- Non-yielding version of [[readBuffer]]
-	read readBufferSync: (self: any, size: number?) -> buffer,
+	read readBufferSync: (self: BufferStreamThatCanRead, size: number?) -> buffer,
 }
 export type StreamThatCanRead = StringStreamThatCanRead & BufferStreamThatCanRead
 
@@ -57,13 +50,11 @@ export type StringStreamThatCanWrite = {
 	@return The number of bytes of `data` that was written
 	@yields
 	]=]
-	read write: (self: any, data: string) -> number,
+	read write: (self: StringStreamThatCanWrite, data: string) -> number,
 	--- Non-yielding version of [[write]]
-	read writeSync: (self: any, data: string) -> number,
+	read writeSync: (self: StringStreamThatCanWrite, data: string) -> number,
 }
 export type BufferStreamThatCanWrite = {
-	-- Note: We cannot safely type `self` here due to `StreamThatCanWrite`
-
 	--- Marks that this stream is writable
 	read writable: true,
 	--[=[
@@ -73,9 +64,9 @@ export type BufferStreamThatCanWrite = {
 	@return The number of bytes of `data` that was written
 	@yields
 	]=]
-	read write: (self: any, data: buffer) -> number,
+	read write: (self: BufferStreamThatCanWrite, data: buffer) -> number,
 	--- Non-yielding version of [[write]]
-	read writeSync: (self: any, data: buffer) -> number,
+	read writeSync: (self: BufferStreamThatCanWrite, data: buffer) -> number,
 }
 export type StreamThatCanWrite = StringStreamThatCanWrite & BufferStreamThatCanWrite
 
@@ -84,16 +75,16 @@ export type StreamThatCanSeek = {
 	--- Moves the file cursor.
 	--- @param whence Seek origin: `set` (default), `cur`, or `end`.
 	--- @return The new file offset.
-	read seek: (self: any, offset: number, whence: Whence?) -> number,
+	read seek: (self: StreamThatCanSeek, offset: number, whence: Whence?) -> number,
 	--- Returns the current file cursor position.
-	read tell: (self: any) -> number,
+	read tell: (self: StreamThatCanSeek) -> number,
 }
 export type StreamThatCanFlush = {
 	--- Flushes buffered data
 	--- @yields
-	read flush: (self: any) -> (),
+	read flush: (self: StreamThatCanFlush) -> (),
 	--- Flushes buffered data
-	read flushSync: (self: any) -> (),
+	read flushSync: (self: StreamThatCanFlush) -> (),
 }
 
 --[=[
