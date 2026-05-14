@@ -56,13 +56,19 @@ using SOCKET = int;
 #include <openssl/x509v3.h>
 
 #include <climits>
+#include <cstdarg>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
+#include "../runtime/_wrapper_lib.hpp"
+#include "../runtime/lexception.hpp"
+#include "_socket.hpp"
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
@@ -97,9 +103,44 @@ struct LuaSSLSocket {
     int ctx_ref;
     bool connected;
     bool closed;
+    double timeout;
     std::string hostname;
     lua_State* L;
 };
+
+enum class SSLOpType {
+    Handshake,
+    Read,
+    Write,
+    WriteAll,
+};
+
+struct SSLPendingOp {
+    lua_State* thread;
+    int threadRef;
+    EryxRuntime* runtime;
+    SSLOpType op;
+    SSL* ssl;
+    SOCKET fd;
+    LuaSSLSocket* socket;
+    void* raw_socket_ud;
+    LuaSSLContext* ctx;
+    int ctx_ref;
+    bool verify_system;
+    double timeout;
+    int bufsize;
+    size_t data_sent;
+    std::string hostname;
+    std::string data;
+    uv_poll_t poll;
+    uv_timer_t timer;
+    bool has_timer;
+    bool finished;
+    int handles_closing;
+};
+
+static std::unordered_map<EryxRuntime*, std::unordered_map<int, SSLPendingOp*>> g_pendingSslOps;
+static std::unordered_set<EryxRuntime*> g_registeredSslRuntimes;
 
 static LuaSSLContext* check_sslctx(lua_State* L, int idx) {
     return (LuaSSLContext*)luaL_checkudata(L, idx, SSLCTX_METATABLE);
@@ -159,6 +200,59 @@ static int ssl_lua_error_code(lua_State* L, const char* op, int ssl_err) {
 
     luaL_error(L, "%s failed (ssl error %d)", op, ssl_err);
     return 0;
+}
+
+static std::string vformat_string(const char* fmt, va_list args) {
+    char stackbuf[512];
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(stackbuf, sizeof(stackbuf), fmt, copy);
+    va_end(copy);
+
+    if (needed < 0) return std::string("format error");
+    if ((size_t)needed < sizeof(stackbuf)) return std::string(stackbuf, (size_t)needed);
+
+    std::string out((size_t)needed, '\0');
+    vsnprintf(out.data(), out.size() + 1, fmt, args);
+    return out;
+}
+
+static std::string format_string(const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    std::string out = vformat_string(fmt, args);
+    va_end(args);
+    return out;
+}
+
+static std::string openssl_error_message(const char* op) {
+    unsigned long err = ERR_get_error();
+    if (err != 0) {
+        char buf[256];
+        ERR_error_string_n(err, buf, sizeof(buf));
+        return format_string("%s failed (%s)", op, buf);
+    }
+
+    return format_string("%s failed", op);
+}
+
+static std::string ssl_error_message(const char* op, int ssl_err) {
+    unsigned long err = ERR_get_error();
+    if (err != 0) {
+        char buf[256];
+        ERR_error_string_n(err, buf, sizeof(buf));
+        return format_string("%s failed (%s)", op, buf);
+    }
+
+    if (ssl_err == SSL_ERROR_SYSCALL) {
+#ifdef _WIN32
+        return format_string("%s failed (syscall error %d)", op, (int)WSAGetLastError());
+#else
+        return format_string("%s failed (syscall error %d)", op, errno);
+#endif
+    }
+
+    return format_string("%s failed (ssl error %d)", op, ssl_err);
 }
 
 static void check_openssl_input_len(lua_State* L, size_t len, const char* arg_name) {
@@ -302,6 +396,7 @@ static LuaSSLSocket* new_sslsocket_userdata(lua_State* L) {
     ss->ctx_ref = LUA_NOREF;
     ss->connected = false;
     ss->closed = true;
+    ss->timeout = -1.0;
     ss->L = L;
     return ss;
 }
@@ -442,17 +537,18 @@ static STACK_OF(X509) * ssl_get_peer_chain(SSL* ssl) {
 #endif
 #pragma comment(lib, "crypt32.lib")
 
-static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+static bool verify_cert_system_impl(SSL* ssl, const char* hostname, std::string& error) {
     X509* leaf = SSL_get1_peer_certificate(ssl);
     if (!leaf) {
-        luaL_error(L, "ssl: server sent no certificate");
-        return -1;
+        error = "ssl: server sent no certificate";
+        return false;
     }
 
     int cert_len = i2d_X509(leaf, nullptr);
     if (cert_len <= 0) {
         X509_free(leaf);
-        push_openssl_error(L, "i2d_X509");
+        error = openssl_error_message("i2d_X509");
+        return false;
     }
 
     std::vector<unsigned char> cert_buf((size_t)cert_len);
@@ -463,8 +559,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
                                                         cert_buf.data(), (DWORD)cert_buf.size());
     if (!pCert) {
         X509_free(leaf);
-        luaL_error(L, "ssl: CertCreateCertificateContext failed (%lu)", GetLastError());
-        return -1;
+        error = format_string("ssl: CertCreateCertificateContext failed (%lu)", GetLastError());
+        return false;
     }
 
     HCERTSTORE hStore =
@@ -472,8 +568,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
     if (!hStore) {
         CertFreeCertificateContext(pCert);
         X509_free(leaf);
-        luaL_error(L, "ssl: CertOpenStore failed");
-        return -1;
+        error = "ssl: CertOpenStore failed";
+        return false;
     }
 
     auto add_cert = [&](X509* cert) {
@@ -508,8 +604,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
         CertCloseStore(hStore, 0);
         CertFreeCertificateContext(pCert);
         X509_free(leaf);
-        luaL_error(L, "ssl: CertGetCertificateChain failed (%lu)", GetLastError());
-        return -1;
+        error = format_string("ssl: CertGetCertificateChain failed (%lu)", GetLastError());
+        return false;
     }
 
     int wlen = MultiByteToWideChar(CP_UTF8, 0, hostname, -1, nullptr, 0);
@@ -536,11 +632,20 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
     X509_free(leaf);
 
     if (!policyOk || policyStatus.dwError != 0) {
-        luaL_error(L, "ssl: certificate verification failed (Windows error 0x%08lX)",
-                   policyStatus.dwError);
-        return -1;
+        error = format_string("ssl: certificate verification failed (Windows error 0x%08lX)",
+                              policyStatus.dwError);
+        return false;
     }
 
+    return true;
+}
+
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+    std::string error;
+    if (!verify_cert_system_impl(ssl, hostname, error)) {
+        luaL_error(L, "%s", error.c_str());
+        return -1;
+    }
     return 0;
 }
 
@@ -548,11 +653,11 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
 #include <CoreFoundation/CoreFoundation.h>
 #include <Security/Security.h>
 
-static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+static bool verify_cert_system_impl(SSL* ssl, const char* hostname, std::string& error) {
     X509* leaf = SSL_get1_peer_certificate(ssl);
     if (!leaf) {
-        luaL_error(L, "ssl: server sent no certificate");
-        return -1;
+        error = "ssl: server sent no certificate";
+        return false;
     }
 
     CFMutableArrayRef certs = CFArrayCreateMutable(kCFAllocatorDefault, 0, &kCFTypeArrayCallBacks);
@@ -597,8 +702,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
 
     if (status != errSecSuccess || !trust) {
         if (trust) CFRelease(trust);
-        luaL_error(L, "ssl: SecTrustCreateWithCertificates failed (%d)", (int)status);
-        return -1;
+        error = format_string("ssl: SecTrustCreateWithCertificates failed (%d)", (int)status);
+        return false;
     }
 
     CFErrorRef err = nullptr;
@@ -612,19 +717,28 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
             CFStringGetCString(desc, buf, sizeof(buf), kCFStringEncodingUTF8);
             CFRelease(desc);
             CFRelease(err);
-            luaL_error(L, "ssl: certificate verification failed: %s", buf);
+            error = format_string("ssl: certificate verification failed: %s", buf);
         } else {
-            luaL_error(L, "ssl: certificate verification failed");
+            error = "ssl: certificate verification failed";
         }
-        return -1;
+        return false;
     }
 
+    return true;
+}
+
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+    std::string error;
+    if (!verify_cert_system_impl(ssl, hostname, error)) {
+        luaL_error(L, "%s", error.c_str());
+        return -1;
+    }
     return 0;
 }
 
 #else
 
-static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+static bool verify_cert_system_impl(SSL* ssl, const char* hostname, std::string& error) {
     static const char* const candidates[] = {
         "/etc/ssl/certs/ca-certificates.crt",
         "/etc/pki/tls/certs/ca-bundle.crt",
@@ -645,33 +759,36 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
     }
 
     if (!bundle) {
-        luaL_error(L, "ssl: no system CA bundle found (install ca-certificates)");
-        return -1;
+        error = "ssl: no system CA bundle found (install ca-certificates)";
+        return false;
     }
 
     X509* leaf = SSL_get1_peer_certificate(ssl);
     if (!leaf) {
-        luaL_error(L, "ssl: server sent no certificate");
-        return -1;
+        error = "ssl: server sent no certificate";
+        return false;
     }
 
     X509_STORE* store = X509_STORE_new();
     if (!store) {
         X509_free(leaf);
-        push_openssl_error(L, "X509_STORE_new");
+        error = openssl_error_message("X509_STORE_new");
+        return false;
     }
 
     if (X509_STORE_load_locations(store, bundle, nullptr) != 1) {
         X509_STORE_free(store);
         X509_free(leaf);
-        push_openssl_error(L, "load system CA bundle");
+        error = openssl_error_message("load system CA bundle");
+        return false;
     }
 
     STACK_OF(X509)* untrusted = sk_X509_new_null();
     if (!untrusted) {
         X509_STORE_free(store);
         X509_free(leaf);
-        push_openssl_error(L, "sk_X509_new_null");
+        error = openssl_error_message("sk_X509_new_null");
+        return false;
     }
 
     STACK_OF(X509)* chain = ssl_get_peer_chain(ssl);
@@ -690,7 +807,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
         sk_X509_pop_free(untrusted, X509_free);
         X509_STORE_free(store);
         X509_free(leaf);
-        push_openssl_error(L, "X509_STORE_CTX_new");
+        error = openssl_error_message("X509_STORE_CTX_new");
+        return false;
     }
 
     if (X509_STORE_CTX_init(store_ctx, store, leaf, untrusted) != 1) {
@@ -698,7 +816,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
         sk_X509_pop_free(untrusted, X509_free);
         X509_STORE_free(store);
         X509_free(leaf);
-        push_openssl_error(L, "X509_STORE_CTX_init");
+        error = openssl_error_message("X509_STORE_CTX_init");
+        return false;
     }
 
     X509_VERIFY_PARAM* param = X509_STORE_CTX_get0_param(store_ctx);
@@ -708,7 +827,8 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
         sk_X509_pop_free(untrusted, X509_free);
         X509_STORE_free(store);
         X509_free(leaf);
-        push_openssl_error(L, "X509_VERIFY_PARAM_set1_host");
+        error = openssl_error_message("X509_VERIFY_PARAM_set1_host");
+        return false;
     }
 
     int verify_ok = X509_verify_cert(store_ctx);
@@ -719,18 +839,367 @@ static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
         sk_X509_pop_free(untrusted, X509_free);
         X509_STORE_free(store);
         X509_free(leaf);
-        luaL_error(L, "ssl: certificate verification failed: %s", msg ? msg : "unknown error");
-        return -1;
+        error =
+            format_string("ssl: certificate verification failed: %s", msg ? msg : "unknown error");
+        return false;
     }
 
     X509_STORE_CTX_free(store_ctx);
     sk_X509_pop_free(untrusted, X509_free);
     X509_STORE_free(store);
     X509_free(leaf);
+    return true;
+}
+
+static int verify_cert_system(lua_State* L, SSL* ssl, const char* hostname) {
+    std::string error;
+    if (!verify_cert_system_impl(ssl, hostname, error)) {
+        luaL_error(L, "%s", error.c_str());
+        return -1;
+    }
     return 0;
 }
 
 #endif
+
+static int ssl_poll_events_for_error(int ssl_err) {
+    return ssl_err == SSL_ERROR_WANT_WRITE ? UV_WRITABLE : UV_READABLE;
+}
+
+static void ssl_handle_close_cb(uv_handle_t* handle) {
+    SSLPendingOp* op = (SSLPendingOp*)handle->data;
+    if (!op) return;
+    op->handles_closing--;
+    if (op->handles_closing <= 0) delete op;
+}
+
+static void cleanup_ssl_pending_op(SSLPendingOp* op) {
+    if (op->threadRef != LUA_NOREF) {
+        lua_unref(op->runtime->GL, op->threadRef);
+        op->threadRef = LUA_NOREF;
+    }
+    if (op->ctx_ref != LUA_NOREF) {
+        lua_unref(op->runtime->GL, op->ctx_ref);
+        op->ctx_ref = LUA_NOREF;
+    }
+    if (!op->socket && op->ssl) {
+        SSL_free(op->ssl);
+        op->ssl = nullptr;
+    }
+
+    op->handles_closing = 0;
+    if (!uv_is_closing((uv_handle_t*)&op->poll)) {
+        op->handles_closing++;
+        uv_poll_stop(&op->poll);
+        uv_close((uv_handle_t*)&op->poll, ssl_handle_close_cb);
+    }
+    if (op->has_timer && !uv_is_closing((uv_handle_t*)&op->timer)) {
+        op->handles_closing++;
+        uv_timer_stop(&op->timer);
+        uv_close((uv_handle_t*)&op->timer, ssl_handle_close_cb);
+    }
+    if (op->handles_closing <= 0) delete op;
+
+    auto& pending = g_pendingSslOps[op->runtime];
+    if (op->threadRef != LUA_NOREF)
+        pending.erase(op->threadRef);
+    else
+        for (auto it = pending.begin(); it != pending.end(); ++it)
+            if (it->second == op) {
+                pending.erase(it);
+                break;
+            }
+}
+
+static void ssl_resume_error(SSLPendingOp* op, const std::string& message) {
+    lua_pushlstring(op->thread, message.data(), message.size());
+    int ref = op->threadRef;
+    op->threadRef = LUA_NOREF;
+    eryx_push_thread(op->runtime, ref, 1, true);
+    cleanup_ssl_pending_op(op);
+}
+
+static void ssl_interrupt_all(EryxRuntime* rt, void*) {
+    if (!rt) return;
+    auto itmap = g_pendingSslOps.find(rt);
+    if (itmap == g_pendingSslOps.end()) return;
+
+    std::vector<int> refs;
+    for (auto& kv : itmap->second) refs.push_back(kv.first);
+
+    for (int ref : refs) {
+        auto it = itmap->second.find(ref);
+        if (it == itmap->second.end()) continue;
+        SSLPendingOp* op = it->second;
+        if (!op || op->finished) {
+            itmap->second.erase(it);
+            continue;
+        }
+
+        op->finished = true;
+        if (op->thread && op->threadRef != LUA_NOREF) {
+            eryx_exception_push_keyboard_interrupt(op->thread);
+            int tref = op->threadRef;
+            op->threadRef = LUA_NOREF;
+            eryx_push_thread(rt, tref, 1, true);
+        }
+
+        cleanup_ssl_pending_op(op);
+        itmap->second.erase(ref);
+    }
+}
+
+static void cancel_sslsocket_pending_ops(lua_State* L, LuaSSLSocket* ss) {
+    EryxRuntime* rt = eryx_get_runtime(L);
+    auto itmap = g_pendingSslOps.find(rt);
+    if (itmap == g_pendingSslOps.end()) return;
+
+    std::vector<int> refs;
+    for (auto& kv : itmap->second) {
+        if (kv.second->socket == ss) refs.push_back(kv.first);
+    }
+
+    for (int ref : refs) {
+        auto it = itmap->second.find(ref);
+        if (it == itmap->second.end()) continue;
+        SSLPendingOp* op = it->second;
+        if (!op || op->finished) {
+            itmap->second.erase(it);
+            continue;
+        }
+
+        op->finished = true;
+        if (op->thread && op->threadRef != LUA_NOREF) {
+            lua_pushstring(op->thread, "ssl socket is closed");
+            int tref = op->threadRef;
+            op->threadRef = LUA_NOREF;
+            eryx_push_thread(rt, tref, 1, true);
+        }
+
+        cleanup_ssl_pending_op(op);
+        itmap->second.erase(ref);
+    }
+}
+
+static void ssl_rearm_poll(SSLPendingOp* op, int events) {
+    op->finished = false;
+    uv_poll_start(&op->poll, events, [](uv_poll_t* handle, int status, int events) {
+        SSLPendingOp* op = (SSLPendingOp*)handle->data;
+        if (!op || op->finished) return;
+        op->finished = true;
+
+        uv_poll_stop(handle);
+        if (op->has_timer && !uv_is_closing((uv_handle_t*)&op->timer)) uv_timer_stop(&op->timer);
+
+        if (status < 0) {
+            ssl_resume_error(op, uv_strerror(status));
+            return;
+        }
+
+        switch (op->op) {
+            case SSLOpType::Handshake: {
+                int ret = SSL_do_handshake(op->ssl);
+                if (ret == 1) {
+                    if (op->verify_system) {
+                        std::string verify_error;
+                        if (!verify_cert_system_impl(op->ssl, op->hostname.c_str(), verify_error)) {
+                            ssl_resume_error(op, verify_error);
+                            return;
+                        }
+                    }
+
+                    LuaSSLSocket* ss = new_sslsocket_userdata(op->thread);
+                    ss->ssl = op->ssl;
+                    ss->fd = op->fd;
+                    ss->ctx = op->ctx;
+                    ss->ctx_ref = op->ctx_ref;
+                    ss->connected = true;
+                    ss->closed = false;
+                    ss->timeout = op->timeout;
+                    ss->hostname = op->hostname;
+
+                    op->ssl = nullptr;
+                    op->ctx_ref = LUA_NOREF;
+                    if (op->raw_socket_ud) *(SOCKET*)op->raw_socket_ud = INVALID_SOCKET;
+
+                    luaL_getmetatable(op->thread, SSLSOCKET_METATABLE);
+                    lua_setmetatable(op->thread, -2);
+
+                    int ref = op->threadRef;
+                    op->threadRef = LUA_NOREF;
+                    eryx_push_thread(op->runtime, ref, 1, false);
+                    cleanup_ssl_pending_op(op);
+                    return;
+                }
+
+                int ssl_err = SSL_get_error(op->ssl, ret);
+                if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+                    ssl_rearm_poll(op, ssl_poll_events_for_error(ssl_err));
+                    return;
+                }
+
+                ssl_resume_error(op, ssl_error_message("ssl_handshake", ssl_err));
+                return;
+            }
+
+            case SSLOpType::Read: {
+                char stackbuf[8192];
+                char* tmp =
+                    (op->bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[op->bufsize];
+                int ret = SSL_read(op->ssl, tmp, op->bufsize);
+                if (ret > 0) {
+                    void* out = lua_newbuffer(op->thread, ret);
+                    memcpy(out, tmp, ret);
+                    if (tmp != stackbuf) delete[] tmp;
+                    int ref = op->threadRef;
+                    op->threadRef = LUA_NOREF;
+                    eryx_push_thread(op->runtime, ref, 1, false);
+                    cleanup_ssl_pending_op(op);
+                    return;
+                }
+
+                int ssl_err = SSL_get_error(op->ssl, ret);
+                if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+                    if (tmp != stackbuf) delete[] tmp;
+                    ssl_rearm_poll(op, ssl_poll_events_for_error(ssl_err));
+                    return;
+                }
+                if (ssl_err == SSL_ERROR_ZERO_RETURN || ret == 0) {
+                    lua_newbuffer(op->thread, 0);
+                    if (tmp != stackbuf) delete[] tmp;
+                    int ref = op->threadRef;
+                    op->threadRef = LUA_NOREF;
+                    eryx_push_thread(op->runtime, ref, 1, false);
+                    cleanup_ssl_pending_op(op);
+                    return;
+                }
+
+                if (tmp != stackbuf) delete[] tmp;
+                ssl_resume_error(op, ssl_error_message("ssl_read", ssl_err));
+                return;
+            }
+
+            case SSLOpType::Write:
+            case SSLOpType::WriteAll: {
+                while (op->data_sent < op->data.size()) {
+                    int chunk_len = (int)std::min((size_t)INT_MAX, op->data.size() - op->data_sent);
+                    int ret = SSL_write(op->ssl, op->data.data() + op->data_sent, chunk_len);
+                    if (ret > 0) {
+                        op->data_sent += (size_t)ret;
+                        if (op->op == SSLOpType::Write) {
+                            lua_pushinteger(op->thread, ret);
+                            int ref = op->threadRef;
+                            op->threadRef = LUA_NOREF;
+                            eryx_push_thread(op->runtime, ref, 1, false);
+                            cleanup_ssl_pending_op(op);
+                            return;
+                        }
+                        continue;
+                    }
+
+                    int ssl_err = SSL_get_error(op->ssl, ret);
+                    if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+                        ssl_rearm_poll(op, ssl_poll_events_for_error(ssl_err));
+                        return;
+                    }
+
+                    ssl_resume_error(op, ssl_error_message("ssl_write", ssl_err));
+                    return;
+                }
+
+                int ref = op->threadRef;
+                op->threadRef = LUA_NOREF;
+                eryx_push_thread(op->runtime, ref, 0, false);
+                cleanup_ssl_pending_op(op);
+                return;
+            }
+        }
+    });
+}
+
+static void ssl_timeout_cb(uv_timer_t* handle) {
+    SSLPendingOp* op = (SSLPendingOp*)handle->data;
+    if (!op || op->finished) return;
+    op->finished = true;
+    uv_poll_stop(&op->poll);
+
+    const char* opname = "ssl operation";
+    switch (op->op) {
+        case SSLOpType::Handshake:
+            opname = "ssl handshake";
+            break;
+        case SSLOpType::Read:
+            opname = "ssl read";
+            break;
+        case SSLOpType::Write:
+        case SSLOpType::WriteAll:
+            opname = "ssl write";
+            break;
+    }
+
+    ssl_resume_error(op, format_string("%s timed out", opname));
+}
+
+static int schedule_ssl_pending_op(lua_State* L, SSLPendingOp* op, int events) {
+    op->runtime = eryx_get_runtime(L);
+    lua_pushthread(L);
+    op->threadRef = lua_ref(L, -1);
+    lua_pop(L, 1);
+
+    int poll_init_rc;
+#ifdef _WIN32
+    poll_init_rc = uv_poll_init_socket(op->runtime->loop, &op->poll, op->fd);
+#else
+    poll_init_rc = uv_poll_init(op->runtime->loop, &op->poll, op->fd);
+#endif
+    if (poll_init_rc < 0) {
+        lua_unref(op->runtime->GL, op->threadRef);
+        if (op->ctx_ref != LUA_NOREF) lua_unref(op->runtime->GL, op->ctx_ref);
+        if (!op->socket && op->ssl) SSL_free(op->ssl);
+        delete op;
+        luaL_error(L, "uv_poll_init failed: %s", uv_strerror(poll_init_rc));
+    }
+
+    op->poll.data = op;
+    op->has_timer = false;
+    op->finished = false;
+    op->handles_closing = 0;
+
+    g_pendingSslOps[op->runtime][op->threadRef] = op;
+    if (g_registeredSslRuntimes.find(op->runtime) == g_registeredSslRuntimes.end()) {
+        eryx_register_interrupt_callback(op->runtime, ssl_interrupt_all, nullptr);
+        g_registeredSslRuntimes.insert(op->runtime);
+    }
+
+    if (op->timeout > 0) {
+        uv_timer_init(op->runtime->loop, &op->timer);
+        op->timer.data = op;
+        op->has_timer = true;
+        uv_timer_start(&op->timer, ssl_timeout_cb, (uint64_t)(op->timeout * 1000.0), 0);
+    }
+
+    ssl_rearm_poll(op, events);
+    return lua_yield(L, 0);
+}
+
+static void push_wrapped_ssl_socket(lua_State* L, SSL* ssl, SOCKET fd, LuaSSLContext* ctx,
+                                    int ctx_ref, const char* hostname, double timeout,
+                                    void* raw_socket_ud) {
+    LuaSSLSocket* ss = new_sslsocket_userdata(L);
+    ss->ssl = ssl;
+    ss->fd = fd;
+    ss->ctx = ctx;
+    ss->ctx_ref = ctx_ref;
+    ss->connected = true;
+    ss->closed = false;
+    ss->timeout = timeout;
+    if (hostname) ss->hostname = hostname;
+
+    if (raw_socket_ud) *(SOCKET*)raw_socket_ud = INVALID_SOCKET;
+
+    luaL_getmetatable(L, SSLSOCKET_METATABLE);
+    lua_setmetatable(L, -2);
+}
 
 static int ssl_do_handshake(lua_State* L, SSL* ssl) {
     while (true) {
@@ -745,6 +1214,8 @@ static int ssl_do_handshake(lua_State* L, SSL* ssl) {
 
 static void sslsock_close_impl(LuaSSLSocket* ss) {
     if (!ss || ss->closed) return;
+
+    if (ss->L) cancel_sslsocket_pending_ops(ss->L, ss);
 
     if (ss->ssl) {
         if (ss->connected) {
@@ -767,11 +1238,10 @@ static void sslsock_close_impl(LuaSSLSocket* ss) {
 static int wrap_socket_with_context(lua_State* L, int ctx_idx, int sock_idx, int hostname_idx) {
     ctx_idx = lua_absindex(L, ctx_idx);
     sock_idx = lua_absindex(L, sock_idx);
-    hostname_idx = lua_absindex(L, hostname_idx);
 
     LuaSSLContext* ctx = check_sslctx(L, ctx_idx);
-    void* raw_socket = luaL_checkudata(L, sock_idx, "Socket");
-    SOCKET fd = *(SOCKET*)raw_socket;
+    LuaSocket* raw_socket = check_socket(L, sock_idx);
+    SOCKET fd = raw_socket->fd;
     if (fd == INVALID_SOCKET) luaL_error(L, "ssl: socket is closed");
 
     const char* hostname =
@@ -808,39 +1278,47 @@ static int wrap_socket_with_context(lua_State* L, int ctx_idx, int sock_idx, int
         push_openssl_error(L, "SSL_set_fd");
     }
 
-    while (true) {
-        int ret = SSL_do_handshake(ssl);
-        if (ret == 1) break;
+    int ctx_ref = LUA_NOREF;
+    lua_pushvalue(L, ctx_idx);
+    ctx_ref = lua_ref(L, -1);
+    lua_pop(L, 1);
 
+    int ret = SSL_do_handshake(ssl);
+    if (ret != 1) {
         int ssl_err = SSL_get_error(ssl, ret);
-        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+            SSLPendingOp* op = new SSLPendingOp();
+            op->thread = L;
+            op->op = SSLOpType::Handshake;
+            op->ssl = ssl;
+            op->fd = fd;
+            op->socket = nullptr;
+            op->raw_socket_ud = raw_socket;
+            op->ctx = ctx;
+            op->ctx_ref = ctx_ref;
+            op->verify_system = !ctx->is_server && ctx->use_system_verify &&
+                                ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA;
+            op->timeout = raw_socket->timeout;
+            op->bufsize = 0;
+            op->data_sent = 0;
+            if (hostname) op->hostname = hostname;
+            return schedule_ssl_pending_op(L, op, ssl_poll_events_for_error(ssl_err));
+        }
+
+        lua_unref(eryx_get_runtime(L)->GL, ctx_ref);
         SSL_free(ssl);
         return ssl_lua_error_code(L, "ssl_handshake", ssl_err);
     }
 
     if (!ctx->is_server && ctx->use_system_verify && ctx->verify_mode == SSL_VERIFY_REQUIRED_LUA) {
         if (verify_cert_system(L, ssl, hostname) != 0) {
+            lua_unref(eryx_get_runtime(L)->GL, ctx_ref);
             SSL_free(ssl);
             return 0;
         }
     }
 
-    LuaSSLSocket* ss = new_sslsocket_userdata(L);
-    ss->ssl = ssl;
-    ss->fd = fd;
-    ss->ctx = ctx;
-    ss->connected = true;
-    ss->closed = false;
-    if (hostname) ss->hostname = hostname;
-
-    lua_pushvalue(L, ctx_idx);
-    ss->ctx_ref = lua_ref(L, -1);
-    lua_pop(L, 1);
-
-    *(SOCKET*)raw_socket = INVALID_SOCKET;
-
-    luaL_getmetatable(L, SSLSOCKET_METATABLE);
-    lua_setmetatable(L, -2);
+    push_wrapped_ssl_socket(L, ssl, fd, ctx, ctx_ref, hostname, raw_socket->timeout, raw_socket);
     return 1;
 }
 
@@ -931,17 +1409,32 @@ static int sslsock_send(lua_State* L) {
     const char* data = sslsock_check_bytes_arg(L, 2, &len);
     check_openssl_input_len(L, len, "data");
 
-    while (true) {
-        int ret = SSL_write(ss->ssl, data, (int)len);
-        if (ret > 0) {
-            lua_pushinteger(L, ret);
-            return 1;
-        }
-
-        int ssl_err = SSL_get_error(ss->ssl, ret);
-        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
-        return ssl_lua_error(L, "ssl_write", ss->ssl, ret);
+    int ret = SSL_write(ss->ssl, data, (int)len);
+    if (ret > 0) {
+        lua_pushinteger(L, ret);
+        return 1;
     }
+
+    int ssl_err = SSL_get_error(ss->ssl, ret);
+    if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        SSLPendingOp* op = new SSLPendingOp();
+        op->thread = L;
+        op->op = SSLOpType::Write;
+        op->ssl = ss->ssl;
+        op->fd = ss->fd;
+        op->socket = ss;
+        op->raw_socket_ud = nullptr;
+        op->ctx = nullptr;
+        op->ctx_ref = LUA_NOREF;
+        op->verify_system = false;
+        op->timeout = ss->timeout;
+        op->bufsize = 0;
+        op->data_sent = 0;
+        op->data.assign(data, len);
+        return schedule_ssl_pending_op(L, op, ssl_poll_events_for_error(ssl_err));
+    }
+
+    return ssl_lua_error(L, "ssl_write", ss->ssl, ret);
 }
 
 static int sslsock_sendall(lua_State* L) {
@@ -962,7 +1455,23 @@ static int sslsock_sendall(lua_State* L) {
         }
 
         int ssl_err = SSL_get_error(ss->ssl, ret);
-        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
+        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+            SSLPendingOp* op = new SSLPendingOp();
+            op->thread = L;
+            op->op = SSLOpType::WriteAll;
+            op->ssl = ss->ssl;
+            op->fd = ss->fd;
+            op->socket = ss;
+            op->raw_socket_ud = nullptr;
+            op->ctx = nullptr;
+            op->ctx_ref = LUA_NOREF;
+            op->verify_system = false;
+            op->timeout = ss->timeout;
+            op->bufsize = 0;
+            op->data_sent = total;
+            op->data.assign(data, len);
+            return schedule_ssl_pending_op(L, op, ssl_poll_events_for_error(ssl_err));
+        }
         return ssl_lua_error(L, "ssl_write", ss->ssl, ret);
     }
 
@@ -979,27 +1488,41 @@ static int sslsock_recv(lua_State* L) {
     char stackbuf[8192];
     char* tmp = (bufsize <= (int)sizeof(stackbuf)) ? stackbuf : new char[bufsize];
 
-    while (true) {
-        int ret = SSL_read(ss->ssl, tmp, bufsize);
-        if (ret > 0) {
-            void* out = lua_newbuffer(L, ret);
-            memcpy(out, tmp, ret);
-            if (tmp != stackbuf) delete[] tmp;
-            return 1;
-        }
-
-        int ssl_err = SSL_get_error(ss->ssl, ret);
-        if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) continue;
-        if (ssl_err == SSL_ERROR_ZERO_RETURN || ret == 0) {
-            void* out = lua_newbuffer(L, 0);
-            (void)out;
-            if (tmp != stackbuf) delete[] tmp;
-            return 1;
-        }
-
+    int ret = SSL_read(ss->ssl, tmp, bufsize);
+    if (ret > 0) {
+        void* out = lua_newbuffer(L, ret);
+        memcpy(out, tmp, ret);
         if (tmp != stackbuf) delete[] tmp;
-        return ssl_lua_error(L, "ssl_read", ss->ssl, ret);
+        return 1;
     }
+
+    int ssl_err = SSL_get_error(ss->ssl, ret);
+    if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        if (tmp != stackbuf) delete[] tmp;
+        SSLPendingOp* op = new SSLPendingOp();
+        op->thread = L;
+        op->op = SSLOpType::Read;
+        op->ssl = ss->ssl;
+        op->fd = ss->fd;
+        op->socket = ss;
+        op->raw_socket_ud = nullptr;
+        op->ctx = nullptr;
+        op->ctx_ref = LUA_NOREF;
+        op->verify_system = false;
+        op->timeout = ss->timeout;
+        op->bufsize = bufsize;
+        op->data_sent = 0;
+        return schedule_ssl_pending_op(L, op, ssl_poll_events_for_error(ssl_err));
+    }
+    if (ssl_err == SSL_ERROR_ZERO_RETURN || ret == 0) {
+        void* out = lua_newbuffer(L, 0);
+        (void)out;
+        if (tmp != stackbuf) delete[] tmp;
+        return 1;
+    }
+
+    if (tmp != stackbuf) delete[] tmp;
+    return ssl_lua_error(L, "ssl_read", ss->ssl, ret);
 }
 
 static int sslsock_close(lua_State* L) {

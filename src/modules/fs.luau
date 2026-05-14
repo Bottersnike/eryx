@@ -26,27 +26,15 @@ export type BaseFile = {
 	--- `true` if the file was opened for writing.
 	read writable: boolean,
 
-	--- Moves the file cursor.
-	--- @param whence Seek origin: `set` (default), `cur`, or `end`.
-	--- @return The new file offset.
-	seek: (self: BaseFile, offset: number, whence: ("set" | "cur" | "end")?) -> number,
-	--- Returns the current file cursor position.
-	tell: (self: BaseFile) -> number,
 	--- Truncates the file to `size` bytes, or at the current position if `nil`.
 	truncate: (self: BaseFile, size: number?) -> (),
 	--- Returns the file size in bytes.
 	size: (self: BaseFile) -> number,
-
-	--- Flushes buffered writes to disk.
-	--- @yields
-	flush: (self: BaseFile) -> (),
-	--- Flushes buffered writes to disk.
-	flushSync: (self: BaseFile) -> (),
 }
 
-export type ReadableFile = BaseFile & stream.ReadOnlyStream
-export type WritableFile = BaseFile & stream.WriteOnlyStream
-export type ReadWriteFile = BaseFile & stream.ReadWriteStream
+export type ReadableFile = BaseFile & stream.StreamThatCanSeek & stream.StreamThatCanFlush & stream.ReadOnlyStream
+export type WritableFile = BaseFile & stream.StreamThatCanSeek & stream.StreamThatCanFlush & stream.WriteOnlyStream
+export type ReadWriteFile = BaseFile & stream.StreamThatCanSeek & stream.StreamThatCanFlush & stream.ReadWriteStream
 
 --[=[
 	Union of all file-handle variants returned by `fs.open`/`fs.openSync`.

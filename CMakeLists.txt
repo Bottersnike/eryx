@@ -666,7 +666,7 @@ endfunction()
 # Copy the modules-local Luau config into the staged modules/ directory so
 # release/runtime builds resolve @eryx aliases with the intended settings.
 if(NOT ERYX_EMBED_MODULES)
-    set(_modules_luaurc_src "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/.luaurc")
+    set(_modules_luaurc_src "${CMAKE_CURRENT_SOURCE_DIR}/src/modules/.luaurc.template")
     set(_modules_luaurc_stamp "${CMAKE_CURRENT_BINARY_DIR}/stamps/modules_luaurc.stamp")
     set(_modules_luaurc_dst "$<TARGET_FILE_DIR:eryx>/modules/.luaurc")
 
@@ -676,7 +676,9 @@ if(NOT ERYX_EMBED_MODULES)
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:eryx>/modules"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_modules_luaurc_src}" "${_modules_luaurc_dst}"
         COMMAND ${CMAKE_COMMAND} -E touch "${_modules_luaurc_stamp}"
-        DEPENDS "${_modules_luaurc_src}" eryx
+        # The destination path is derived from `eryx`, but staging this file
+        # does not require the executable itself to be built first.
+        DEPENDS "${_modules_luaurc_src}"
         COMMENT "Copying modules/.luaurc"
     )
 

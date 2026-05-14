@@ -94,7 +94,7 @@ if(ERYX_USE_ZLIB)
         EXTRA_INCLUDES "${ZLIB_DIR}"
     )
 
-    add_luau_module(compression/zip src/modules/compression/zip.cpp src/modules/compression/zip.luau
+    add_luau_module(archive/zip src/modules/archive/zip.cpp src/modules/archive/zip.luau
         EXTRA_LIBS minizip-ng
     )
 endif()

@@ -83,7 +83,14 @@ add_luau_script_module(path src/modules/path.luau)
 add_luau_script_module(signal src/modules/signal.luau)
 add_luau_script_module(fs_watch src/modules/fs_watch.luau)
 add_luau_script_module(net src/modules/net.luau)
-add_luau_script_module(stream src/modules/stream.luau)
+add_luau_script_module(stream/
+    src/modules/stream/init.luau
+    src/modules/stream/stream.luau
+    src/modules/stream/types.luau
+)
+add_luau_script_module(compression/
+    src/modules/compression/stream.luau
+)
 add_luau_script_module(project src/modules/project.luau)
 add_luau_script_module(package/
     src/modules/package/cycles.luau
@@ -211,3 +218,4 @@ add_luau_script_module(text src/modules/text.luau)
 add_luau_script_module(queue src/modules/queue.luau)
 add_luau_script_module(caching src/modules/caching.luau)
 add_luau_script_module(uri src/modules/uri.luau)
+add_luau_script_module(archive/tar src/modules/archive/tar.luau)

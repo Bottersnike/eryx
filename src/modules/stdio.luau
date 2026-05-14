@@ -37,6 +37,8 @@ export type TerminalSize = {
 	rows: number,
 }
 
+-- TODO: Stdio needs flushSync, then we can use StreamThatCanFlush
+
 export type StandardStreamControl = {
 	--[=[
 		Sets whether this standard stream uses binary mode.
