@@ -1,5 +1,5 @@
 local _socket = require("@eryx/_socket")
-local zip = require("@eryx/compression/zip")
+local zip = require("@eryx/archive/zip")
 local hash = require("@eryx/crypto/hazmat/hash")
 local json = require("@eryx/data/json")
 local hex = require("@eryx/encoding/hex")

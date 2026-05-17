@@ -1,4 +1,4 @@
-local zip = require("@eryx/compression/zip")
+local zip = require("@eryx/archive/zip")
 local test = require("@eryx/test")
 local hex = require("@eryx/encoding/hex")
 local http = require("@eryx/http")

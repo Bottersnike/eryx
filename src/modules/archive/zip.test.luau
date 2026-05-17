@@ -1,5 +1,5 @@
 local test = require("@eryx/test")
-local zip = require("@eryx/compression/zip")
+local zip = require("@eryx/archive/zip")
 
 local suite = test.Suite.new("zip")
 

@@ -1,7 +1,7 @@
 --!nolint LocalShadow
 -- @ignore
 
-local zip = require("@eryx/compression/zip")
+local zip = require("@eryx/archive/zip")
 local planning = require("../planning")
 local dependency = require("../dependency")
 local json = require("@eryx/data/json")

@@ -38,12 +38,6 @@ end
 local Stream = {}
 Stream.__index = Stream
 
--- Stream satisfies the following, but we cannot annotate this due to `self`:
--- & types.StreamThatCanRead
--- & types.StreamThatCanWrite
--- & types.StreamThatCanSeek
--- & types.StreamThatCanClose
-
 export type Stream = setmetatable<
 	types.StreamThatCanRead & types.StreamThatCanWrite & types.StreamThatCanSeek & types.StreamThatCanClose & {
 		_data: buffer,

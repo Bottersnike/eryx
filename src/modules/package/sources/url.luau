@@ -1,7 +1,7 @@
 --!nolint LocalShadow
 -- @ignore
 
-local zip = require("@eryx/compression/zip")
+local zip = require("@eryx/archive/zip")
 local hash = require("@eryx/crypto/hazmat/hash")
 local hex = require("@eryx/encoding/hex")
 local fs = require("@eryx/fs")
