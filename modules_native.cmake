@@ -400,3 +400,8 @@ endif()
 add_luau_module(serial src/modules/serial.cpp src/modules/serial.luau
     EXTRA_LIBS ${_PLAT_SERIAL_LIBS}
 )
+
+include(vendor/gmp.cmake)
+add_luau_module(number src/modules/number/number.cpp src/modules/number/number.luau
+    EXTRA_LIBS GMP
+)

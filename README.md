@@ -79,6 +79,12 @@ All optional — each defaults to `ON`:
 | `ERYX_USE_SQLITE3`      | SQLite3                         |
 | `ERYX_USE_XML`          | XML (pugixml)                   |
 
+### GMP
+
+GMP takes a long time to compile on windows with MSVC, so pre-build sources are vendored into git. To recompile them, use:
+
+> `cmake -S vendor/gmp -B build-vendor-gmp`
+
 ## License
 
 See individual vendored dependency licenses in [`vendor/`](vendor/).
