@@ -71,7 +71,7 @@ All optional — each defaults to `ON`:
 | Option                  | Description                     |
 | ----------------------- | ------------------------------- |
 | `ERYX_MODULE_GFX`       | Graphics module (SDL3 + WebGPU) |
-| `ERYX_USE_CRYPTOGRAPHY` | Cryptography (MbedTLS)          |
+| `ERYX_USE_CRYPTOGRAPHY` | Cryptography                    |
 | `ERYX_USE_ZLIB`         | zlib / gzip                     |
 | `ERYX_USE_ZSTD`         | Zstandard                       |
 | `ERYX_USE_BROTLI`       | Brotli                          |
