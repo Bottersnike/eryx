@@ -49,7 +49,10 @@ else()
     endif()
 
     ExternalProject_Add(gmp_external
-        URL "https://gmplib.org/download/gmp/gmp-${GMP_VERSION}.tar.xz"
+        URL
+            "https://ftp.gnu.org/gnu/gmp/gmp-${GMP_VERSION}.tar.xz"
+            "https://ftpmirror.gnu.org/gmp/gmp-${GMP_VERSION}.tar.xz"
+            "https://gmplib.org/download/gmp/gmp-${GMP_VERSION}.tar.xz"
         URL_HASH "SHA256=${GMP_SHA256}"
         PREFIX "${GMP_PREFIX}"
 
