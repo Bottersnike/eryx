@@ -57,12 +57,18 @@ export type GlobOptions = MatchOptions & {
 --[=[
 	A compiled glob pattern that can be reused for repeated matching.
 ]=]
-export type Compiled = {
-	--- The original pattern string used for compilation.
-	read pattern: string,
-	--- Match a candidate path against this compiled pattern.
-	read match: (self: Compiled, path: string) -> boolean,
-}
+export type Compiled = setmetatable<
+	{
+		--- The original pattern string used for compilation.
+		read pattern: string,
+	},
+	{
+		__index: {
+			--- Match a candidate path against this compiled pattern.
+			read match: (self: Compiled, path: string) -> boolean,
+		},
+	}
+>
 
 type CharClass = {
 	negated: boolean,

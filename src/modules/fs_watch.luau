@@ -44,30 +44,40 @@ export type WatchOptions = {
 	debounce: number?,
 }
 
-export type FileWatcher = {
-	--- Fires when the watched file changes.
-	--- Receives `(eventType)` where eventType is `"change"` or `"rename"`.
-	changed: Signal<string>,
-	--- Stops the watcher and disconnects all signal handlers.
-	stop: (self: FileWatcher) -> (),
-	--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
-	ref: (self: FileWatcher) -> (),
-	--- Allows the event loop to exit while this watcher is active (the default).
-	unref: (self: FileWatcher) -> (),
-}
+export type FileWatcher = setmetatable<
+	{},
+	{
+		__index: {
+			--- Fires when the watched file changes.
+			--- Receives `(eventType)` where eventType is `"change"` or `"rename"`.
+			changed: Signal<string>,
+			--- Stops the watcher and disconnects all signal handlers.
+			stop: (self: FileWatcher) -> (),
+			--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
+			ref: (self: FileWatcher) -> (),
+			--- Allows the event loop to exit while this watcher is active (the default).
+			unref: (self: FileWatcher) -> (),
+		},
+	}
+>
 
-export type DirWatcher = {
-	--- Fires when any file in the watched directory changes.
-	--- Receives `(filename, eventType)`.  `filename` is the path of the
-	--- changed file relative to the watched directory.
-	changed: Signal<string, string>,
-	--- Stops the watcher and disconnects all signal handlers.
-	stop: (self: DirWatcher) -> (),
-	--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
-	ref: (self: DirWatcher) -> (),
-	--- Allows the event loop to exit while this watcher is active (the default).
-	unref: (self: DirWatcher) -> (),
-}
+export type DirWatcher = setmetatable<
+	{},
+	{
+		__index: {
+			--- Fires when any file in the watched directory changes.
+			--- Receives `(filename, eventType)`.  `filename` is the path of the
+			--- changed file relative to the watched directory.
+			changed: Signal<string, string>,
+			--- Stops the watcher and disconnects all signal handlers.
+			stop: (self: DirWatcher) -> (),
+			--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
+			ref: (self: DirWatcher) -> (),
+			--- Allows the event loop to exit while this watcher is active (the default).
+			unref: (self: DirWatcher) -> (),
+		},
+	}
+>
 
 --- Watches a single file for changes.
 --- Returns a `FileWatcher` whose `changed` signal fires with `(eventType)`.

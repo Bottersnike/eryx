@@ -314,6 +314,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	-- ── Result accumulators ──────────────────────────────────────────────
 	local typeDocs: { TypeDoc } = {}
 	local functions: { FuncDoc } = {}
+	local generatedFunctions: { FuncDoc } = {}
 	local constants: { ConstDoc } = {}
 	local typeAliasNodes: { [string]: luau.AstType } = {}
 
@@ -588,8 +589,9 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		local rawOverloads = {}
 		local allKnownParams: { [string]: boolean } = { ["..."] = true }
+		local keepSelf = name:match("^__") ~= nil
 		for _, overloadNode in overloadNodes do
-			local rawSig = sig.extractTypeFuncSig(overloadNode)
+			local rawSig = sig.extractTypeFuncSig(overloadNode, keepSelf)
 			table.insert(rawOverloads, {
 				node = overloadNode,
 				rawSig = rawSig,
@@ -662,7 +664,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		location: luau.Location,
 		doc: string?
 	)
-		local funcSig = sig.extractFuncSig(funcNode)
+		local funcSig = sig.extractFuncSig(funcNode, name:match("^__") ~= nil)
 		local knownParams = buildKnownParams(funcSig)
 
 		local parsed = if doc then parseDocTags(doc, knownParams) else nil
@@ -771,6 +773,35 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		return nil
 	end
 
+	local function extractIndexTargetFromTableExpr(val: luau.AstExpr): string?
+		local tbl = extractTableExpr(val)
+		if not tbl then
+			return nil
+		end
+
+		for _, item in tbl.items do
+			if item.kind ~= "Record" or not item.key then
+				continue
+			end
+
+			local keyName: string? = nil
+			if item.key.type == "ExprConstantString" then
+				keyName = (item.key :: luau.ExprConstantString).value
+			elseif item.key.type == "ExprGlobal" then
+				keyName = (item.key :: luau.ExprGlobal).name
+			elseif item.key.type == "ExprLocal" then
+				local loc = item.key :: luau.ExprLocal
+				keyName = loc["local"] and loc["local"].name
+			end
+
+			if keyName == "__index" then
+				return exprToPath(item.value)
+			end
+		end
+
+		return nil
+	end
+
 	local function buildTypeMembersFromTable(
 		tbl: luau.TypeTable,
 		findMemberDoc: (number) -> string?,
@@ -824,13 +855,20 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		return into
 	end
 
+	local function appendGeneratedFunction(member: FuncDoc)
+		table.insert(generatedFunctions, member)
+	end
+
 	local function collectExpandedTypeMembers(
 		typeNode: luau.AstType?,
 		findMemberDoc: (number) -> string?,
-		ownerName: string
+		ownerName: string,
+		expandLocalAliases: boolean?,
+		seenAliases: { [string]: boolean }?
 	): ({ FuncDoc }?, { string }?)
 		local collectedMembers: { FuncDoc }? = nil
 		local referencedTypes: { string }? = nil
+		local visitedAliases = seenAliases or {}
 
 		local function visit(node: luau.AstType?)
 			if not node then
@@ -855,12 +893,108 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				elseif ref.name ~= "typeof" then
 					local refName = if ref.prefix then ref.prefix .. "." .. ref.name else ref.name
 					referencedTypes = appendUniqueStrings(referencedTypes, { refName })
+					if
+						expandLocalAliases
+						and not ref.prefix
+						and typeAliasNodes[ref.name]
+						and not visitedAliases[ref.name]
+					then
+						visitedAliases[ref.name] = true
+						visit(typeAliasNodes[ref.name])
+						visitedAliases[ref.name] = nil
+					end
 				end
 			end
 		end
 
 		visit(typeNode)
 		return collectedMembers, referencedTypes
+	end
+
+	local function extractInlineMetatableMembers(
+		tbl: luau.TypeTable,
+		findMemberDoc: (number) -> string?,
+		ownerName: string
+	): ({ FuncDoc }?, { FuncDoc }?)
+		local classMembers: { FuncDoc }? = nil
+		local metamethodsList: { FuncDoc }? = nil
+
+		for _, prop in tbl.props do
+			if prop.name == "__index" then
+				local indexMembers = select(1, collectExpandedTypeMembers(prop.type, findMemberDoc, ownerName, true))
+				if indexMembers and #indexMembers > 0 then
+					classMembers = appendMemberList(classMembers, indexMembers)
+				else
+					local member = members.buildMember(prop, findMemberDoc, ownerName)
+					if member then
+						metamethodsList = appendMemberList(metamethodsList, { member })
+					end
+				end
+			elseif prop.name:match("^__") then
+				local member = members.buildMember(prop, findMemberDoc, ownerName)
+				if member then
+					metamethodsList = appendMemberList(metamethodsList, { member })
+				end
+			end
+		end
+
+		return classMembers, metamethodsList
+	end
+
+	local function typeResolvesToClass(typeNode: luau.AstType?, seenAliases: { [string]: boolean }?): boolean
+		if not typeNode then
+			return false
+		end
+
+		local implTable, _, isInlineClass = classDetection.detectClassPattern(typeNode)
+		if implTable or isInlineClass then
+			return true
+		end
+
+		local visitedAliases = seenAliases or {}
+		if typeNode.type == "TypeGroup" then
+			return typeResolvesToClass((typeNode :: luau.TypeGroup).inner, visitedAliases)
+		end
+		if typeNode.type == "TypeIntersection" then
+			for _, part in (typeNode :: luau.TypeIntersection).types do
+				if typeResolvesToClass(part, visitedAliases) then
+					return true
+				end
+			end
+			return false
+		end
+		if typeNode.type == "TypeReference" then
+			local ref = typeNode :: luau.TypeReference
+			if not ref.prefix and typeAliasNodes[ref.name] and not visitedAliases[ref.name] then
+				visitedAliases[ref.name] = true
+				local resolved = typeResolvesToClass(typeAliasNodes[ref.name], visitedAliases)
+				visitedAliases[ref.name] = nil
+				return resolved
+			end
+		end
+
+		return false
+	end
+
+	local function processTypedNamespaceMembers(owner: string?, typeNode: luau.AstType?): boolean
+		if not owner or not typeNode or typeResolvesToClass(typeNode) then
+			return false
+		end
+
+		local namespaceMembers = select(1, collectExpandedTypeMembers(typeNode, findDocComment, owner, true))
+		if not namespaceMembers or #namespaceMembers == 0 then
+			return false
+		end
+
+		local inserted = false
+		for _, member in namespaceMembers do
+			if member.params then
+				appendGeneratedFunction(member)
+				inserted = true
+			end
+		end
+
+		return inserted
 	end
 
 	local function rebuildTypeSignature(typeDoc: TypeDoc)
@@ -980,32 +1114,51 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	local classImplDocs: { [string]: string } = {}
+	local classImplIndexTables: { [string]: string } = {}
 	for _, stat in result.root.body do
 		if stat.type ~= "StatLocal" then
+			if stat.type == "StatAssign" then
+				local assignStat = stat :: luau.StatAssign
+				if assignStat.vars and assignStat.values then
+					for i, var in assignStat.vars do
+						if var.type ~= "ExprIndexName" then
+							continue
+						end
+
+						local idx = var :: luau.ExprIndexName
+						if idx.index ~= "__index" then
+							continue
+						end
+
+						local ownerName = exprToPath(idx.expr)
+						local targetName = exprToPath(assignStat.values[i])
+						if ownerName and targetName then
+							classImplIndexTables[ownerName] = targetName
+						end
+					end
+				end
+			end
 			continue
 		end
 
 		local doc = findDocComment(stat.location.beginline)
-		if not doc then
-			continue
-		end
-
 		local localStat = stat :: luau.StatLocal
 		if not localStat.vars or not localStat.values then
 			continue
 		end
 
 		for i, varNode in localStat.vars do
-			if i ~= 1 then
-				continue
-			end
-
 			local val: luau.AstExpr? = localStat.values[i]
 			if not val or not varNode.name then
 				continue
 			end
 
-			if extractTableExpr(val) then
+			local indexTarget = extractIndexTargetFromTableExpr(val)
+			if indexTarget then
+				classImplIndexTables[varNode.name] = indexTarget
+			end
+
+			if i == 1 and doc and extractTableExpr(val) then
 				classImplDocs[varNode.name] = mergeDocText(classImplDocs[varNode.name], doc) :: string
 			end
 		end
@@ -1073,15 +1226,9 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				local p2 = unwrapTypeOrPack(params[2])
 				if p2 and p2.type == "TypeTable" then
 					local tbl = p2 :: luau.TypeTable
-					if tbl.props then
-						metamethods = {}
-						for _, prop in tbl.props do
-							local member = members.buildMember(prop, findMemberDoc, stat.name)
-							if member then
-								table.insert(metamethods :: { FuncDoc }, member)
-							end
-						end
-					end
+					local classMembers, operatorMembers = extractInlineMetatableMembers(tbl, findMemberDoc, stat.name)
+					typeMembers = appendMemberList(typeMembers, classMembers)
+					metamethods = appendMemberList(metamethods, operatorMembers)
 				end
 			end
 		end
@@ -1132,6 +1279,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			then "class"
 			elseif typeMembers then "table"
 			else "alias"
+		local classMemberTable = if implTable then (classImplIndexTables[implTable] or implTable) else nil
 
 		local typeDoc: TypeDoc = {
 			name = stat.name,
@@ -1153,6 +1301,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			generics = generics,
 			parsedDoc = parsed,
 			classImplTable = implTable,
+			classMemberTable = classMemberTable,
 			classFieldsType = fieldsType,
 			metamethods = metamethods,
 			aliasedTypeNode = aliasedType,
@@ -1215,6 +1364,9 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 						if
 							processTypedOverloads(varName, nil, stat.location, annotation, if i == 1 then doc else nil)
 						then
+							continue
+						end
+						if processTypedNamespaceMembers(varName, annotation) then
 							continue
 						end
 					end
@@ -1281,6 +1433,10 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 								if i == 1 then doc else nil
 							)
 						then
+							continue
+						end
+						local namespaceOwner = exprToPath(var)
+						if processTypedNamespaceMembers(namespaceOwner, annotation) then
 							continue
 						end
 					end
@@ -1353,19 +1509,46 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 	end
 
+	if #generatedFunctions > 0 then
+		local seenGenerated: { [string]: boolean } = {}
+		for _, func in functions do
+			local key = (func.owner or "") .. "|" .. tostring(func.isMethod) .. "|" .. func.name
+			seenGenerated[key] = true
+		end
+		for _, func in generatedFunctions do
+			local key = (func.owner or "") .. "|" .. tostring(func.isMethod) .. "|" .. func.name
+			if not seenGenerated[key] then
+				seenGenerated[key] = true
+				table.insert(functions, func)
+			end
+		end
+	end
+
 	-- ── Post-processing: move functions into their owner class ───────────
 	local classTypeByName: { [string]: TypeDoc } = {}
+	local classTypeByMemberTable: { [string]: TypeDoc } = {}
 	for _, t in typeDocs do
 		if t.classImplTable then
 			classTypeByName[t.classImplTable] = t
+		end
+		if t.classMemberTable then
+			classTypeByMemberTable[t.classMemberTable] = t
 		end
 	end
 
 	local remainingFunctions: { FuncDoc } = {}
 	for _, f in functions do
-		local ownerType = if f.owner then classTypeByName[f.owner] else nil
-		if ownerType and ownerType.members then
-			table.insert(ownerType.members :: { FuncDoc }, f)
+		local metaOwnerType = if f.owner then classTypeByName[f.owner] else nil
+		local memberOwnerType = if f.owner then classTypeByMemberTable[f.owner] else nil
+		if metaOwnerType and f.name:match("^__") then
+			if not metaOwnerType.metamethods then
+				metaOwnerType.metamethods = {}
+			end
+			table.insert(metaOwnerType.metamethods :: { FuncDoc }, f)
+		elseif memberOwnerType and memberOwnerType.members and not f.name:match("^__") then
+			table.insert(memberOwnerType.members :: { FuncDoc }, f)
+		elseif metaOwnerType or memberOwnerType then
+			-- Ignore helper methods that live on the metatable itself rather than under __index.
 		else
 			table.insert(remainingFunctions, f)
 		end

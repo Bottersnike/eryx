@@ -41,14 +41,14 @@ local _cam = require("@eryx/crypto/hazmat/_crypto").camellia
 
 export type Mode = "cbc" | "ctr" | "gcm"
 export type Operation = "encrypt" | "decrypt"
-export type Context = {
+export type Context = setmetatable<{}, { __index: {
 	update: (self: Context, data: buffer) -> buffer,
 	updateAAD: (self: Context, aad: buffer) -> (),
 	setTag: (self: Context, tag: buffer) -> (),
 	getTag: (self: Context) -> buffer,
 	final: (self: Context) -> buffer,
 	close: (self: Context) -> (),
-}
+} }>
 
 local camellia = {}
 

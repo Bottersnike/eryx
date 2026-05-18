@@ -86,50 +86,50 @@ end
 --[=[
 	A streaming deflate compressor. Feed data incrementally with `write`,
 	then call `finish` to flush remaining output and close the stream.
-
-	@class Deflate
 ]=]
-export type Deflate = {
-	--[=[
-		Compresses a chunk of input data. Returns compressed output (may be empty
-		if zlib is buffering). Use flush constants (FLUSH_SYNC, FLUSH_FULL) to
-		force output.
-		@param data buffer -- input bytes to compress
-		@param flush number? -- flush mode (FLUSH_NO, FLUSH_SYNC, FLUSH_FULL)
-		@return buffer -- compressed output (may be empty)
-	]=]
-	write: (self: Deflate, data: buffer, flush: number?) -> buffer,
-	--[=[
-		Finishes the stream: flushes all remaining data and closes the compressor.
-		@return buffer -- final compressed output
-	]=]
-	finish: (self: Deflate) -> buffer,
-	--[=[
-		Closes the stream without finishing, freeing resources.
-	]=]
-	close: (self: Deflate) -> (),
-}
+export type Deflate = setmetatable<{}, {
+	__index: {
+		--[=[
+			Compresses a chunk of input data. Returns compressed output (may be empty
+			if zlib is buffering). Use flush constants (FLUSH_SYNC, FLUSH_FULL) to
+			force output.
+			@param data buffer -- input bytes to compress
+			@param flush number? -- flush mode (FLUSH_NO, FLUSH_SYNC, FLUSH_FULL)
+			@return buffer -- compressed output (may be empty)
+		]=]
+		write: (self: Deflate, data: buffer, flush: number?) -> buffer,
+		--[=[
+			Finishes the stream: flushes all remaining data and closes the compressor.
+			@return buffer -- final compressed output
+		]=]
+		finish: (self: Deflate) -> buffer,
+		--[=[
+			Closes the stream without finishing, freeing resources.
+		]=]
+		close: (self: Deflate) -> (),
+	},
+}>
 
 --[=[
 	A streaming inflate decompressor. Feed compressed chunks with `write`;
 	the second return value indicates when the stream is complete.
-
-	@class Inflate
 ]=]
-export type Inflate = {
-	--[=[
-		Decompresses a chunk of compressed data. Returns decompressed output
-		and a boolean indicating whether the stream has ended.
-		@param data buffer -- compressed bytes
-		@return buffer -- decompressed output
-		@return boolean -- true when the stream is fully decompressed
-	]=]
-	write: (self: Inflate, data: buffer) -> (buffer, boolean),
-	--[=[
-		Closes the stream, freeing resources.
-	]=]
-	close: (self: Inflate) -> (),
-}
+export type Inflate = setmetatable<{}, {
+	__index: {
+		--[=[
+			Decompresses a chunk of compressed data. Returns decompressed output
+			and a boolean indicating whether the stream has ended.
+			@param data buffer -- compressed bytes
+			@return buffer -- decompressed output
+			@return boolean -- true when the stream is fully decompressed
+		]=]
+		write: (self: Inflate, data: buffer) -> (buffer, boolean),
+		--[=[
+			Closes the stream, freeing resources.
+		]=]
+		close: (self: Inflate) -> (),
+	},
+}>
 
 --[=[
 	Creates a streaming deflate compressor.

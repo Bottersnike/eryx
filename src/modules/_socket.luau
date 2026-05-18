@@ -22,236 +22,242 @@
 
 local _socket = {}
 
-export type Socket = {
-	--- Stream capability tag.
-	read readable: true,
-	--- Stream capability tag.
-	read writable: true,
-	--- `true` if the socket is closed.
-	read closed: boolean?,
+export type Socket = setmetatable<
+	{
+		--- Stream capability tag.
+		read readable: true,
+		--- Stream capability tag.
+		read writable: true,
+		--- `true` if the socket is closed.
+		read closed: boolean?,
+	},
+	{
+		__index: {
 
-	--[=[
-		Binds the socket to a local address and port.
+			--[=[
+				Binds the socket to a local address and port.
 
-		Must be called before [[Socket.listen]] for server sockets. Use host
-		`"0.0.0.0"` or `""` to bind to all interfaces.
+				Must be called before [[Socket.listen]] for server sockets. Use host
+				`"0.0.0.0"` or `""` to bind to all interfaces.
 
-		@param host The local address to bind to.
-		@param port The port number to bind to.
-	]=]
-	bind: (self: Socket, host: string, port: number) -> (),
+				@param host The local address to bind to.
+				@param port The port number to bind to.
+			]=]
+			bind: (self: Socket, host: string, port: number) -> (),
 
-	--[=[
-		Starts listening for incoming connections.
+			--[=[
+				Starts listening for incoming connections.
 
-		The socket must have been [[Socket.bind|bound]] first. After calling
-		this, use [[Socket.accept]] to accept individual connections.
+				The socket must have been [[Socket.bind|bound]] first. After calling
+				this, use [[Socket.accept]] to accept individual connections.
 
-		@param backlog Maximum number of queued connections.  Defaults to
-			a system-defined value (usually 128) when omitted.
-	]=]
-	listen: (self: Socket, backlog: number?) -> (),
+				@param backlog Maximum number of queued connections.  Defaults to
+					a system-defined value (usually 128) when omitted.
+			]=]
+			listen: (self: Socket, backlog: number?) -> (),
 
-	--[=[
-		Accepts an incoming connection, returning a new socket for
-		the client along with the remote address and port.
+			--[=[
+				Accepts an incoming connection, returning a new socket for
+				the client along with the remote address and port.
 
-		:::caution
-		This call **blocks** the current thread until a connection arrives
-		(unless the socket is set to non-blocking mode via
-		[[Socket.setblocking]]).
-		:::
+				:::caution
+				This call **blocks** the current thread until a connection arrives
+				(unless the socket is set to non-blocking mode via
+				[[Socket.setblocking]]).
+				:::
 
-		A nil return value indicates a non-blocking operation that would
-		have blocked.
+				A nil return value indicates a non-blocking operation that would
+				have blocked.
 
-		@return Socket -- A new socket connected to the client.
-		@return string -- The remote IP address.
-		@return number -- The remote port.
-	]=]
-	accept: (self: Socket) -> (Socket, string, number) | (self: Socket) -> (nil, nil, nil),
+				@return Socket -- A new socket connected to the client.
+				@return string -- The remote IP address.
+				@return number -- The remote port.
+			]=]
+			accept: (self: Socket) -> (Socket, string, number) | (self: Socket) -> (nil, nil, nil),
 
-	--[=[
-		Opens a connection to a remote host.
+			--[=[
+				Opens a connection to a remote host.
 
-		For TCP sockets this performs the full three-way handshake. In
-		non-blocking mode the call may return before the connection is
-		fully established.
+				For TCP sockets this performs the full three-way handshake. In
+				non-blocking mode the call may return before the connection is
+				fully established.
 
-		@param host The remote address to connect to.
-		@param port The remote port number.
-	]=]
-	connect: (self: Socket, host: string, port: number) -> (),
+				@param host The remote address to connect to.
+				@param port The remote port number.
+			]=]
+			connect: (self: Socket, host: string, port: number) -> (),
 
-	--[=[
-		Closes the socket, releasing all associated OS resources.
+			--[=[
+				Closes the socket, releasing all associated OS resources.
 
-		After closing, no further operations may be performed on this socket.
-		It is safe to call `close` multiple times.
-	]=]
-	close: (self: Socket) -> (),
+				After closing, no further operations may be performed on this socket.
+				It is safe to call `close` multiple times.
+			]=]
+			close: (self: Socket) -> (),
 
-	--[=[
-		Shuts down one or both halves of the connection without closing the
-		socket descriptor.
+			--[=[
+				Shuts down one or both halves of the connection without closing the
+				socket descriptor.
 
-		Use `SHUT_RD` (0) to stop reads, `SHUT_WR` (1) to stop writes,
-		or `SHUT_RDWR` (2) to stop both.
+				Use `SHUT_RD` (0) to stop reads, `SHUT_WR` (1) to stop writes,
+				or `SHUT_RDWR` (2) to stop both.
 
-		@param how The shutdown mode - one of `SHUT_RD`, `SHUT_WR`, or `SHUT_RDWR`.
-	]=]
-	shutdown: (self: Socket, how: number) -> (),
+				@param how The shutdown mode - one of `SHUT_RD`, `SHUT_WR`, or `SHUT_RDWR`.
+			]=]
+			shutdown: (self: Socket, how: number) -> (),
 
-	--[=[
-		Sends data over the socket. Returns the number of bytes actually
-		sent, which may be less than the full buffer length.
+			--[=[
+				Sends data over the socket. Returns the number of bytes actually
+				sent, which may be less than the full buffer length.
 
-		For guaranteed delivery of the entire buffer, use [[Socket.sendall]]
-		instead.
+				For guaranteed delivery of the entire buffer, use [[Socket.sendall]]
+				instead.
 
-		A nil return value indicates a non-blocking operation that would
-		have blocked.
+				A nil return value indicates a non-blocking operation that would
+				have blocked.
 
-		@param data The data to send.
-		@return number -- Number of bytes sent.
-	]=]
-	send: (self: Socket, data: string | buffer) -> number?,
+				@param data The data to send.
+				@return number -- Number of bytes sent.
+			]=]
+			send: (self: Socket, data: string | buffer) -> number?,
 
-	--[=[
-		Sends all data in the buffer, retrying internally until every byte
-		has been transmitted or an error occurs.
+			--[=[
+				Sends all data in the buffer, retrying internally until every byte
+				has been transmitted or an error occurs.
 
-		In blocking operation, this function always returns `true`.
+				In blocking operation, this function always returns `true`.
 
-		In non-blocking operation, this function returns `false` is the
-		operation would have blocked.
+				In non-blocking operation, this function returns `false` is the
+				operation would have blocked.
 
-		@param data The data to send.
-	]=]
-	sendAll: (self: Socket, data: string | buffer) -> boolean,
+				@param data The data to send.
+			]=]
+			sendAll: (self: Socket, data: string | buffer) -> boolean,
 
-	--[=[
-		Sends data to a specific destination address (UDP).
+			--[=[
+				Sends data to a specific destination address (UDP).
 
-		Primarily used with `SOCK_DGRAM` sockets. Returns the number of
-		bytes actually sent.
+				Primarily used with `SOCK_DGRAM` sockets. Returns the number of
+				bytes actually sent.
 
-		A nil return value indicates a non-blocking operation that would
-		have blocked.
+				A nil return value indicates a non-blocking operation that would
+				have blocked.
 
-		@param data The datagram payload to send.
-		@param host The destination address.
-		@param port The destination port.
-		@return number -- Number of bytes sent.
-	]=]
-	sendTo: (self: Socket, data: string | buffer, host: string, port: number) -> number?,
+				@param data The datagram payload to send.
+				@param host The destination address.
+				@param port The destination port.
+				@return number -- Number of bytes sent.
+			]=]
+			sendTo: (self: Socket, data: string | buffer, host: string, port: number) -> number?,
 
-	--[=[
-		Receives up to `bufsize` bytes from the socket.
+			--[=[
+				Receives up to `bufsize` bytes from the socket.
 
-		Returns a buffer containing the received data, which may be shorter
-		than `bufsize`. An empty buffer (length 0) typically indicates the
-		remote end has closed the connection.
+				Returns a buffer containing the received data, which may be shorter
+				than `bufsize`. An empty buffer (length 0) typically indicates the
+				remote end has closed the connection.
 
-		A nil return value indicates a non-blocking operation that would
-		have blocked.
+				A nil return value indicates a non-blocking operation that would
+				have blocked.
 
-		@param bufsize Maximum number of bytes to receive.
-		@return buffer -- The received data.
-	]=]
-	recv: (self: Socket, bufsize: number) -> buffer?,
+				@param bufsize Maximum number of bytes to receive.
+				@return buffer -- The received data.
+			]=]
+			recv: (self: Socket, bufsize: number) -> buffer?,
 
-	--[=[
-		Receives a datagram of up to `bufsize` bytes along with the
-		sender's address (UDP).
+			--[=[
+				Receives a datagram of up to `bufsize` bytes along with the
+				sender's address (UDP).
 
-		A nil return value indicates a non-blocking operation that would
-		have blocked.
+				A nil return value indicates a non-blocking operation that would
+				have blocked.
 
-		@param bufsize Maximum number of bytes to receive.
-		@return buffer -- The received datagram.
-		@return string -- The sender's IP address.
-		@return number -- The sender's port.
-	]=]
-	recvFrom: (self: Socket, bufsize: number) -> (buffer, string, number)
-		| (self: Socket, bufsize: number) -> (nil, nil, nil),
+				@param bufsize Maximum number of bytes to receive.
+				@return buffer -- The received datagram.
+				@return string -- The sender's IP address.
+				@return number -- The sender's port.
+			]=]
+			recvFrom: (self: Socket, bufsize: number) -> (buffer, string, number)
+				| (self: Socket, bufsize: number) -> (nil, nil, nil),
 
-	--[=[
-		Sets a socket option.
+			--[=[
+				Sets a socket option.
 
-		Common combinations:
-		- `SOL_SOCKET, SO_REUSEADDR, true` - allow port reuse
-		- `SOL_SOCKET, SO_KEEPALIVE, true` - enable keep-alive
-		- `IPPROTO_TCP, TCP_NODELAY, true` - disable Nagle's algorithm
+				Common combinations:
+				- `SOL_SOCKET, SO_REUSEADDR, true` - allow port reuse
+				- `SOL_SOCKET, SO_KEEPALIVE, true` - enable keep-alive
+				- `IPPROTO_TCP, TCP_NODELAY, true` - disable Nagle's algorithm
 
-		@param level The protocol level (e.g. `SOL_SOCKET`, `IPPROTO_TCP`).
-		@param optname The option identifier.
-		@param value The value to set - a number or boolean depending on the option.
-	]=]
-	setSockOpt: (self: Socket, level: number, optname: number, value: number | boolean) -> (),
+				@param level The protocol level (e.g. `SOL_SOCKET`, `IPPROTO_TCP`).
+				@param optname The option identifier.
+				@param value The value to set - a number or boolean depending on the option.
+			]=]
+			setSockOpt: (self: Socket, level: number, optname: number, value: number | boolean) -> (),
 
-	--[=[
-		Gets the current value of a socket option.
+			--[=[
+				Gets the current value of a socket option.
 
-		@param level The protocol level (e.g. `SOL_SOCKET`, `IPPROTO_TCP`).
-		@param optname The option identifier.
-		@return number -- The current option value.
-	]=]
-	getSockOpt: (self: Socket, level: number, optname: number) -> number,
+				@param level The protocol level (e.g. `SOL_SOCKET`, `IPPROTO_TCP`).
+				@param optname The option identifier.
+				@return number -- The current option value.
+			]=]
+			getSockOpt: (self: Socket, level: number, optname: number) -> number,
 
-	--[=[
-		Switches the socket between blocking and non-blocking mode.
+			--[=[
+				Switches the socket between blocking and non-blocking mode.
 
-		In non-blocking mode, operations like [[Socket.recv]] and
-		[[Socket.send]] will raise an error instead of waiting when no
-		data is available.
+				In non-blocking mode, operations like [[Socket.recv]] and
+				[[Socket.send]] will raise an error instead of waiting when no
+				data is available.
 
-		@param flag `true` for blocking, `false` for non-blocking.
-	]=]
-	setBlocking: (self: Socket, flag: boolean) -> (),
+				@param flag `true` for blocking, `false` for non-blocking.
+			]=]
+			setBlocking: (self: Socket, flag: boolean) -> (),
 
-	--[=[
-		Sets a timeout (in seconds) for blocking socket operations.
+			--[=[
+				Sets a timeout (in seconds) for blocking socket operations.
 
-		Pass `nil` or `0` to disable the timeout (wait indefinitely).
+				Pass `nil` or `0` to disable the timeout (wait indefinitely).
 
-		@param seconds Timeout duration, or `nil` for no timeout.
-	]=]
-	setTimeout: (self: Socket, seconds: number?) -> (),
+				@param seconds Timeout duration, or `nil` for no timeout.
+			]=]
+			setTimeout: (self: Socket, seconds: number?) -> (),
 
-	--[=[
-		Returns the remote address and port of the connected peer.
+			--[=[
+				Returns the remote address and port of the connected peer.
 
-		@return string -- The remote IP address.
-		@return number -- The remote port.
-	]=]
-	getPeerName: (self: Socket) -> (string, number),
+				@return string -- The remote IP address.
+				@return number -- The remote port.
+			]=]
+			getPeerName: (self: Socket) -> (string, number),
 
-	--[=[
-		Returns the local address and port the socket is bound to.
+			--[=[
+				Returns the local address and port the socket is bound to.
 
-		@return string -- The local IP address.
-		@return number -- The local port.
-	]=]
-	getSockName: (self: Socket) -> (string, number),
+				@return string -- The local IP address.
+				@return number -- The local port.
+			]=]
+			getSockName: (self: Socket) -> (string, number),
 
-	--[=[
-		Returns the underlying OS file descriptor / handle number for
-		this socket. Useful for advanced I/O multiplexing.
+			--[=[
+				Returns the underlying OS file descriptor / handle number for
+				this socket. Useful for advanced I/O multiplexing.
 
-		@return number -- The file descriptor.
-	]=]
-	fileNo: (self: Socket) -> number,
+				@return number -- The file descriptor.
+			]=]
+			fileNo: (self: Socket) -> number,
 
-	-- Stream-compatible aliases
-	read: (self: Socket, size: number) -> string?,
-	readSync: (self: Socket, size: number) -> string?,
-	readBuffer: (self: Socket, size: number) -> buffer?,
-	readBufferSync: (self: Socket, size: number) -> buffer?,
-	write: (self: Socket, data: string | buffer) -> number?,
-	writeSync: (self: Socket, data: string | buffer) -> number?,
-	closeSync: (self: Socket) -> (),
-}
+			-- Stream-compatible aliases
+			read: (self: Socket, size: number) -> string?,
+			readSync: (self: Socket, size: number) -> string?,
+			readBuffer: (self: Socket, size: number) -> buffer?,
+			readBufferSync: (self: Socket, size: number) -> buffer?,
+			write: (self: Socket, data: string | buffer) -> number?,
+			writeSync: (self: Socket, data: string | buffer) -> number?,
+			closeSync: (self: Socket) -> (),
+		},
+	}
+>
 
 --[=[
 	Result record from [[getAddrInfo]], representing a single resolved

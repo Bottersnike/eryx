@@ -56,7 +56,7 @@ local function unwrapTypeOrPack(value: any): any
 end
 
 -- Extract raw signature data from an ExprFunction AST node.
-local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
+local function extractFuncSig(funcNode: luau.ExprFunction, keepSelf: boolean?): RawFuncSig
 	local params: { string } = {}
 	local paramNames: { string? } = {}
 	local paramTypeParts: { { SignaturePart }? } = {}
@@ -75,7 +75,7 @@ local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	if funcNode.args then
 		local startIdx = 1
 		-- Explicit self parameter (dot syntax with self)
-		if not isMethod and #funcNode.args > 0 and funcNode.args[1].name == "self" then
+		if not keepSelf and not isMethod and #funcNode.args > 0 and funcNode.args[1].name == "self" then
 			isMethod = true
 			if funcNode.args[1].annotation then
 				selfType = td.describeType(funcNode.args[1].annotation)
@@ -157,7 +157,7 @@ local function extractFuncSig(funcNode: luau.ExprFunction): RawFuncSig
 	}
 end
 
-local function extractTypeFuncSig(funcNode: luau.TypeFunction): RawFuncSig
+local function extractTypeFuncSig(funcNode: luau.TypeFunction, keepSelf: boolean?): RawFuncSig
 	local params: { string } = {}
 	local paramNames: { string? } = {}
 	local paramTypeParts: { { SignaturePart }? } = {}
@@ -168,7 +168,7 @@ local function extractTypeFuncSig(funcNode: luau.TypeFunction): RawFuncSig
 	local argTypes, argTail = normalizeTypeList(funcNode.argTypes)
 	local argNames = funcNode.argNames or ({} :: { any })
 	local startIdx = 1
-	if #argNames > 0 then
+	if not keepSelf and #argNames > 0 then
 		local first = argNames[1]
 		local firstName = if type(first) == "table" then first.name else first
 		if firstName == "self" then
@@ -262,6 +262,147 @@ local function formatGenerics(generics: { any }?): string
 	return "<" .. table.concat(normalized, ", ") .. ">"
 end
 
+local METAMETHOD_OPERATORS: { [string]: { kind: string, symbol: string } } = {
+	__add = { kind = "binary", symbol = "+" },
+	__sub = { kind = "binary", symbol = "-" },
+	__mul = { kind = "binary", symbol = "*" },
+	__div = { kind = "binary", symbol = "/" },
+	__idiv = { kind = "binary", symbol = "//" },
+	__mod = { kind = "binary", symbol = "%" },
+	__pow = { kind = "binary", symbol = "^" },
+	__concat = { kind = "binary", symbol = ".." },
+	__eq = { kind = "binary", symbol = "==" },
+	__lt = { kind = "binary", symbol = "<" },
+	__le = { kind = "binary", symbol = "<=" },
+	__band = { kind = "binary", symbol = "&" },
+	__bor = { kind = "binary", symbol = "|" },
+	__bxor = { kind = "binary", symbol = "~" },
+	__shl = { kind = "binary", symbol = "<<" },
+	__shr = { kind = "binary", symbol = ">>" },
+	__unm = { kind = "unary_prefix", symbol = "-" },
+	__bnot = { kind = "unary_prefix", symbol = "~" },
+	__len = { kind = "unary_prefix", symbol = "#" },
+}
+
+local function metamethodInfo(name: string): { kind: string, symbol: string }?
+	return METAMETHOD_OPERATORS[name]
+end
+
+local function appendReturnParts(parts: { SignaturePart }, retParts: { SignaturePart }?)
+	table.insert(parts, tp(" → ", false, "punct"))
+	if retParts and #retParts > 0 then
+		tpExtend(parts, retParts)
+	else
+		table.insert(parts, tp("()", false, "punct"))
+	end
+end
+
+local function appendOperandParts(parts: { SignaturePart }, name: string?, typeParts: { SignaturePart }?)
+	local hasName = name ~= nil and name ~= ""
+	local hasType = typeParts ~= nil and #typeParts > 0
+	if hasName or hasType then
+		table.insert(parts, tp("(", false, "punct"))
+	end
+	if hasName then
+		table.insert(parts, tp(name :: string, false, "param"))
+		if hasType then
+			table.insert(parts, tp(": ", false, "punct"))
+		end
+	end
+	if hasType then
+		tpExtend(parts, typeParts :: { SignaturePart })
+	end
+	if hasName or hasType then
+		table.insert(parts, tp(")", false, "punct"))
+	end
+end
+
+local function operandText(name: string?, typedText: string?): string
+	if name and typedText then
+		return "(" .. name .. ": " .. typedText .. ")"
+	end
+	if name then
+		return "(" .. name .. ")"
+	end
+	if typedText then
+		return typedText
+	end
+	return "()"
+end
+
+local function returnSuffix(retStr: string?): string
+	if retStr and retStr ~= "()" then
+		return " → " .. retStr
+	end
+	return " → ()"
+end
+
+local function buildMetamethodParts(
+	name: string,
+	paramNames: { string? },
+	paramTypeParts: { { SignaturePart }? },
+	retParts: { SignaturePart }?
+): { SignaturePart }?
+	local info = metamethodInfo(name)
+	if not info then
+		return nil
+	end
+
+	if info.kind == "binary" and #paramTypeParts >= 2 then
+		local parts: { SignaturePart } = {}
+		appendOperandParts(parts, paramNames[1], paramTypeParts[1])
+		table.insert(parts, tp(" " .. info.symbol .. " ", false, "punct"))
+		appendOperandParts(parts, paramNames[2], paramTypeParts[2])
+		appendReturnParts(parts, retParts)
+		return parts
+	end
+
+	if info.kind == "unary_prefix" and #paramTypeParts >= 1 then
+		local parts: { SignaturePart } = {}
+		table.insert(parts, tp(info.symbol, false, "punct"))
+		appendOperandParts(parts, paramNames[1], paramTypeParts[1])
+		appendReturnParts(parts, retParts)
+		return parts
+	end
+
+	return nil
+end
+
+local function buildMetamethodText(
+	name: string,
+	paramNames: { string? },
+	paramTypes: { string? },
+	retStr: string?
+): string?
+	local info = metamethodInfo(name)
+	if not info then
+		return nil
+	end
+
+	if info.kind == "binary" and #paramTypes >= 2 then
+		return operandText(paramNames[1], paramTypes[1])
+			.. " "
+			.. info.symbol
+			.. " "
+			.. operandText(paramNames[2], paramTypes[2])
+			.. returnSuffix(retStr)
+	end
+
+	if info.kind == "unary_prefix" and #paramTypes >= 1 then
+		return info.symbol .. operandText(paramNames[1], paramTypes[1]) .. returnSuffix(retStr)
+	end
+
+	return nil
+end
+
+local function paramTypeStrings(paramTypeParts: { { SignaturePart }? }): { string? }
+	local out: { string? } = {}
+	for _, parts in paramTypeParts do
+		table.insert(out, if parts then partsToString(parts :: { SignaturePart }) else nil)
+	end
+	return out
+end
+
 -- Build signatureParts (structured token array) for a function.
 local function buildParts(
 	name: string,
@@ -272,6 +413,11 @@ local function buildParts(
 	isMethod: boolean?,
 	generics: { any }?
 ): { SignaturePart }
+	local metamethodParts = buildMetamethodParts(name, paramNames, paramTypeParts, retParts)
+	if metamethodParts then
+		return metamethodParts
+	end
+
 	local parts: { SignaturePart } = {}
 	local normalizedGenerics = normalizeGenerics(generics)
 	if owner then
@@ -387,12 +533,19 @@ end
 local function buildFull(
 	name: string,
 	params: { string },
+	paramNames: { string? },
+	paramTypes: { string? },
 	retStr: string?,
 	parsedDoc: ParsedDoc?,
 	owner: string?,
 	isMethod: boolean?,
 	generics: { string }?
 ): string
+	local metamethodText = buildMetamethodText(name, paramNames, paramTypes, retStr)
+	if metamethodText then
+		return metamethodText
+	end
+
 	local paramDocs: { [string]: string } = {}
 	if parsedDoc then
 		for _, p in parsedDoc.params do
@@ -421,7 +574,7 @@ local function buildFull(
 	-- Compact form when no inline docs
 	if not hasComments then
 		local pfx = if owner then owner .. (if isMethod then ":" else ".") else ""
-		local retSuffix = if retStr and retStr ~= "()" then " \xe2\x86\x92 " .. retStr else " \xe2\x86\x92 ()"
+		local retSuffix = returnSuffix(retStr)
 		local genStr = formatGenerics(generics)
 		return pfx .. name .. genStr .. "(" .. table.concat(params, ", ") .. ")" .. retSuffix
 	end
@@ -502,26 +655,30 @@ end
 
 -- Populate all signature fields on a FuncDoc in one shot.
 local function applySignature(func: FuncDoc, sig: RawFuncSig)
-	-- Compact one-liner
-	local lineParts: { string } = {}
-	if func.owner then
-		table.insert(lineParts, func.owner)
-		table.insert(lineParts, if func.isMethod then ":" else ".")
-	end
-	table.insert(lineParts, func.name)
-	table.insert(lineParts, formatGenerics(func.generics))
-	table.insert(lineParts, "(" .. table.concat(func.params :: { string }, ", ") .. ")")
-	if func.returnStr and func.returnStr ~= "()" then
-		table.insert(lineParts, " \xe2\x86\x92 " .. func.returnStr)
+	local paramTypes = paramTypeStrings(sig.paramTypeParts)
+	local compactMetamethod = buildMetamethodText(func.name, sig.paramNames, paramTypes, func.returnStr)
+	if compactMetamethod then
+		func.signature = compactMetamethod
 	else
-		table.insert(lineParts, " \xe2\x86\x92 ()")
+		-- Compact one-liner
+		local lineParts: { string } = {}
+		if func.owner then
+			table.insert(lineParts, func.owner)
+			table.insert(lineParts, if func.isMethod then ":" else ".")
+		end
+		table.insert(lineParts, func.name)
+		table.insert(lineParts, formatGenerics(func.generics))
+		table.insert(lineParts, "(" .. table.concat(func.params :: { string }, ", ") .. ")")
+		table.insert(lineParts, returnSuffix(func.returnStr))
+		func.signature = table.concat(lineParts)
 	end
-	func.signature = table.concat(lineParts)
 
 	-- Full multi-line
 	func.signatureFull = buildFull(
 		func.name,
 		func.params :: { string },
+		sig.paramNames,
+		paramTypes,
 		func.returnStr,
 		func.parsedDoc,
 		func.owner,

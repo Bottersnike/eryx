@@ -133,16 +133,8 @@ local function parseRequireCall(expr: luau.AstExpr): string?
 	return (first :: luau.ExprConstantString).value
 end
 
-local function hasMethods(typeDoc: extract.TypeDoc): boolean
-	if not typeDoc.members then
-		return false
-	end
-	for _, member in typeDoc.members do
-		if member.params then
-			return true
-		end
-	end
-	return false
+local function shouldRenderAsClass(typeDoc: extract.TypeDoc): boolean
+	return typeDoc.kind == "class"
 end
 
 local function deepCopy(value: any, seen: { [any]: any }?): any
@@ -436,7 +428,7 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 			continue
 		end
 
-		if hasMethods(typeDoc) then
+		if shouldRenderAsClass(typeDoc) then
 			table.insert(classes, typeDoc)
 		else
 			table.insert(types, typeDoc)
@@ -609,7 +601,7 @@ local function applyReExports(parsedModules: { ParsedModule })
 					local clonedType = deepCopy(sourceType) :: extract.TypeDoc
 					clonedType.name = binding.exportedName
 					clonedType.isPrimaryExport = nil
-					if clonedType.kind == "class" or hasMethods(clonedType) then
+					if shouldRenderAsClass(clonedType) then
 						table.insert(targetModule.classes, clonedType)
 					else
 						table.insert(targetModule.types, clonedType)

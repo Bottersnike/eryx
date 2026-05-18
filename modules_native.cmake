@@ -387,6 +387,7 @@ add_luau_module(serial src/modules/serial.cpp src/modules/serial.luau
 )
 
 include(vendor/gmp.cmake)
-add_luau_module(number src/modules/number/number.cpp src/modules/number/number.luau
-    EXTRA_LIBS GMP
+include(vendor/mpfr.cmake)
+add_luau_module(number src/modules/number.cpp src/modules/number.luau
+    EXTRA_LIBS GMP MPFR
 )

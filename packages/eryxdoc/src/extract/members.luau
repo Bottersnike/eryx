@@ -127,8 +127,9 @@ local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) ->
 		local overloadNodes = collectFunctionTypeOverloads(ty)
 		local rawOverloads = {}
 		local allKnownParams: { [string]: boolean } = { ["..."] = true }
+		local keepSelf = prop.name:match("^__") ~= nil
 		for _, overloadNode in overloadNodes do
-			local overloadSig = signatures.extractTypeFuncSig(overloadNode)
+			local overloadSig = signatures.extractTypeFuncSig(overloadNode, keepSelf)
 			table.insert(rawOverloads, { node = overloadNode, sig = overloadSig })
 			for name in buildKnownParams(overloadSig) do
 				allKnownParams[name] = true

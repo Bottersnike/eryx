@@ -96,70 +96,89 @@ export type ImageMetadata = {
 	},
 }
 
-export type Image = {
-	read width: number,
-	read height: number,
-	read format: PixelFormat,
-	read channels: number,
-	read stride: number,
-	read bounds: Rect,
-	read colorSpace: "srgb" | "linear",
-	read metadata: ImageMetadata,
-	read buffer: buffer,
-	read pixelBuffer: buffer,
-	read closed: boolean,
+export type Image = setmetatable<
+	{
+		read width: number,
+		read height: number,
+		read format: PixelFormat,
+		read channels: number,
+		read stride: number,
+		read bounds: Rect,
+		read colorSpace: "srgb" | "linear",
+		read metadata: ImageMetadata,
+		read buffer: buffer,
+		read pixelBuffer: buffer,
+		read closed: boolean,
+	},
+	{
+		__index: {
+			close: (self: Image) -> (),
 
-	close: (self: Image) -> (),
+			save: (self: Image, path: PathLike, options: EncodeOptions?) -> (),
+			encode: (self: Image, format: ImageFormat, options: EncodeOptions?) -> buffer,
 
-	save: (self: Image, path: PathLike, options: EncodeOptions?) -> (),
-	encode: (self: Image, format: ImageFormat, options: EncodeOptions?) -> buffer,
+			clone: (self: Image) -> Image,
+			crop: ((self: Image, x: number, y: number, width: number, height: number) -> Image)
+				& ((self: Image, rect: Rect) -> Image),
+			subimage: ((self: Image, x: number, y: number, width: number, height: number) -> ImageView)
+				& ((self: Image, rect: Rect) -> ImageView),
 
-	clone: (self: Image) -> Image,
-	crop: ((self: Image, x: number, y: number, width: number, height: number) -> Image)
-		& ((self: Image, rect: Rect) -> Image),
-	subimage: ((self: Image, x: number, y: number, width: number, height: number) -> ImageView)
-		& ((self: Image, rect: Rect) -> ImageView),
+			getPixel: (self: Image, x: number, y: number) -> Color,
+			setPixel: (self: Image, x: number, y: number, color: Color) -> (),
 
-	getPixel: (self: Image, x: number, y: number) -> Color,
-	setPixel: (self: Image, x: number, y: number, color: Color) -> (),
+			convert: (self: Image, format: PixelFormat, options: ConvertOptions?) -> Image,
+			resize: (self: Image, width: number, height: number, options: ResizeOptions?) -> Image,
+			thumbnail: (self: Image, maxWidth: number, maxHeight: number, options: ResizeOptions?) -> Image,
 
-	convert: (self: Image, format: PixelFormat, options: ConvertOptions?) -> Image,
-	resize: (self: Image, width: number, height: number, options: ResizeOptions?) -> Image,
-	thumbnail: (self: Image, maxWidth: number, maxHeight: number, options: ResizeOptions?) -> Image,
+			flipX: (self: Image) -> Image,
+			flipY: (self: Image) -> Image,
+			rotate90: (self: Image) -> Image,
+			rotate180: (self: Image) -> Image,
+			rotate270: (self: Image) -> Image,
 
-	flipX: (self: Image) -> Image,
-	flipY: (self: Image) -> Image,
-	rotate90: (self: Image) -> Image,
-	rotate180: (self: Image) -> Image,
-	rotate270: (self: Image) -> Image,
+			blit: ((self: Image, src: Image, x: number, y: number, options: BlitOptions?) -> ()) & ((
+				self: Image,
+				src: Image,
+				srcRect: Rect,
+				dstX: number,
+				dstY: number,
+				options: BlitOptions?
+			) -> ()),
+			draw: (self: Image, src: Image, srcRect: Rect, dstRect: Rect, options: DrawOptions?) -> (),
 
-	blit: ((self: Image, src: Image, x: number, y: number, options: BlitOptions?) -> ())
-		& ((self: Image, src: Image, srcRect: Rect, dstX: number, dstY: number, options: BlitOptions?) -> ()),
-	draw: (self: Image, src: Image, srcRect: Rect, dstRect: Rect, options: DrawOptions?) -> (),
+			clear: (self: Image, color: Color) -> (),
+			fillRect: ((self: Image, x: number, y: number, width: number, height: number, color: Color) -> ())
+				& ((self: Image, rect: Rect, color: Color) -> ()),
+			strokeRect: ((
+				self: Image,
+				x: number,
+				y: number,
+				width: number,
+				height: number,
+				color: Color,
+				thickness: number?
+			) -> ()) & ((self: Image, rect: Rect, color: Color, thickness: number?) -> ()),
+			line: (
+				self: Image,
+				x1: number,
+				y1: number,
+				x2: number,
+				y2: number,
+				color: Color,
+				options: LineOptions?
+			) -> (),
 
-	clear: (self: Image, color: Color) -> (),
-	fillRect: ((self: Image, x: number, y: number, width: number, height: number, color: Color) -> ())
-		& ((self: Image, rect: Rect, color: Color) -> ()),
-	strokeRect: ((
-		self: Image,
-		x: number,
-		y: number,
-		width: number,
-		height: number,
-		color: Color,
-		thickness: number?
-	) -> ()) & ((self: Image, rect: Rect, color: Color, thickness: number?) -> ()),
-	line: (self: Image, x1: number, y1: number, x2: number, y2: number, color: Color, options: LineOptions?) -> (),
+			invert: (self: Image) -> Image,
+			grayscale: (self: Image) -> Image,
+			brightness: (self: Image, amount: number) -> Image,
+			contrast: (self: Image, amount: number) -> Image,
+			opacity: (self: Image, amount: number) -> Image,
 
-	invert: (self: Image) -> Image,
-	grayscale: (self: Image) -> Image,
-	brightness: (self: Image, amount: number) -> Image,
-	contrast: (self: Image, amount: number) -> Image,
-	opacity: (self: Image, amount: number) -> Image,
-
-	threshold: (self: Image, value: number) -> Image,
-	colorMatrix: (self: Image, matrix: { number }) -> Image,
-}
+			threshold: (self: Image, value: number) -> Image,
+			colorMatrix: (self: Image, matrix: { number }) -> Image,
+		},
+	}
+>
 
 export type ImageView = Image
 

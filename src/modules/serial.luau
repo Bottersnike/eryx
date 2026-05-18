@@ -85,54 +85,59 @@ export type Signals = {
 --[=[
 	An open serial port.
 ]=]
-export type SerialPort = stream.ReadWriteStream & {
-	--[=[
-		Read bytes from the port.
+export type SerialPort = setmetatable<
+	{},
+	{
+		__index: {
+			--[=[
+				Read bytes from the port.
 
-		- `:read()` — non-blocking; returns all bytes currently in the OS
-		  receive buffer, or `""` if none are available.
-		- `:read(n)` — blocks until between 1 and `n` bytes arrive.
-		- `:read(n, timeout)` — blocks up to `timeout` milliseconds; returns
-		  `nil` if no bytes arrived before the timeout. Pass `0` for an
-		  instant non-blocking check.
-		- `:read(nil, timeout)` — waits up to `timeout` ms for any data, then
-		  drains the receive buffer (up to 64 KB); returns `nil` on timeout.
+				- `:read()` — non-blocking; returns all bytes currently in the OS
+				receive buffer, or `""` if none are available.
+				- `:read(n)` — blocks until between 1 and `n` bytes arrive.
+				- `:read(n, timeout)` — blocks up to `timeout` milliseconds; returns
+				`nil` if no bytes arrived before the timeout. Pass `0` for an
+				instant non-blocking check.
+				- `:read(nil, timeout)` — waits up to `timeout` ms for any data, then
+				drains the receive buffer (up to 64 KB); returns `nil` on timeout.
 
-		Throws on device errors (e.g. disconnection).
-		@param size maximum bytes to read; omit to drain the buffer non-blocking
-		@param timeout timeout in milliseconds; 0 = non-blocking
-	]=]
-	read: ((self: stream.StreamThatCanRead, size: number?) -> string)
-		& ((self: stream.StreamThatCanRead, size: number?, timeout: number) -> string?),
+				Throws on device errors (e.g. disconnection).
+				@param size maximum bytes to read; omit to drain the buffer non-blocking
+				@param timeout timeout in milliseconds; 0 = non-blocking
+			]=]
+			read: ((self: stream.StreamThatCanRead, size: number?) -> string)
+				& ((self: stream.StreamThatCanRead, size: number?, timeout: number) -> string?),
 
-	--[=[
-		Discard buffered data in the OS receive or transmit queue.
-		@param direction ("input" | "output" | "both")? -- defaults to `"both"`
-	]=]
-	flush: (self: SerialPort, direction: ("input" | "output" | "both")?) -> (),
+			--[=[
+				Discard buffered data in the OS receive or transmit queue.
+				@param direction ("input" | "output" | "both")? -- defaults to `"both"`
+			]=]
+			flush: (self: SerialPort, direction: ("input" | "output" | "both")?) -> (),
 
-	--[=[
-		Set the DTR (Data Terminal Ready) output line.
-		@param value boolean
-	]=]
-	setDTR: (self: SerialPort, value: boolean) -> (),
+			--[=[
+				Set the DTR (Data Terminal Ready) output line.
+				@param value boolean
+			]=]
+			setDTR: (self: SerialPort, value: boolean) -> (),
 
-	--[=[
-		Set the RTS (Request To Send) output line.
-		@param value boolean
-	]=]
-	setRTS: (self: SerialPort, value: boolean) -> (),
+			--[=[
+				Set the RTS (Request To Send) output line.
+				@param value boolean
+			]=]
+			setRTS: (self: SerialPort, value: boolean) -> (),
 
-	--[=[
-		Read the state of the modem-control input lines (CTS, DSR, DCD, RI).
-	]=]
-	getSignals: (self: SerialPort) -> Signals,
+			--[=[
+				Read the state of the modem-control input lines (CTS, DSR, DCD, RI).
+			]=]
+			getSignals: (self: SerialPort) -> Signals,
 
-	--- Number of bytes currently in the OS receive buffer (available to read).
-	read inWaiting: number,
-	--- Number of bytes currently in the OS transmit buffer (not yet sent).
-	read outWaiting: number,
-}
+			--- Number of bytes currently in the OS receive buffer (available to read).
+			read inWaiting: number,
+			--- Number of bytes currently in the OS transmit buffer (not yet sent).
+			read outWaiting: number,
+		},
+	}
+>
 
 local serial = {}
 

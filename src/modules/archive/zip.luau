@@ -19,23 +19,28 @@ export type PackOptions = {
 	level: number?,
 }
 
-export type ZipReader = {
-	--[=[
+export type ZipReader = setmetatable<
+	{},
+	{
+		__index: {
+			--[=[
 		List entries in the opened archive. Directories have names ending with '/'.
 		@return { EntryInfo } -- list of entries in archive
 	]=]
-	list: (self: ZipReader) -> { EntryInfo },
+			list: (self: ZipReader) -> { EntryInfo },
 
-	--[=[
+			--[=[
 		Read a named entry from the opened archive. Returns nil if not found.
 		@param name string -- entry filename (case-sensitive)
 		@return buffer? -- the entry contents or nil
 	]=]
-	read: (self: ZipReader, name: string) -> buffer?,
+			read: (self: ZipReader, name: string) -> buffer?,
 
-	--- Close the reader and release any pinned buffer. Safe to call multiple times.
-	close: (self: ZipReader) -> (),
-}
+			--- Close the reader and release any pinned buffer. Safe to call multiple times.
+			close: (self: ZipReader) -> (),
+		},
+	}
+>
 
 local zip = {}
 

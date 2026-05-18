@@ -37,44 +37,46 @@
 	A TLS context that holds configuration (trusted CAs, verification
 	mode) and can wrap raw sockets into encrypted [[SslSocket]] connections.
 ]=]
-export type SslContext = {
-	--[=[
-		Wraps an existing connected [[_socket.Socket]] into a TLS connection.
+export type SslContext = setmetatable<{}, {
+	__index: {
+		--[=[
+			Wraps an existing connected [[_socket.Socket]] into a TLS connection.
 
-		The `SslSocket` takes ownership of the underlying file descriptor.
-		For verified client connections, `serverHostname` is required to
-		enable SNI (Server Name Indication) and certificate hostname
-		verification.
+			The `SslSocket` takes ownership of the underlying file descriptor.
+			For verified client connections, `serverHostname` is required to
+			enable SNI (Server Name Indication) and certificate hostname
+			verification.
 
-		@param sock A connected `_socket.Socket`.
-		@param serverHostname Hostname for SNI and certificate verification.
-		@return SslSocket -- The wrapped TLS socket.
-	]=]
-	wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
+			@param sock A connected `_socket.Socket`.
+			@param serverHostname Hostname for SNI and certificate verification.
+			@return SslSocket -- The wrapped TLS socket.
+		]=]
+		wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
 
-	--[=[
-		Loads a PEM-encoded CA certificate file for server certificate
-		verification.
+		--[=[
+			Loads a PEM-encoded CA certificate file for server certificate
+			verification.
 
-		Call this to switch the context from system certificate store
-		verification to the supplied custom CA bundle.
+			Call this to switch the context from system certificate store
+			verification to the supplied custom CA bundle.
 
-		@param cafile Path to a PEM file containing one or more CA certificates.
-	]=]
-	loadVerifyLocations: (self: SslContext, cafile: PathLike) -> (),
+			@param cafile Path to a PEM file containing one or more CA certificates.
+		]=]
+		loadVerifyLocations: (self: SslContext, cafile: PathLike) -> (),
 
-	--[=[
-		Sets the certificate verification mode.
+		--[=[
+			Sets the certificate verification mode.
 
-		Use `_ssl.VERIFY_REQUIRED` (the default for contexts created with
-		[[createDefaultContext]]) to require a valid, trusted server
-		certificate. Use `_ssl.VERIFY_NONE` to skip verification
-		(not recommended for production).
+			Use `_ssl.VERIFY_REQUIRED` (the default for contexts created with
+			[[createDefaultContext]]) to require a valid, trusted server
+			certificate. Use `_ssl.VERIFY_NONE` to skip verification
+			(not recommended for production).
 
-		@param mode Verification mode - `VERIFY_NONE` or `VERIFY_REQUIRED`.
-	]=]
-	setVerify: (self: SslContext, mode: number) -> (),
-}
+			@param mode Verification mode - `VERIFY_NONE` or `VERIFY_REQUIRED`.
+		]=]
+		setVerify: (self: SslContext, mode: number) -> (),
+	},
+}>
 
 --[=[
 	An encrypted socket wrapping an underlying TCP connection.
@@ -82,81 +84,87 @@ export type SslContext = {
 	Provides the same `send`/`recv`/`close` interface as [[_socket.Socket]],
 	but all data is transparently encrypted and decrypted via TLS.
 ]=]
-export type SslSocket = {
-	--- Stream capability tag.
-	read readable: true,
-	--- Stream capability tag.
-	read writable: true,
-	--- `true` if the socket has been closed.
-	read closed: boolean?,
+export type SslSocket = setmetatable<
+	{
+		--- Stream capability tag.
+		read readable: true,
+		--- Stream capability tag.
+		read writable: true,
+		--- `true` if the socket has been closed.
+		read closed: boolean?,
+	},
+	{
+		__index: {
 
-	--[=[
-		Sends data over the encrypted connection. Returns the number of
-		bytes actually written, which may be less than the full buffer.
+			--[=[
+				Sends data over the encrypted connection. Returns the number of
+				bytes actually written, which may be less than the full buffer.
 
-		@param data The data to send.
-		@return number -- Number of bytes sent.
-	]=]
-	send: (self: SslSocket, data: string | buffer) -> number,
+				@param data The data to send.
+				@return number -- Number of bytes sent.
+			]=]
+			send: (self: SslSocket, data: string | buffer) -> number,
 
-	--[=[
-		Sends all data in the buffer, retrying internally until every byte
-		has been transmitted or an error occurs.
+			--[=[
+				Sends all data in the buffer, retrying internally until every byte
+				has been transmitted or an error occurs.
 
-		@param data The data to send.
-	]=]
-	sendAll: (self: SslSocket, data: string | buffer) -> (),
+				@param data The data to send.
+			]=]
+			sendAll: (self: SslSocket, data: string | buffer) -> (),
 
-	--[=[
-		Receives up to `bufsize` bytes from the encrypted connection.
+			--[=[
+				Receives up to `bufsize` bytes from the encrypted connection.
 
-		Returns a buffer containing the received data. An empty buffer
-		(length 0) indicates the remote end has closed the connection.
+				Returns a buffer containing the received data. An empty buffer
+				(length 0) indicates the remote end has closed the connection.
 
-		@param bufsize Maximum number of bytes to receive.
-		@return buffer -- The received data.
-	]=]
-	recv: (self: SslSocket, bufsize: number) -> buffer,
+				@param bufsize Maximum number of bytes to receive.
+				@return buffer -- The received data.
+			]=]
+			recv: (self: SslSocket, bufsize: number) -> buffer,
 
-	--[=[
-		Performs a TLS shutdown and closes the underlying socket, releasing
-		all associated resources.
-	]=]
-	close: (self: SslSocket) -> (),
+			--[=[
+				Performs a TLS shutdown and closes the underlying socket, releasing
+				all associated resources.
+			]=]
+			close: (self: SslSocket) -> (),
 
-	--[=[
-		Returns the remote address and port of the connected peer.
+			--[=[
+				Returns the remote address and port of the connected peer.
 
-		@return string -- The remote IP address.
-		@return number -- The remote port.
-	]=]
-	getPeerName: (self: SslSocket) -> (string, number),
+				@return string -- The remote IP address.
+				@return number -- The remote port.
+			]=]
+			getPeerName: (self: SslSocket) -> (string, number),
 
-	--[=[
-		Returns the local address and port the socket is bound to.
+			--[=[
+				Returns the local address and port the socket is bound to.
 
-		@return string -- The local IP address.
-		@return number -- The local port.
-	]=]
-	getSockName: (self: SslSocket) -> (string, number),
+				@return string -- The local IP address.
+				@return number -- The local port.
+			]=]
+			getSockName: (self: SslSocket) -> (string, number),
 
-	--[=[
-		Returns the underlying OS file descriptor number for
-		the socket. Useful for advanced I/O multiplexing.
+			--[=[
+				Returns the underlying OS file descriptor number for
+				the socket. Useful for advanced I/O multiplexing.
 
-		@return number -- The file descriptor.
-	]=]
-	fileNo: (self: SslSocket) -> number,
+				@return number -- The file descriptor.
+			]=]
+			fileNo: (self: SslSocket) -> number,
 
-	-- Stream-compatible aliases
-	read: (self: SslSocket, size: number) -> buffer,
-	readSync: (self: SslSocket, size: number) -> buffer,
-	readBuffer: (self: SslSocket, size: number) -> buffer,
-	readBufferSync: (self: SslSocket, size: number) -> buffer,
-	write: (self: SslSocket, data: string | buffer) -> number,
-	writeSync: (self: SslSocket, data: string | buffer) -> number,
-	closeSync: (self: SslSocket) -> (),
-}
+			-- Stream-compatible aliases
+			read: (self: SslSocket, size: number) -> buffer,
+			readSync: (self: SslSocket, size: number) -> buffer,
+			readBuffer: (self: SslSocket, size: number) -> buffer,
+			readBufferSync: (self: SslSocket, size: number) -> buffer,
+			write: (self: SslSocket, data: string | buffer) -> number,
+			writeSync: (self: SslSocket, data: string | buffer) -> number,
+			closeSync: (self: SslSocket) -> (),
+		},
+	}
+>
 
 --[=[
 	Structured information about an X.509 certificate, as returned by

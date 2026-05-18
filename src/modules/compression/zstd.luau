@@ -85,25 +85,21 @@ end
 
 --[=[
 	A streaming Zstandard compressor.
-
-	@class Compressor
 ]=]
-export type Compressor = {
+export type Compressor = setmetatable<{}, { __index: {
 	write: (self: Compressor, data: buffer) -> buffer,
 	flush: (self: Compressor) -> buffer,
 	finish: (self: Compressor) -> buffer,
 	close: (self: Compressor) -> (),
-}
+} }>
 
 --[=[
 	A streaming Zstandard decompressor.
-
-	@class Decompressor
 ]=]
-export type Decompressor = {
+export type Decompressor = setmetatable<{}, { __index: {
 	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
 	close: (self: Decompressor) -> (),
-}
+} }>
 
 --[=[
 	Creates a streaming Zstandard compressor.

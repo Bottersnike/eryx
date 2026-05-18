@@ -35,7 +35,8 @@ $luau = @(
         $_ -like '*.luau' `
             -and $_ -notlike 'src/modules/unicode/_data/*' `
             -and $_ -ne 'src/modules/uuid.luau' `
-            -and $_ -ne 'src/modules/uuid.test.luau'
+            -and $_ -ne 'src/modules/uuid.test.luau' `
+            -and $_ -ne 'src/modules/number.test.luau'
     }
 )
 

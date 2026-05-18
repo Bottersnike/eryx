@@ -36,14 +36,14 @@ local _cc = require("@eryx/crypto/hazmat/_crypto").chacha20
 
 export type Mode = "stream" | "poly1305"
 export type Operation = "encrypt" | "decrypt"
-export type Context = {
+export type Context = setmetatable<{}, { __index: {
 	update: (self: Context, data: buffer) -> buffer,
 	updateAAD: (self: Context, aad: buffer) -> (),
 	setTag: (self: Context, tag: buffer) -> (),
 	getTag: (self: Context) -> buffer,
 	final: (self: Context) -> buffer,
 	close: (self: Context) -> (),
-}
+} }>
 
 local chacha20 = {}
 

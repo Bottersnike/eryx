@@ -8,12 +8,11 @@
 
 	Run with --help for full option list.
 
-	For programmatic usage, require("./eryxdoc") instead — it exposes the
+	For programmatic usage, require("./eryxdoc") instead - it exposes the
 	build engine as a module you can call from your own scripts.
 ]]
 local fs = require("@eryx/fs")
 local argparse = require("@eryx/argparse")
-local fsWatch = require("@eryx/fs_watch")
 local logging = require("@eryx/logging")
 local os = require("@eryx/os")
 local stdio = require("@eryx/stdio")
@@ -163,7 +162,7 @@ if QUIET or EXPORT_TO_STDOUT then
 	logging.config({ level = math.huge })
 end
 
--- ── Config file ───────────────────────────────────────────────────────────
+-- Config file
 
 local fileConfig: eryxdoc.Config = {} :: any
 local configPath: string? = args["config"]
@@ -199,7 +198,7 @@ if configPath then
 	end
 end
 
--- ── Merge: CLI flags > config file > defaults ─────────────────────────────
+-- Merge: CLI flags > config file > defaults
 
 local function resolve(cliKey: string, configVal: any): any
 	if args[cliKey] ~= nil then
@@ -398,7 +397,7 @@ if #validationErrors > 0 then
 	os.exit(2)
 end
 
--- ── Dev mode ──────────────────────────────────────────────────────────────
+-- Dev mode
 
 if IS_EMBEDDED then
 	prepareDefaultTheme(cfg)
@@ -412,35 +411,8 @@ if IS_DEV then
 		end
 		error(devOrErr)
 	end
-	local dev = devOrErr
-
-	if not cfg.noModules and cfg.modules then
-		local moduleWatcher = fsWatch.watchDir(cfg.modules, { recursive = true, debounce = 0.1 })
-		print(string.format("Watching %s for changes...", cfg.modules))
-
-		moduleWatcher.changed:connect(function(filename: string, eventType: string)
-			if not filename:match("%.luau$") or filename:match("%.test%.luau$") then
-				return
-			end
-			print(string.format("[watch] Module changed: %s — refreshing", filename))
-			dev.refresh()
-		end)
-	end
-
-	if cfg.articles and fs.isDirectory(cfg.articles) then
-		local articleWatcher = fsWatch.watchDir(cfg.articles, { recursive = true, debounce = 0.1 })
-		print(string.format("Watching %s for article changes...", cfg.articles))
-
-		articleWatcher.changed:connect(function(filename: string, eventType: string)
-			if not filename:match("%.md$") and not filename:match("%.txt$") then
-				return
-			end
-			print(string.format("[watch] Article changed: %s — refreshing", filename))
-			dev.refresh()
-		end)
-	end
 else
-	-- ── Build ─────────────────────────────────────────────────────────────
+	-- Build
 	local ok, result = pcall(eryxdoc.build, cfg)
 	if tempThemeDir then
 		tempThemeDir:close()

@@ -25,15 +25,20 @@ local tempfile = {}
 local CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 local nonce = 0
 
-export type TempFile = {
-	--- Absolute path to the temp file.
-	read path: string,
-	--- Closes the file handle (if open) and deletes the file path.
-	close: (self: TempFile) -> (),
-
-	--- The underlying open file
-	read file: fs.File,
-}
+export type TempFile = setmetatable<
+	{
+		--- Absolute path to the temp file.
+		read path: string,
+		--- The underlying open file
+		read file: fs.File,
+	},
+	{
+		__index: {
+			--- Closes the file handle (if open) and deletes the file path.
+			close: (self: TempFile) -> (),
+		},
+	}
+>
 type TempFileInternal = { __state: TempState }
 
 --[=[
@@ -42,12 +47,18 @@ type TempFileInternal = { __state: TempState }
 	Use `path` for filesystem operations and call `:close()` to
 	remove it recursively.
 ]=]
-export type TempDir = {
-	--- Absolute path to the temp directory.
-	read path: string,
-	--- Removes the directory recursively.
-	close: (self: TempDir) -> (),
-}
+export type TempDir = setmetatable<
+	{
+		--- Absolute path to the temp directory.
+		read path: string,
+	},
+	{
+		__index: {
+			--- Removes the directory recursively.
+			close: (self: TempDir) -> (),
+		},
+	}
+>
 
 type TempState = {
 	path: string,

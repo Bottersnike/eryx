@@ -86,6 +86,7 @@ export type TypeDoc = {
 	generics: { string }?,
 	parsedDoc: ParsedDoc?,
 	classImplTable: string?,
+	classMemberTable: string?,
 	classFieldsType: string?,
 	isPrimaryExport: boolean?,
 	metamethods: { FuncDoc }?,

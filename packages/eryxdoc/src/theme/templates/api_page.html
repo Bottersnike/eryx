@@ -139,14 +139,16 @@
         {% if m.doc then %}
         <div class="entry-content">{{ m.doc | markdown }}</div>
         {% end %}
+        {% if not (m.overloads and m.overloads | length > 0) then %}
         {% if m.signatureParts then %}
         <div class="signature signature-linked">{{ m.signatureParts | signatureHtml }}</div>
-        {% else %}
+        {% elseif m.signatureFull then %}
         <div class="signature">{{ m.signatureFull | highlightSig }}</div>
+        {% else %}
+        <div class="signature">{{ m.signature | highlightSig }}</div>
         {% end %}
-        {% if m.doc then %}
-        <div class="entry-content">{{ m.doc | markdown }}</div>
         {% end %}
+        {% use renderOverloads(m) %}{% end %}
     </div>
     {% end %}
     {% end %}

@@ -3,14 +3,19 @@ local path = require("@eryx/path")
 
 type PathLike = path.PathLike
 
-export type WatchHandle = {
-	--- Stops the filesystem watcher and releases its resources.
-	stop: (self: WatchHandle) -> (),
-	--- Makes this handle keep the event loop alive (it is unref'd by default).
-	ref: (self: WatchHandle) -> (),
-	--- Allows the event loop to exit even while this handle is active (the default).
-	unref: (self: WatchHandle) -> (),
-}
+export type WatchHandle = setmetatable<
+	{},
+	{
+		__index: {
+			--- Stops the filesystem watcher and releases its resources.
+			stop: (self: WatchHandle) -> (),
+			--- Makes this handle keep the event loop alive (it is unref'd by default).
+			ref: (self: WatchHandle) -> (),
+			--- Allows the event loop to exit even while this handle is active (the default).
+			unref: (self: WatchHandle) -> (),
+		},
+	}
+>
 
 --- Creates a low-level filesystem watcher.
 --- The callback is invoked with (eventType, filename?) each time the watched

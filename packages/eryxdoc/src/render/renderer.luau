@@ -89,6 +89,29 @@ local function constantDisplayName(owner: string?, name: string): string
 	return name
 end
 
+local function resolveModuleFunction(mod: modules.ModuleInfo, core: string): { signature: string?, doc: string? }?
+	for _, f in mod.functions do
+		if f.name == core then
+			return {
+				signature = f.signature,
+				doc = f.doc,
+			}
+		end
+
+		if f.owner then
+			local fullName = f.owner .. (if f.isMethod then ":" else ".") .. f.name
+			if fullName == core then
+				return {
+					signature = f.signature,
+					doc = f.doc,
+				}
+			end
+		end
+	end
+
+	return nil
+end
+
 local Renderer = {}
 Renderer.__index = Renderer
 type PageMeta = {
@@ -339,6 +362,14 @@ function Renderer._findHoverSymbol(
 		return nil
 	end
 
+	local exactFunction = resolveModuleFunction(currentMod, core)
+	if exactFunction then
+		return {
+			signature = exactFunction.signature,
+			doc = self:_truncateDocForHover(exactFunction.doc),
+		}
+	end
+
 	local cls, mem = core:match("^([^.]+)%.(.+)$")
 	if cls and mem then
 		local allClasses: { any } = {}
@@ -362,15 +393,6 @@ function Renderer._findHoverSymbol(
 					end
 				end
 			end
-		end
-	end
-
-	for _, f in currentMod.functions do
-		if f.name == core then
-			return {
-				signature = f.signature,
-				doc = self:_truncateDocForHover(f.doc),
-			}
 		end
 	end
 
@@ -594,11 +616,37 @@ function Renderer.renderPage(
 		end
 	end
 
+	local NO_MODULE = {}
+	local signatureHtmlCache: { [any]: { [any]: string } } = {}
+	local signatureHtmlLinksCache: { [any]: { [any]: string } } = {}
+	local resolveLocalCache: { [any]: { [string]: string? } } = {}
+	local symbolHoverAttrCache: { [any]: { [string]: string } } = {}
+	local typeLinkCache: { [any]: { [string]: string? } } = {}
+	local typeHoverAttrCache: { [string]: string } = {}
+	local markdownCache: { [any]: { [string]: string } } = {}
+	local highlightSigCache: { [string]: string } = {}
+
+	local function getModuleCache<T>(bucket: { [any]: T }, currentMod: modules.ModuleInfo?): T
+		local key = currentMod or NO_MODULE
+		local cache = bucket[key]
+		if cache == nil then
+			cache = {} :: any
+			bucket[key] = cache
+		end
+		return cache
+	end
+
 	local function signatureHtml(parts: any, ctx: { [string]: any }, doLinks: true?): string
 		if not parts then
 			return ""
 		end
 		local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
+		local pageSignatureCache =
+			getModuleCache(if doLinks then signatureHtmlLinksCache else signatureHtmlCache, currentMod)
+		local cachedSignature = pageSignatureCache[parts]
+		if cachedSignature then
+			return cachedSignature
+		end
 		local kindToClass = {
 			type = "syn-type",
 			param = "syn-param",
@@ -613,37 +661,60 @@ function Renderer.renderPage(
 			if not part or not part.hoverText or part.hoverText == "" then
 				return ""
 			end
+			local cached = typeHoverAttrCache[part.hoverText]
+			if cached ~= nil then
+				return cached
+			end
 			local hoverHtml = self:_renderTypeHoverHtml(part.hoverText)
 			if not hoverHtml then
+				typeHoverAttrCache[part.hoverText] = ""
 				return ""
 			end
-			return ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+			local attr = ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+			typeHoverAttrCache[part.hoverText] = attr
+			return attr
 		end
 		local function symbolHoverAttr(core: string): string
+			local cache = getModuleCache(symbolHoverAttrCache, currentMod)
+			local cached = cache[core]
+			if cached ~= nil then
+				return cached
+			end
 			local symbol = self:_findHoverSymbol(currentMod, core)
 			if not symbol then
+				cache[core] = ""
 				return ""
 			end
 			local hoverHtml = self:_renderSymbolHoverHtml(currentMod, symbol.signature, symbol.doc)
 			if not hoverHtml then
+				cache[core] = ""
 				return ""
 			end
-			return ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+			local attr = ` data-hover-html="{htmlEscapeFilter(hoverHtml)}"`
+			cache[core] = attr
+			return attr
 		end
 		local function resolveLocal(core: string): string?
 			if not currentMod then
 				return nil
 			end
-			local cls, mem = core:match("^([^.]+)%.(.+)$")
-			local anchor: string? = nil
-			if cls and mem then
-				anchor = links.resolveClassMember(currentMod, cls, mem)
-			else
-				anchor = links.resolveInModule(currentMod, core)
+			local cache = getModuleCache(resolveLocalCache, currentMod)
+			if cache[core] ~= nil then
+				return cache[core]
+			end
+			local anchor = links.resolveInModule(currentMod, core)
+			if not anchor then
+				local cls, mem = core:match("^([^.]+)%.(.+)$")
+				if cls and mem then
+					anchor = links.resolveClassMember(currentMod, cls, mem)
+				end
 			end
 			if anchor then
-				return self:getLink(currentMod) .. anchor
+				local link = self:getLink(currentMod) .. anchor
+				cache[core] = link
+				return link
 			end
+			cache[core] = nil
 			return nil
 		end
 		local i = 1
@@ -713,7 +784,16 @@ function Renderer.renderPage(
 				end
 
 				if part.typeRef then
-					local link = if currentMod then self:_resolveTypeLink(part.text, currentMod) else nil
+					local link: string? = nil
+					if currentMod then
+						local cache = getModuleCache(typeLinkCache, currentMod)
+						if cache[part.text] ~= nil then
+							link = cache[part.text]
+						else
+							link = self:_resolveTypeLink(part.text, currentMod)
+							cache[part.text] = link
+						end
+					end
 					if link then
 						table.insert(out, `<a class="type-link syn-type" href="{link}"{hoverAttr(part)}>{text}</a>`)
 					else
@@ -727,7 +807,9 @@ function Renderer.renderPage(
 				i = i + 1
 			end
 		end
-		return table.concat(out)
+		local rendered = table.concat(out)
+		pageSignatureCache[parts] = rendered
+		return rendered
 	end
 
 	local function signatureHtmlLinks(parts: any, ctx: { [string]: any }): string
@@ -738,10 +820,15 @@ function Renderer.renderPage(
 		escape = htmlEscapeFilter,
 		markdown = function(text: string, ctx: { [string]: any }): string
 			local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
+			local cache = getModuleCache(markdownCache, currentMod)
+			local cached = cache[text]
+			if cached then
+				return cached
+			end
 			self.currentMod = currentMod
 
 			local html_ = self.markdown:renderHtml(self.markdown:parse(text))
-
+			cache[text] = html_
 			return html_
 		end,
 		webPath = function(x: any)
@@ -751,7 +838,15 @@ function Renderer.renderPage(
 			return false
 		end,
 		highlight = highlight.luau,
-		highlightSig = highlight.LUAU_SIGNATURE,
+		highlightSig = function(text: string): string
+			local cached = highlightSigCache[text]
+			if cached then
+				return cached
+			end
+			local html_ = highlight.LUAU_SIGNATURE(text)
+			highlightSigCache[text] = html_
+			return html_
+		end,
 		signatureHtml = signatureHtml,
 		signatureHtmlLinks = signatureHtmlLinks,
 		typeLink = function(typeName: string, ctx: { [string]: any }): string
@@ -759,7 +854,13 @@ function Renderer.renderPage(
 			if not currentMod then
 				return ""
 			end
-			return self:_resolveTypeLink(typeName, currentMod) or ""
+			local cache = getModuleCache(typeLinkCache, currentMod)
+			if cache[typeName] ~= nil then
+				return cache[typeName] or ""
+			end
+			local link = self:_resolveTypeLink(typeName, currentMod)
+			cache[typeName] = link
+			return link or ""
 		end,
 	}
 

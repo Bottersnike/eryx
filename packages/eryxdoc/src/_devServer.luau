@@ -602,12 +602,22 @@ export type DevHandle = {
 	refresh: () -> (),
 }
 
+type CachedResponse = {
+	status: number,
+	body: string,
+	contentType: string,
+}
+
 local function start(cfg: Config, host: string, port: number): DevHandle
 	log:info("=== Dev server (in-memory) ===")
 	local state = buildState(cfg)
 
 	local watchers: { any } = {}
 	local wsClients: { any } = {}
+	-- Cache rendered responses between refreshes. Module/article rendering is
+	-- intentionally dynamic in dev mode, but re-rendering unchanged pages on
+	-- every browser request is far more expensive than necessary.
+	local responseCache: { [string]: CachedResponse } = {}
 	local WATCH_DEBOUNCE_DEFAULT = 0.6 -- seconds (heavier debounce to avoid loops)
 	local debounceSec = (cfg.watchDebounce or WATCH_DEBOUNCE_DEFAULT)
 	local pendingRefreshTimer: thread? = nil
@@ -634,6 +644,10 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 			lastRefreshTrigger = trigger
 			return
 		end
+		if pendingRefreshTimer then
+			pcall(task.cancel, pendingRefreshTimer)
+			pendingRefreshTimer = nil
+		end
 		refreshInProgress = true
 		log:info(
 			string.format(
@@ -649,6 +663,7 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		local ok, newState = pcall(buildState, cfg)
 		if ok then
 			state = newState :: DevState
+			table.clear(responseCache)
 			notifyReloadClients()
 		else
 			log:error(string.format("Refresh failed (%s): %s", trigger, exception.format(newState)))
@@ -657,12 +672,6 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		refreshInProgress = false
 		if refreshRequestedWhileRunning then
 			refreshRequestedWhileRunning = false
-			-- Ensure we don't miss a trailing burst that arrived during refresh.
-			pendingRefreshCount += 1
-			if pendingRefreshTimer then
-				pcall(task.cancel, pendingRefreshTimer)
-				pendingRefreshTimer = nil
-			end
 			pendingRefreshTimer = task.delay(debounceSec, function()
 				pendingRefreshTimer = nil
 				performRefresh(lastRefreshTrigger .. " (post-refresh)")
@@ -673,6 +682,10 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 	local function scheduleRefresh(trigger: string)
 		pendingRefreshCount += 1
 		lastRefreshTrigger = trigger
+		if refreshInProgress then
+			refreshRequestedWhileRunning = true
+			return
+		end
 		if pendingRefreshTimer then
 			pcall(task.cancel, pendingRefreshTimer)
 		end
@@ -756,7 +769,26 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		end
 
 		local startTime = os.clock()
-		local status, body, contentType = handleRequest(state, req.path)
+		local cacheKey = req.path
+		local cached = responseCache[cacheKey]
+		local status: number
+		local body: string
+		local contentType: string
+
+		if cached then
+			status = cached.status
+			body = cached.body
+			contentType = cached.contentType
+		else
+			status, body, contentType = handleRequest(state, req.path)
+			if status < 500 then
+				responseCache[cacheKey] = {
+					status = status,
+					body = body,
+					contentType = contentType,
+				}
+			end
+		end
 		local elapsed = math.floor((os.clock() - startTime) * 1000)
 
 		log:info(string.format("  %d %s (%dms)", status, req.path, elapsed))

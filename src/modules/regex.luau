@@ -25,67 +25,69 @@ local regex = {}
 --[=[
 	A compiled regular expression pattern.
 ]=]
-export type Regex = {
-	--[=[
-		Test if the subject matches this pattern.
-		@param subject string -- the string to test
-		@param offset number? -- 1-based start position (default 1)
-		@return boolean
-	]=]
-	isMatch: (self: Regex, subject: string, offset: number?) -> boolean,
+export type Regex = setmetatable<{}, {
+	__index: {
+		--[=[
+			Test if the subject matches this pattern.
+			@param subject string -- the string to test
+			@param offset number? -- 1-based start position (default 1)
+			@return boolean
+		]=]
+		isMatch: (self: Regex, subject: string, offset: number?) -> boolean,
 
-	--[=[
-		Find the first match of this pattern in the subject.
-		Returns nil if no match. The result table contains:
-		- `match`: the full matched text
-		- `start`: 1-based start position
-		- `finish`: 1-based end position (inclusive)
-		- `[1]`, `[2]`, ...: numbered capture groups
-		- named fields for named capture groups
-		@param subject string -- the string to search
-		@param offset number? -- 1-based start position (default 1)
-		@return MatchResult?
-	]=]
-	find: (self: Regex, subject: string, offset: number?) -> MatchResult?,
+		--[=[
+			Find the first match of this pattern in the subject.
+			Returns nil if no match. The result table contains:
+			- `match`: the full matched text
+			- `start`: 1-based start position
+			- `finish`: 1-based end position (inclusive)
+			- `[1]`, `[2]`, ...: numbered capture groups
+			- named fields for named capture groups
+			@param subject string -- the string to search
+			@param offset number? -- 1-based start position (default 1)
+			@return MatchResult?
+		]=]
+		find: (self: Regex, subject: string, offset: number?) -> MatchResult?,
 
-	--[=[
-		Find all non-overlapping matches in the subject.
-		@param subject string -- the string to search
-		@return {MatchResult}
-	]=]
-	findAll: (self: Regex, subject: string) -> { MatchResult },
+		--[=[
+			Find all non-overlapping matches in the subject.
+			@param subject string -- the string to search
+			@return {MatchResult}
+		]=]
+		findAll: (self: Regex, subject: string) -> { MatchResult },
 
-	--[=[
-		Replace matches in the subject with a replacement string.
-		The replacement supports `$0` (full match), `$1`, `${name}` backreferences.
-		@param subject string -- the input string
-		@param replacement string -- the replacement template
-		@param limit number? -- max replacements (0 or nil = replace all)
-		@return string
-	]=]
-	replace: (self: Regex, subject: string, replacement: string, limit: number?) -> string,
+		--[=[
+			Replace matches in the subject with a replacement string.
+			The replacement supports `$0` (full match), `$1`, `${name}` backreferences.
+			@param subject string -- the input string
+			@param replacement string -- the replacement template
+			@param limit number? -- max replacements (0 or nil = replace all)
+			@return string
+		]=]
+		replace: (self: Regex, subject: string, replacement: string, limit: number?) -> string,
 
-	--[=[
-		Split the subject on matches of this pattern.
-		If the pattern has captures, captured groups are included between splits.
-		@param subject string -- the string to split
-		@param limit number? -- max number of pieces (0 or nil = no limit)
-		@return {string}
-	]=]
-	split: (self: Regex, subject: string, limit: number?) -> { string },
+		--[=[
+			Split the subject on matches of this pattern.
+			If the pattern has captures, captured groups are included between splits.
+			@param subject string -- the string to split
+			@param limit number? -- max number of pieces (0 or nil = no limit)
+			@return {string}
+		]=]
+		split: (self: Regex, subject: string, limit: number?) -> { string },
 
-	--[=[
-		Return the number of capture groups in the pattern.
-		@return number
-	]=]
-	captureCount: (self: Regex) -> number,
+		--[=[
+			Return the number of capture groups in the pattern.
+			@return number
+		]=]
+		captureCount: (self: Regex) -> number,
 
-	--[=[
-		Return a table mapping named capture group names to their group numbers.
-		@return {[string]: number}
-	]=]
-	namedCaptures: (self: Regex) -> { [string]: number },
-}
+		--[=[
+			Return a table mapping named capture group names to their group numbers.
+			@return {[string]: number}
+		]=]
+		namedCaptures: (self: Regex) -> { [string]: number },
+	},
+}>
 
 --[=[
 	Result of a regex match operation.

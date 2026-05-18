@@ -18,11 +18,11 @@
 
 local _hm = require("@eryx/crypto/hazmat/_crypto").hmac
 
-export type Context = {
+export type Context = setmetatable<{}, { __index: {
 	update: (self: Context, data: buffer) -> (),
 	final: (self: Context) -> buffer,
 	close: (self: Context) -> (),
-}
+} }>
 
 local hmac = {}
 

@@ -17,11 +17,11 @@
 
 local _h = require("@eryx/crypto/hazmat/_crypto").hash
 
-export type Context = {
+export type Context = setmetatable<{}, { __index: {
 	update: (self: Context, data: buffer) -> (),
 	final: (self: Context) -> buffer,
 	close: (self: Context) -> (),
-}
+} }>
 
 local hash = {}
 

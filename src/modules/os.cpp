@@ -879,6 +879,7 @@ struct ProcessData {
 
     int threadRef;   // ref to the waiting coroutine (for exec/wait)
     int processRef;  // self-ref to prevent GC (for spawn)
+    int luaHandleRefs;
     int64_t exitStatus;
     int termSignal;
     bool exited;
@@ -886,7 +887,13 @@ struct ProcessData {
     bool stderrClosed;
     bool isExec;   // true for os.exec (auto-collect output), false for os.spawn
     bool isShell;  // true for os.shell (inherit stdio, return code only)
+    bool hasOwnerHandle;
     bool ownerAlive;
+    bool processHandleClosed;
+    bool stdinHandleClosed;
+    bool stdoutHandleClosed;
+    bool stderrHandleClosed;
+    bool hasStdioPipes;
 };
 
 static void alloc_cb(uv_handle_t*, size_t suggested, uv_buf_t* buf) {
@@ -894,10 +901,46 @@ static void alloc_cb(uv_handle_t*, size_t suggested, uv_buf_t* buf) {
     buf->len = (decltype(buf->len))suggested;
 }
 
+static void maybe_free_process_data(ProcessData* pd) {
+    bool pipesClosed = !pd->hasStdioPipes ||
+                       (pd->stdinHandleClosed && pd->stdoutHandleClosed && pd->stderrHandleClosed);
+    if (!pd->processHandleClosed || !pipesClosed) return;
+    if (pd->luaHandleRefs > 0) return;
+    delete pd;
+}
+
+static void retain_process_data(ProcessData* pd) { pd->luaHandleRefs += 1; }
+
+static void release_process_data(ProcessData* pd) {
+    if (pd->luaHandleRefs > 0) {
+        pd->luaHandleRefs -= 1;
+    }
+    maybe_free_process_data(pd);
+}
+
+static void process_pipe_close_cb(uv_handle_t* handle) {
+    auto* pd = (ProcessData*)handle->data;
+    if (handle == (uv_handle_t*)&pd->stdinPipe) {
+        pd->stdinHandleClosed = true;
+    } else if (handle == (uv_handle_t*)&pd->stdoutPipe) {
+        pd->stdoutHandleClosed = true;
+    } else if (handle == (uv_handle_t*)&pd->stderrPipe) {
+        pd->stderrHandleClosed = true;
+    }
+    maybe_free_process_data(pd);
+}
+
+static void process_handle_close_cb(uv_handle_t* handle) {
+    auto* pd = (ProcessData*)handle->data;
+    pd->processHandleClosed = true;
+    maybe_free_process_data(pd);
+}
+
 // Try to resume the exec coroutine once process has exited AND both pipes are closed
 static void try_resume_exec(ProcessData* pd) {
     if (!pd->isExec) return;
     if (!pd->exited || !pd->stdoutClosed || !pd->stderrClosed) return;
+    if (pd->threadRef == LUA_NOREF) return;
 
     EryxRuntime* rt = pd->rt;
     lua_State* GL = rt->GL;
@@ -919,11 +962,13 @@ static void try_resume_exec(ProcessData* pd) {
     lua_pushinteger(TL, (int)pd->exitStatus);
     lua_setfield(TL, -2, "code");
 
-    eryx_push_thread(rt, pd->threadRef, 1, false);
+    int ref = pd->threadRef;
+    pd->threadRef = LUA_NOREF;
+    eryx_push_thread(rt, ref, 1, false);
 
     // Clean up - close stdin pipe too
-    if (!uv_is_closing((uv_handle_t*)&pd->stdinPipe))
-        uv_close((uv_handle_t*)&pd->stdinPipe, nullptr);
+    if (pd->hasStdioPipes && !uv_is_closing((uv_handle_t*)&pd->stdinPipe))
+        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
     // pd will be freed when process handle closes
 }
 
@@ -982,7 +1027,8 @@ static void stdout_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
     if (nread < 0) {
         uv_read_stop(stream);
         pd->stdoutClosed = true;
-        if (!uv_is_closing((uv_handle_t*)stream)) uv_close((uv_handle_t*)stream, nullptr);
+        if (!uv_is_closing((uv_handle_t*)stream))
+            uv_close((uv_handle_t*)stream, process_pipe_close_cb);
         // Wake up any waiting reader with an empty value (EOF)
         resume_reader(pd, pd->stdoutReaderRef, nullptr, 0);
         try_resume_exec(pd);
@@ -1003,7 +1049,8 @@ static void stderr_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
     if (nread < 0) {
         uv_read_stop(stream);
         pd->stderrClosed = true;
-        if (!uv_is_closing((uv_handle_t*)stream)) uv_close((uv_handle_t*)stream, nullptr);
+        if (!uv_is_closing((uv_handle_t*)stream))
+            uv_close((uv_handle_t*)stream, process_pipe_close_cb);
         resume_reader(pd, pd->stderrReaderRef, nullptr, 0);
         try_resume_exec(pd);
     }
@@ -1012,6 +1059,7 @@ static void stderr_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* b
 static void try_resume_shell(ProcessData* pd) {
     if (!pd->isShell) return;
     if (!pd->exited) return;
+    if (pd->threadRef == LUA_NOREF) return;
 
     EryxRuntime* rt = pd->rt;
     lua_State* GL = rt->GL;
@@ -1021,7 +1069,9 @@ static void try_resume_shell(ProcessData* pd) {
     lua_pop(GL, 1);
 
     lua_pushinteger(TL, (int)pd->exitStatus);
-    eryx_push_thread(rt, pd->threadRef, 1, false);
+    int ref = pd->threadRef;
+    pd->threadRef = LUA_NOREF;
+    eryx_push_thread(rt, ref, 1, false);
 }
 
 static void process_exit_cb(uv_process_t* proc, int64_t exitStatus, int termSignal) {
@@ -1030,7 +1080,11 @@ static void process_exit_cb(uv_process_t* proc, int64_t exitStatus, int termSign
     pd->termSignal = termSignal;
     pd->exited = true;
 
-    uv_close((uv_handle_t*)proc, nullptr);
+    uv_close((uv_handle_t*)proc, process_handle_close_cb);
+
+    if (pd->hasStdioPipes && !uv_is_closing((uv_handle_t*)&pd->stdinPipe)) {
+        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
+    }
 
     if (pd->isShell) {
         try_resume_shell(pd);
@@ -1109,7 +1163,8 @@ static SpawnOpts parse_spawn_opts(lua_State* L, int optsIdx) {
     return opts;
 }
 
-static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts, bool isExec) {
+static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts, bool isExec,
+                                  bool hasOwnerHandle) {
     auto rt = eryx_get_runtime(L);
 
     auto* pd = new ProcessData();
@@ -1121,19 +1176,27 @@ static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts
     pd->termSignal = 0;
     pd->threadRef = LUA_NOREF;
     pd->processRef = LUA_NOREF;
+    pd->luaHandleRefs = 0;
     pd->stdoutReaderRef = LUA_NOREF;
     pd->stderrReaderRef = LUA_NOREF;
     pd->stdoutReaderWantsBuffer = false;
     pd->stderrReaderWantsBuffer = false;
     pd->isExec = isExec;
     pd->isShell = false;
-    pd->ownerAlive = true;
+    pd->hasOwnerHandle = hasOwnerHandle;
+    pd->ownerAlive = hasOwnerHandle;
+    pd->processHandleClosed = false;
+    pd->stdinHandleClosed = false;
+    pd->stdoutHandleClosed = false;
+    pd->stderrHandleClosed = false;
+    pd->hasStdioPipes = true;
 
     // Init pipes
     uv_pipe_init(rt->loop, &pd->stdinPipe, 0);
     uv_pipe_init(rt->loop, &pd->stdoutPipe, 0);
     uv_pipe_init(rt->loop, &pd->stderrPipe, 0);
 
+    pd->stdinPipe.data = pd;
     pd->stdoutPipe.data = pd;
     pd->stderrPipe.data = pd;
 
@@ -1199,11 +1262,11 @@ static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts
 
     int r = uv_spawn(rt->loop, &pd->process, &procOpts);
     if (r != 0) {
-        // Clean up pipes
-        uv_close((uv_handle_t*)&pd->stdinPipe, nullptr);
-        uv_close((uv_handle_t*)&pd->stdoutPipe, nullptr);
-        uv_close((uv_handle_t*)&pd->stderrPipe, nullptr);
-        delete pd;
+        pd->processHandleClosed = true;
+        pd->ownerAlive = false;
+        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
+        uv_close((uv_handle_t*)&pd->stdoutPipe, process_pipe_close_cb);
+        uv_close((uv_handle_t*)&pd->stderrPipe, process_pipe_close_cb);
         luaL_error(L, "failed to spawn process '%s': %s", cmd, uv_strerror(r));
         return nullptr;
     }
@@ -1236,10 +1299,10 @@ static int os_exec(lua_State* L) {
     auto opts = parse_spawn_opts(L, optsIdx);
     opts.args = parse_args(L, cmd, argsIdx);
 
-    ProcessData* pd = spawn_process(L, cmd, opts, true);
+    ProcessData* pd = spawn_process(L, cmd, opts, true, false);
 
     // Close stdin immediately for exec (we don't write to it)
-    uv_close((uv_handle_t*)&pd->stdinPipe, nullptr);
+    uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
 
     // Ref the current thread so we can resume it later
     lua_pushthread(L);
@@ -1273,13 +1336,20 @@ static int os_shell(lua_State* L) {
     pd->termSignal = 0;
     pd->threadRef = LUA_NOREF;
     pd->processRef = LUA_NOREF;
+    pd->luaHandleRefs = 0;
     pd->stdoutReaderRef = LUA_NOREF;
     pd->stderrReaderRef = LUA_NOREF;
     pd->stdoutReaderWantsBuffer = false;
     pd->stderrReaderWantsBuffer = false;
     pd->isExec = false;
     pd->isShell = true;
-    pd->ownerAlive = true;
+    pd->hasOwnerHandle = false;
+    pd->ownerAlive = false;
+    pd->processHandleClosed = false;
+    pd->stdinHandleClosed = true;
+    pd->stdoutHandleClosed = true;
+    pd->stderrHandleClosed = true;
+    pd->hasStdioPipes = false;
 
     // We don't need pipes - inherit parent stdio
     uv_stdio_container_t stdio[3];
@@ -1409,6 +1479,9 @@ static int process_wait(lua_State* L) {
     }
 
     // Yield until process completes
+    if (pd->threadRef != LUA_NOREF) {
+        luaL_error(L, "a wait is already pending on this process");
+    }
     pd->isExec = true;  // reuse exec resume path
     lua_pushthread(L);
     pd->threadRef = lua_ref(L, -1);
@@ -1468,7 +1541,7 @@ static int process_stdin_write_sync(lua_State* L) { return process_stdin_write(L
 static int process_stdin_close(lua_State* L) {
     auto* pd = check_stdin_stream(L, 1);
     if (!uv_is_closing((uv_handle_t*)&pd->stdinPipe)) {
-        uv_close((uv_handle_t*)&pd->stdinPipe, nullptr);
+        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
     }
     return 0;
 }
@@ -1553,7 +1626,7 @@ static int process_stdout_close(lua_State* L) {
         pd->stdoutClosed = true;
         if (!uv_is_closing((uv_handle_t*)&pd->stdoutPipe)) {
             uv_read_stop((uv_stream_t*)&pd->stdoutPipe);
-            uv_close((uv_handle_t*)&pd->stdoutPipe, nullptr);
+            uv_close((uv_handle_t*)&pd->stdoutPipe, process_pipe_close_cb);
         }
     }
     resume_reader(pd, pd->stdoutReaderRef, nullptr, 0);
@@ -1596,7 +1669,7 @@ static int process_stderr_close(lua_State* L) {
         pd->stderrClosed = true;
         if (!uv_is_closing((uv_handle_t*)&pd->stderrPipe)) {
             uv_read_stop((uv_stream_t*)&pd->stderrPipe);
-            uv_close((uv_handle_t*)&pd->stderrPipe, nullptr);
+            uv_close((uv_handle_t*)&pd->stderrPipe, process_pipe_close_cb);
         }
     }
     resume_reader(pd, pd->stderrReaderRef, nullptr, 0);
@@ -1672,6 +1745,7 @@ static int process_stderr_index(lua_State* L) {
 }
 
 static void push_process_stdin_stream(lua_State* L, ProcessData* pd) {
+    retain_process_data(pd);
     auto* h = (ProcessStdinStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdinStreamHandle));
     h->pd = pd;
     luaL_getmetatable(L, PROCESS_STDIN_STREAM_MT);
@@ -1679,6 +1753,7 @@ static void push_process_stdin_stream(lua_State* L, ProcessData* pd) {
 }
 
 static void push_process_stdout_stream(lua_State* L, ProcessData* pd) {
+    retain_process_data(pd);
     auto* h = (ProcessStdoutStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdoutStreamHandle));
     h->pd = pd;
     luaL_getmetatable(L, PROCESS_STDOUT_STREAM_MT);
@@ -1686,10 +1761,38 @@ static void push_process_stdout_stream(lua_State* L, ProcessData* pd) {
 }
 
 static void push_process_stderr_stream(lua_State* L, ProcessData* pd) {
+    retain_process_data(pd);
     auto* h = (ProcessStderrStreamHandle*)lua_newuserdata(L, sizeof(ProcessStderrStreamHandle));
     h->pd = pd;
     luaL_getmetatable(L, PROCESS_STDERR_STREAM_MT);
     lua_setmetatable(L, -2);
+}
+
+static int process_stdin_stream_gc(lua_State* L) {
+    auto* h = (ProcessStdinStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDIN_STREAM_MT);
+    if (h->pd) {
+        release_process_data(h->pd);
+        h->pd = nullptr;
+    }
+    return 0;
+}
+
+static int process_stdout_stream_gc(lua_State* L) {
+    auto* h = (ProcessStdoutStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDOUT_STREAM_MT);
+    if (h->pd) {
+        release_process_data(h->pd);
+        h->pd = nullptr;
+    }
+    return 0;
+}
+
+static int process_stderr_stream_gc(lua_State* L) {
+    auto* h = (ProcessStderrStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDERR_STREAM_MT);
+    if (h->pd) {
+        release_process_data(h->pd);
+        h->pd = nullptr;
+    }
+    return 0;
 }
 
 // ProcessHandle.pid
@@ -1740,6 +1843,9 @@ static int process_gc(lua_State* L) {
     if (h->pd && !h->pd->exited) {
         uv_process_kill(&h->pd->process, SIGTERM);
     }
+    if (h->pd) {
+        release_process_data(h->pd);
+    }
     // Note: pd is cleaned up by libuv close callbacks
     h->pd = nullptr;
     return 0;
@@ -1777,6 +1883,8 @@ static void register_process_stream_metatables(lua_State* L) {
         lua_setfield(L, -2, "closeSync");
         lua_pushcfunction(L, process_stdin_index, "__index");
         lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, process_stdin_stream_gc, "__gc");
+        lua_setfield(L, -2, "__gc");
         lua_pushstring(L, PROCESS_STDIN_STREAM_MT);
         lua_setfield(L, -2, "__type");
     }
@@ -1797,6 +1905,8 @@ static void register_process_stream_metatables(lua_State* L) {
         lua_setfield(L, -2, "closeSync");
         lua_pushcfunction(L, process_stdout_index, "__index");
         lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, process_stdout_stream_gc, "__gc");
+        lua_setfield(L, -2, "__gc");
         lua_pushstring(L, PROCESS_STDOUT_STREAM_MT);
         lua_setfield(L, -2, "__type");
     }
@@ -1817,6 +1927,8 @@ static void register_process_stream_metatables(lua_State* L) {
         lua_setfield(L, -2, "closeSync");
         lua_pushcfunction(L, process_stderr_index, "__index");
         lua_setfield(L, -2, "__index");
+        lua_pushcfunction(L, process_stderr_stream_gc, "__gc");
+        lua_setfield(L, -2, "__gc");
         lua_pushstring(L, PROCESS_STDERR_STREAM_MT);
         lua_setfield(L, -2, "__type");
     }
@@ -1841,9 +1953,10 @@ static int os_spawn(lua_State* L) {
     auto opts = parse_spawn_opts(L, optsIdx);
     opts.args = parse_args(L, cmd, argsIdx);
 
-    ProcessData* pd = spawn_process(L, cmd, opts, false);
+    ProcessData* pd = spawn_process(L, cmd, opts, false, true);
 
     // Create userdata
+    retain_process_data(pd);
     auto* h = (ProcessHandle*)lua_newuserdata(L, sizeof(ProcessHandle));
     h->pd = pd;
     luaL_getmetatable(L, PROCESS_HANDLE_MT);

@@ -52,14 +52,14 @@ local _aes = require("@eryx/crypto/hazmat/_crypto").aes
 
 export type Mode = "ecb" | "cbc" | "ctr" | "cfb128" | "ofb" | "gcm"
 export type Operation = "encrypt" | "decrypt"
-export type Context = {
+export type Context = setmetatable<{}, { __index: {
 	update: (self: Context, data: buffer) -> buffer,
 	updateAAD: (self: Context, aad: buffer) -> (),
 	setTag: (self: Context, tag: buffer) -> (),
 	getTag: (self: Context) -> buffer,
 	final: (self: Context) -> buffer,
 	close: (self: Context) -> (),
-}
+} }>
 
 local aes = {}
 

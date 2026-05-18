@@ -81,9 +81,10 @@ All optional — each defaults to `ON`:
 
 ### GMP
 
-GMP takes a long time to compile on windows with MSVC, so pre-build sources are vendored into git. To recompile them, use:
+GMP takes a long time to compile on windows with MSVC, so pre-built sources are vendored into git. To recompile them, use:
 
 > `cmake -S vendor/gmp -B build-vendor-gmp`
+> `cmake -S vendor/mpfr -B build-vendor-mpfr`
 
 ## License
 

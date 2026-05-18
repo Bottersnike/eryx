@@ -85,25 +85,21 @@ gzip.OS_UNKNOWN = 255 :: number
 --[=[
 	A streaming gzip compressor. Feed data incrementally with `write`,
 	then call `finish` to produce the final gzip output.
-
-	@class Compressor
 ]=]
-export type Compressor = {
+export type Compressor = setmetatable<{}, { __index: {
 	write: (self: Compressor, data: buffer, flush: number?) -> buffer,
 	finish: (self: Compressor) -> buffer,
 	close: (self: Compressor) -> (),
-}
+} }>
 
 --[=[
 	A streaming gzip decompressor. Feed compressed chunks with `write`;
 	the second return value indicates when the stream is complete.
-
-	@class Decompressor
 ]=]
-export type Decompressor = {
+export type Decompressor = setmetatable<{}, { __index: {
 	write: (self: Decompressor, data: buffer) -> (buffer, boolean),
 	close: (self: Decompressor) -> (),
-}
+} }>
 
 --[=[
 	Creates a streaming gzip compressor.

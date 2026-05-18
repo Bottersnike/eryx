@@ -35,6 +35,12 @@ local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
 		if f.name == name then
 			return functionAnchor(f.owner, f.isMethod, f.name)
 		end
+		if f.owner then
+			local fullName = f.owner .. (if f.isMethod then ":" else ".") .. f.name
+			if fullName == name then
+				return functionAnchor(f.owner, f.isMethod, f.name)
+			end
+		end
 	end
 	if mod.primaryExport and mod.primaryExport.name == name then
 		return "#class-" .. name
@@ -53,6 +59,9 @@ local function resolveInModule(mod: modules.ModuleInfo, name: string): string?
 		if c.name == name then
 			return constantAnchor(c.owner, name)
 		end
+		if c.owner and c.owner .. "." .. c.name == name then
+			return constantAnchor(c.owner, c.name)
+		end
 	end
 	return nil
 end
@@ -67,6 +76,18 @@ local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): Resol
 				symbolName = f.name,
 				ownerName = f.owner,
 			}
+		end
+		if f.owner then
+			local fullName = f.owner .. (if f.isMethod then ":" else ".") .. f.name
+			if fullName == name then
+				return {
+					href = functionAnchor(f.owner, f.isMethod, f.name),
+					kind = "function",
+					module = mod,
+					symbolName = f.name,
+					ownerName = f.owner,
+				}
+			end
 		end
 	end
 	if mod.primaryExport and mod.primaryExport.name == name then
@@ -99,6 +120,15 @@ local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): Resol
 	end
 	for _, c in mod.constants do
 		if c.name == name then
+			return {
+				href = constantAnchor(c.owner, c.name),
+				kind = "member",
+				module = mod,
+				symbolName = c.name,
+				ownerName = c.owner,
+			}
+		end
+		if c.owner and c.owner .. "." .. c.name == name then
 			return {
 				href = constantAnchor(c.owner, c.name),
 				kind = "member",
