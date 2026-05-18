@@ -127,6 +127,11 @@ ERYX_RUN_ONCE_STATE eryx_run_once(lua_State* GL, EryxRuntime* rt, lua_State** ru
         status = lua_resume(L, nullptr, thread.nargs);
     }
 
+    // Resuming a queued coroutine transfers ownership of thread.threadRef to
+    // the scheduler for this one resume only. Release that ref now; any fresh
+    // yield path must create its own new ref before returning to the loop.
+    lua_unref(GL, thread.threadRef);
+
     if (!thread.inError && eryx_require_maybe_finalize_loader(GL, L, status)) {
         return ERYX_RUN_ONCE_STATE::kSuccess;
     }
