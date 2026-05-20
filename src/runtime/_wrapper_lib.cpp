@@ -7,6 +7,8 @@
 #include "lexception.hpp"
 
 // Analysis headers (available because LuauShared links Luau.Analysis)
+#include <algorithm>
+#include <cctype>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -17,6 +19,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "Luau/AstQuery.h"
@@ -29,6 +32,7 @@
 #include "Luau/Error.h"
 #include "Luau/Frontend.h"
 #include "Luau/ModuleResolver.h"
+#include "Luau/Parser.h"
 #include "Luau/PrettyPrinter.h"
 #include "Luau/ToString.h"
 #include "Luau/Type.h"
@@ -37,7 +41,6 @@
 #include "lprint.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
-#include "lstate.h"
 #ifndef ERYX_EMBED
 extern "C" {
 #endif
@@ -45,6 +48,7 @@ extern "C" {
 #include "ldebug.h"
 #include "lfunc.h"
 #include "lgc.h"
+#include "lstate.h"
 #ifndef ERYX_EMBED
 }
 #endif
@@ -122,6 +126,480 @@ ERYX_API int eryx_debug_current_instructionpc(lua_State* L, int frameLevel) {
     }
 
     return instructionPc;
+}
+
+static void thread_bytecode_write_byte(std::string& data, uint8_t value) {
+    data.push_back(char(value));
+}
+
+static void thread_bytecode_write_int(std::string& data, int value) {
+    data.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+static void thread_bytecode_write_float(std::string& data, float value) {
+    data.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+static void thread_bytecode_write_double(std::string& data, double value) {
+    data.append(reinterpret_cast<const char*>(&value), sizeof(value));
+}
+
+static void thread_bytecode_write_varint(std::string& data, uint64_t value) {
+    do {
+        thread_bytecode_write_byte(data, uint8_t((value & 127) | ((value > 127) << 7)));
+        value >>= 7;
+    } while (value);
+}
+
+static std::string thread_entry_chunk_name_from_proto_source(const char* source) {
+    if (!source || !*source) {
+        return "=(thread)";
+    }
+
+    std::string chunkName(source);
+    if (chunkName[0] == '@' || chunkName[0] == '=') {
+        return chunkName;
+    }
+
+    if (chunkName.rfind(CHUNK_PREFIX_VFS, 0) == 0 || chunkName.rfind(CHUNK_PREFIX_ERYX, 0) == 0) {
+        return chunkName;
+    }
+
+    return "@" + chunkName;
+}
+
+static void thread_bytecode_collect_protos(Proto* proto, std::vector<Proto*>& protos,
+                                           std::unordered_map<Proto*, uint32_t>& protoIds) {
+    if (!proto || protoIds.contains(proto)) {
+        return;
+    }
+
+    for (int i = 0; i < proto->sizep; ++i) {
+        thread_bytecode_collect_protos(proto->p[i], protos, protoIds);
+    }
+
+    protoIds[proto] = uint32_t(protos.size());
+    protos.push_back(proto);
+}
+
+static uint32_t thread_bytecode_string_id(TString* value, std::vector<TString*>& strings,
+                                          std::unordered_map<TString*, uint32_t>& stringIds) {
+    if (!value) {
+        return 0;
+    }
+
+    if (auto it = stringIds.find(value); it != stringIds.end()) {
+        return it->second;
+    }
+
+    uint32_t id = uint32_t(strings.size()) + 1;
+    strings.push_back(value);
+    stringIds[value] = id;
+    return id;
+}
+
+static void thread_bytecode_collect_strings_from_proto(
+    Proto* proto, std::vector<TString*>& strings,
+    std::unordered_map<TString*, uint32_t>& stringIds) {
+    if (!proto) {
+        return;
+    }
+
+    thread_bytecode_string_id(proto->debugname, strings, stringIds);
+
+    for (int i = 0; i < proto->sizek; ++i) {
+        if (ttisstring(&proto->k[i])) {
+            thread_bytecode_string_id(tsvalue(&proto->k[i]), strings, stringIds);
+        }
+    }
+
+    for (int i = 0; i < proto->sizelocvars; ++i) {
+        thread_bytecode_string_id(proto->locvars[i].varname, strings, stringIds);
+    }
+
+    for (int i = 0; i < proto->sizeupvalues; ++i) {
+        thread_bytecode_string_id(proto->upvalues[i], strings, stringIds);
+    }
+}
+
+static int thread_bytecode_find_constant_index(const Proto* proto, const TValue* value) {
+    for (int i = 0; i < proto->sizek; ++i) {
+        if (luaO_rawequalObj(&proto->k[i], value)) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+static void thread_bytecode_scan_import_constants(
+    const Proto* proto, std::unordered_map<int, uint32_t>& importConstants, std::string& error) {
+    for (int pc = 0; pc < proto->sizecode;) {
+        LuauOpcode op = LuauOpcode(LUAU_INSN_OP(proto->code[pc]));
+        int length = Luau::getOpLength(op);
+
+        if (op == LOP_GETIMPORT) {
+            if (pc + 1 >= proto->sizecode) {
+                error = "thread entry bytecode is malformed: truncated GETIMPORT";
+                return;
+            }
+
+            int constantIndex = LUAU_INSN_D(proto->code[pc]);
+            uint32_t importId = proto->code[pc + 1];
+
+            if (auto it = importConstants.find(constantIndex);
+                it != importConstants.end() && it->second != importId) {
+                error =
+                    "thread entry bytecode is malformed: import constant reused with different ids";
+                return;
+            }
+
+            importConstants[constantIndex] = importId;
+        }
+
+        pc += length;
+    }
+}
+
+struct ThreadSerializedTableField {
+    int keyIndex = -1;
+    int valueIndex = -1;
+    bool hasConstantValue = false;
+};
+
+static bool thread_bytecode_write_table_constant(lua_State* L, const Proto* proto,
+                                                 const TValue* tableValue, std::string& data,
+                                                 std::string& error) {
+    luaA_pushobject(L, tableValue);
+    int tableIndex = lua_absindex(L, -1);
+
+    lua_pushnil(L);
+
+    std::vector<ThreadSerializedTableField> fields;
+    bool hasConstantValues = false;
+
+    while (lua_next(L, tableIndex) != 0) {
+        const TValue* key = luaA_toobject(L, -2);
+        const TValue* value = luaA_toobject(L, -1);
+
+        ThreadSerializedTableField field;
+        field.keyIndex = thread_bytecode_find_constant_index(proto, key);
+        if (field.keyIndex < 0) {
+            error = "thread entry function uses a table template with a non-constant key";
+            lua_pop(L, 3);
+            return false;
+        }
+
+        if (ttisnil(value)) {
+            field.valueIndex = thread_bytecode_find_constant_index(proto, value);
+            if (field.valueIndex < 0) {
+                error =
+                    "thread entry function uses a table template with an unsupported nil constant";
+                lua_pop(L, 3);
+                return false;
+            }
+            field.hasConstantValue = true;
+            hasConstantValues = true;
+        } else {
+            int valueIndex = thread_bytecode_find_constant_index(proto, value);
+            if (valueIndex >= 0) {
+                field.valueIndex = valueIndex;
+                field.hasConstantValue = true;
+                hasConstantValues = true;
+            } else if (!(ttisnumber(value) && nvalue(value) == 0.0)) {
+                error = "thread entry function uses a table template with a non-constant value";
+                lua_pop(L, 3);
+                return false;
+            }
+        }
+
+        fields.push_back(field);
+        lua_pop(L, 1);
+    }
+
+    lua_pop(L, 1);
+
+    std::sort(fields.begin(), fields.end(),
+              [](const ThreadSerializedTableField& lhs, const ThreadSerializedTableField& rhs) {
+                  return lhs.keyIndex < rhs.keyIndex;
+              });
+
+    if (hasConstantValues) {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_TABLE_WITH_CONSTANTS);
+        thread_bytecode_write_varint(data, uint32_t(fields.size()));
+        for (const ThreadSerializedTableField& field : fields) {
+            thread_bytecode_write_varint(data, uint32_t(field.keyIndex));
+            thread_bytecode_write_int(data, field.hasConstantValue ? field.valueIndex : -1);
+        }
+    } else {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_TABLE);
+        thread_bytecode_write_varint(data, uint32_t(fields.size()));
+        for (const ThreadSerializedTableField& field : fields) {
+            thread_bytecode_write_varint(data, uint32_t(field.keyIndex));
+        }
+    }
+
+    return true;
+}
+
+static bool thread_bytecode_write_constant(lua_State* L, const Proto* proto, int constantIndex,
+                                           const TValue* value,
+                                           const std::unordered_map<int, uint32_t>& importConstants,
+                                           const std::unordered_map<Proto*, uint32_t>& protoIds,
+                                           const std::unordered_map<TString*, uint32_t>& stringIds,
+                                           std::string& data, std::string& error) {
+    if (auto it = importConstants.find(constantIndex); it != importConstants.end()) {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_IMPORT);
+        thread_bytecode_write_int(data, int(it->second));
+        return true;
+    }
+
+    if (ttisnil(value)) {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_NIL);
+        return true;
+    }
+
+    if (ttisboolean(value)) {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_BOOLEAN);
+        thread_bytecode_write_byte(data, uint8_t(bvalue(value)));
+        return true;
+    }
+
+    if (ttisnumber(value)) {
+        thread_bytecode_write_byte(data, LBC_CONSTANT_NUMBER);
+        thread_bytecode_write_double(data, nvalue(value));
+        return true;
+    }
+
+    if (ttisinteger(value)) {
+        int64_t integerValue = lvalue(value);
+        thread_bytecode_write_byte(data, LBC_CONSTANT_INTEGER);
+        if (integerValue < 0) {
+            thread_bytecode_write_byte(data, 1);
+            thread_bytecode_write_varint(data, ~uint64_t(integerValue) + 1);
+        } else {
+            thread_bytecode_write_byte(data, 0);
+            thread_bytecode_write_varint(data, uint64_t(integerValue));
+        }
+        return true;
+    }
+
+    if (ttisvector(value)) {
+        const float* vectorValue = vvalue(value);
+        thread_bytecode_write_byte(data, LBC_CONSTANT_VECTOR);
+        thread_bytecode_write_float(data, vectorValue[0]);
+        thread_bytecode_write_float(data, vectorValue[1]);
+        thread_bytecode_write_float(data, vectorValue[2]);
+#if LUA_VECTOR_SIZE == 4
+        thread_bytecode_write_float(data, vectorValue[3]);
+#else
+        thread_bytecode_write_float(data, float(value->extra[0]));
+#endif
+        return true;
+    }
+
+    if (ttisstring(value)) {
+        auto it = stringIds.find(tsvalue(value));
+        LUAU_ASSERT(it != stringIds.end());
+        thread_bytecode_write_byte(data, LBC_CONSTANT_STRING);
+        thread_bytecode_write_varint(data, it->second);
+        return true;
+    }
+
+    if (ttistable(value)) {
+        return thread_bytecode_write_table_constant(L, proto, value, data, error);
+    }
+
+    if (ttisfunction(value)) {
+        Closure* constantClosure = clvalue(value);
+        if (!constantClosure || constantClosure->isC) {
+            error = "thread entry function uses an unsupported C closure constant";
+            return false;
+        }
+
+        auto it = protoIds.find(constantClosure->l.p);
+        if (it == protoIds.end()) {
+            error = "thread entry function uses a closure constant outside its proto graph";
+            return false;
+        }
+
+        thread_bytecode_write_byte(data, LBC_CONSTANT_CLOSURE);
+        thread_bytecode_write_varint(data, it->second);
+        return true;
+    }
+
+    error = "thread entry function uses an unsupported runtime constant type";
+    return false;
+}
+
+static bool thread_bytecode_write_proto(lua_State* L, const Proto* proto,
+                                        const std::unordered_map<Proto*, uint32_t>& protoIds,
+                                        const std::unordered_map<TString*, uint32_t>& stringIds,
+                                        std::string& data, std::string& error) {
+    std::unordered_map<int, uint32_t> importConstants;
+    thread_bytecode_scan_import_constants(proto, importConstants, error);
+    if (!error.empty()) {
+        return false;
+    }
+
+    thread_bytecode_write_byte(data, proto->maxstacksize);
+    thread_bytecode_write_byte(data, proto->numparams);
+    thread_bytecode_write_byte(data, proto->nups);
+    thread_bytecode_write_byte(data, proto->is_vararg);
+    thread_bytecode_write_byte(data, proto->flags);
+
+    thread_bytecode_write_varint(data, uint32_t(proto->sizetypeinfo));
+    if (proto->sizetypeinfo > 0 && proto->typeinfo) {
+        data.append(reinterpret_cast<const char*>(proto->typeinfo), proto->sizetypeinfo);
+    }
+
+    thread_bytecode_write_varint(data, uint32_t(proto->sizecode));
+    for (int i = 0; i < proto->sizecode; ++i) {
+        thread_bytecode_write_int(data, int(proto->code[i]));
+    }
+
+    thread_bytecode_write_varint(data, uint32_t(proto->sizek));
+    for (int i = 0; i < proto->sizek; ++i) {
+        if (!thread_bytecode_write_constant(L, proto, i, &proto->k[i], importConstants, protoIds,
+                                            stringIds, data, error)) {
+            return false;
+        }
+    }
+
+    thread_bytecode_write_varint(data, uint32_t(proto->sizep));
+    for (int i = 0; i < proto->sizep; ++i) {
+        auto it = protoIds.find(proto->p[i]);
+        if (it == protoIds.end()) {
+            error = "thread entry function proto graph is malformed";
+            return false;
+        }
+        thread_bytecode_write_varint(data, it->second);
+    }
+
+    thread_bytecode_write_varint(data, uint32_t(std::max(proto->linedefined, 0)));
+    uint32_t debugName = 0;
+    if (proto->debugname) {
+        auto it = stringIds.find(proto->debugname);
+        LUAU_ASSERT(it != stringIds.end());
+        debugName = it->second;
+    }
+    thread_bytecode_write_varint(data, debugName);
+
+    if (proto->lineinfo && proto->abslineinfo && proto->sizecode > 0) {
+        thread_bytecode_write_byte(data, 1);
+        thread_bytecode_write_byte(data, uint8_t(proto->linegaplog2));
+
+        uint8_t lastOffset = 0;
+        for (int i = 0; i < proto->sizecode; ++i) {
+            uint8_t offset = proto->lineinfo[i];
+            thread_bytecode_write_byte(data, uint8_t(offset - lastOffset));
+            lastOffset = offset;
+        }
+
+        int intervals = ((proto->sizecode - 1) >> proto->linegaplog2) + 1;
+        int lastLine = 0;
+        for (int i = 0; i < intervals; ++i) {
+            thread_bytecode_write_int(data, proto->abslineinfo[i] - lastLine);
+            lastLine = proto->abslineinfo[i];
+        }
+    } else {
+        thread_bytecode_write_byte(data, 0);
+    }
+
+    bool hasDebugInfo = proto->sizelocvars > 0 || proto->sizeupvalues > 0;
+    if (hasDebugInfo) {
+        thread_bytecode_write_byte(data, 1);
+
+        thread_bytecode_write_varint(data, uint32_t(proto->sizelocvars));
+        for (int i = 0; i < proto->sizelocvars; ++i) {
+            auto it = stringIds.find(proto->locvars[i].varname);
+            LUAU_ASSERT(it != stringIds.end());
+            thread_bytecode_write_varint(data, it->second);
+            thread_bytecode_write_varint(data, uint32_t(proto->locvars[i].startpc));
+            thread_bytecode_write_varint(data, uint32_t(proto->locvars[i].endpc));
+            thread_bytecode_write_byte(data, proto->locvars[i].reg);
+        }
+
+        thread_bytecode_write_varint(data, uint32_t(proto->sizeupvalues));
+        for (int i = 0; i < proto->sizeupvalues; ++i) {
+            auto it = stringIds.find(proto->upvalues[i]);
+            LUAU_ASSERT(it != stringIds.end());
+            thread_bytecode_write_varint(data, it->second);
+        }
+    } else {
+        thread_bytecode_write_byte(data, 0);
+    }
+
+    return true;
+}
+
+ERYX_API bool eryx_prepare_thread_entry_function(lua_State* L, int idx, std::string& bytecode,
+                                                 std::string& chunkName, std::string& error) {
+    bytecode.clear();
+    chunkName.clear();
+    error.clear();
+
+    const TValue* object = luaA_toobject(L, idx);
+    if (!object || !ttisfunction(object)) {
+        error = "thread entry must be a function";
+        return false;
+    }
+
+    Closure* closure = clvalue(object);
+    if (!closure || closure->isC) {
+        error = "thread entry must be a Luau function";
+        return false;
+    }
+
+    if (closure->nupvalues != 0) {
+        error = "thread entry function must not capture upvalues";
+        return false;
+    }
+
+    Proto* proto = closure->l.p;
+    if (!proto) {
+        error = "thread entry function is missing prototype information";
+        return false;
+    }
+
+    chunkName =
+        thread_entry_chunk_name_from_proto_source(proto->source ? getstr(proto->source) : nullptr);
+
+    std::vector<Proto*> protos;
+    std::unordered_map<Proto*, uint32_t> protoIds;
+    thread_bytecode_collect_protos(proto, protos, protoIds);
+
+    std::vector<TString*> strings;
+    std::unordered_map<TString*, uint32_t> stringIds;
+    for (Proto* current : protos) {
+        thread_bytecode_collect_strings_from_proto(current, strings, stringIds);
+    }
+
+    thread_bytecode_write_byte(bytecode, LBC_VERSION_TARGET);
+    thread_bytecode_write_byte(bytecode, LBC_TYPE_VERSION_TARGET);
+
+    thread_bytecode_write_varint(bytecode, uint32_t(strings.size()));
+    for (TString* stringValue : strings) {
+        thread_bytecode_write_varint(bytecode, stringValue->len);
+        bytecode.append(getstr(stringValue), stringValue->len);
+    }
+
+    // No userdata type-name remapping entries. If the captured typeinfo refers to
+    // tagged userdata names, the child runtime will conservatively remap them to
+    // generic userdata, which is sufficient for execution.
+    thread_bytecode_write_byte(bytecode, 0);
+
+    thread_bytecode_write_varint(bytecode, uint32_t(protos.size()));
+    for (Proto* current : protos) {
+        if (!thread_bytecode_write_proto(L, current, protoIds, stringIds, bytecode, error)) {
+            bytecode.clear();
+            chunkName.clear();
+            return false;
+        }
+    }
+
+    thread_bytecode_write_varint(bytecode, protoIds.at(proto));
+    return true;
 }
 
 ERYX_API int eryx_debug_register_count(lua_State* L, int frameLevel) {

@@ -34,7 +34,8 @@ window.eryx = (() => {
 	// -- Binary marshalling constants (must match lmarshall.hpp) --
 	const ETYPE_NULL = 0x00, ETYPE_TRUE = 0x01, ETYPE_FALSE = 0x02,
 		ETYPE_DOUBLE = 0x03, ETYPE_STRING = 0x04, ETYPE_BUFFER = 0x05,
-		ETYPE_VECTOR = 0x06, ETYPE_TABLE = 0x11, ETYPE_TABLE_HASH_DELIM = 0x12;
+		ETYPE_VECTOR = 0x06, ETYPE_INTEGER = 0x07, ETYPE_TABLE = 0x11,
+		ETYPE_TABLE_HASH_DELIM = 0x12;
 
 	// -- Base64 decode --
 	const B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -99,6 +100,15 @@ window.eryx = (() => {
 				pos.i += 8;
 				return view.getFloat64(0, true);
 			}
+			case ETYPE_INTEGER: {
+				if (pos.i + 8 > buf.length) throw new Error("Truncated integer");
+				const view = new DataView(buf.buffer, buf.byteOffset + pos.i, 8);
+				pos.i += 8;
+				const value = view.getBigInt64(0, true);
+				const minSafe = BigInt(Number.MIN_SAFE_INTEGER);
+				const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+				return value >= minSafe && value <= maxSafe ? Number(value) : value;
+			}
 			case ETYPE_STRING: {
 				const len = readVarint(buf, pos);
 				if (pos.i + len > buf.length) throw new Error("Truncated string");
@@ -150,6 +160,8 @@ window.eryx = (() => {
 		pos.i++;
 		return obj;
 	}
+)V0G0N"
+    LR"V0G0N(
 
 	// -- Marshall (JS -> binary) --
 	function writeVarint(out, val) {
@@ -170,6 +182,13 @@ window.eryx = (() => {
 		for (let i = 0; i < 8; i++) out.push(bytes[i]);
 	}
 
+	function writeInteger(out, value) {
+		const buf = new ArrayBuffer(8);
+		new DataView(buf).setBigInt64(0, BigInt(value), true);
+		const bytes = new Uint8Array(buf);
+		for (let i = 0; i < 8; i++) out.push(bytes[i]);
+	}
+
 	function writeValue(out, val) {
 		if (val === null || val === undefined) {
 			out.push(ETYPE_NULL);
@@ -177,9 +196,17 @@ window.eryx = (() => {
 			out.push(ETYPE_TRUE);
 		} else if (val === false) {
 			out.push(ETYPE_FALSE);
+		} else if (typeof val === "bigint") {
+			out.push(ETYPE_INTEGER);
+			writeInteger(out, val);
 		} else if (typeof val === "number") {
-			out.push(ETYPE_DOUBLE);
-			writeDouble(out, val);
+			if (Number.isSafeInteger(val)) {
+				out.push(ETYPE_INTEGER);
+				writeInteger(out, val);
+			} else {
+				out.push(ETYPE_DOUBLE);
+				writeDouble(out, val);
+			}
 		} else if (typeof val === "string") {
 			out.push(ETYPE_STRING);
 			const encoded = new TextEncoder().encode(val);
@@ -203,6 +230,8 @@ window.eryx = (() => {
 			throw new Error("Cannot marshall value of type " + typeof val);
 		}
 	}
+)V0G0N"
+    LR"V0G0N(
 
 	function writeTable(out, obj) {
 		out.push(ETYPE_TABLE);
@@ -218,12 +247,19 @@ window.eryx = (() => {
 		for (let i = 1; i <= arrLen; i++) arrKeys.add(String(i));
 		for (const key of Object.keys(obj)) {
 			if (arrKeys.has(key)) continue;
-			// Attempt to use numeric key if it parses as a finite number
-			const num = Number(key);
-			if (isFinite(num) && String(num) === key) {
-				writeValue(out, num);
+			// Attempt to use numeric keys before falling back to strings.
+			if (/^-?(0|[1-9]\d*)$/.test(key)) {
+				const bigint = BigInt(key);
+				const minSafe = BigInt(Number.MIN_SAFE_INTEGER);
+				const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+				writeValue(out, bigint >= minSafe && bigint <= maxSafe ? Number(bigint) : bigint);
 			} else {
-				writeValue(out, key);
+				const num = Number(key);
+				if (isFinite(num) && String(num) === key) {
+					writeValue(out, num);
+				} else {
+					writeValue(out, key);
+				}
 			}
 			writeValue(out, obj[key]);
 		}

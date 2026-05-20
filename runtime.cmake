@@ -70,6 +70,7 @@ endif()
 
 add_library(EryxShared ${_ERYX_LIB_TYPE}
     src/runtime/_wrapper_lib.cpp
+    src/runtime/runtime_host.cpp
     src/runtime/lexception.cpp
     src/runtime/lconfig.cpp
     src/runtime/lrequire.cpp

@@ -11,9 +11,11 @@
 #include <unistd.h>
 #endif
 
+#include <atomic>
 #include <cinttypes>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 
 static const uint64_t VFS_MARKER = 0x5346564558595245U;
 static const uint32_t VFS_VERSION = 1;
@@ -65,6 +67,7 @@ typedef struct VFS {
     int file;
 #endif
     size_t base;
+    size_t mappedSize;
 
     const VFSFileEntry* entries;
     const char* strings;
@@ -75,12 +78,19 @@ typedef struct VFS {
     uint32_t entrypointLength;
 } VFS;
 
-static VFS g_vfs;
+static VFS g_vfs = [] {
+    VFS vfs{};
+#ifndef _WIN32
+    vfs.file = -1;
+#endif
+    return vfs;
+}();
+static std::mutex g_vfsMutex;
 static bool g_vfsOpen = false;
-static bool g_vfsIsolated = true;
+static std::atomic<bool> g_vfsIsolated = true;
 
-bool vfs_is_isolated() { return g_vfsIsolated; }
-void vfs_set_isolated(bool isolated) { g_vfsIsolated = isolated; }
+bool vfs_is_isolated() { return g_vfsIsolated.load(std::memory_order_relaxed); }
+void vfs_set_isolated(bool isolated) { g_vfsIsolated.store(isolated, std::memory_order_relaxed); }
 
 struct PackMeta {
     std::filesystem::path diskPath;  // real file
@@ -248,6 +258,7 @@ static VFS_ERROR vfs_locate_payload() {
     LARGE_INTEGER size;
     GetFileSizeEx(g_vfs.file, &size);
     uint64_t fileSize = size.QuadPart;
+    g_vfs.mappedSize = size_t(fileSize);
 #else
     g_vfs.file = open(path.c_str(), O_RDONLY);
     if (g_vfs.file < 0) return kVFS_ERROR_FILE;
@@ -256,6 +267,7 @@ static VFS_ERROR vfs_locate_payload() {
     if (fstat(g_vfs.file, &st) != 0) return kVFS_ERROR_FILE;
 
     uint64_t fileSize = st.st_size;
+    g_vfs.mappedSize = size_t(fileSize);
 
     g_vfs.base = (size_t)mmap(NULL, fileSize, PROT_READ, MAP_PRIVATE, g_vfs.file, 0);
     if (g_vfs.base == (size_t)MAP_FAILED) return kVFS_ERROR_FILE;
@@ -286,30 +298,55 @@ static VFS_ERROR vfs_locate_payload() {
     return kVFS_ERROR_OK;
 }
 
-void vfs_close() {
+static void vfs_reset_handles() {
+#ifdef _WIN32
+    g_vfs.file = nullptr;
+    g_vfs.mapping = nullptr;
+#else
+    g_vfs.file = -1;
+#endif
+    g_vfs.base = 0;
+    g_vfs.mappedSize = 0;
+    g_vfs.entries = nullptr;
+    g_vfs.strings = nullptr;
+    g_vfs.data = nullptr;
+    g_vfs.fileCount = 0;
+    g_vfs.entrypoint = nullptr;
+    g_vfs.entrypointLength = 0;
+}
+
+static void vfs_close_locked() {
 #ifdef _WIN32
     if (g_vfs.base) UnmapViewOfFile((void*)(g_vfs.base));
     if (g_vfs.mapping) CloseHandle(g_vfs.mapping);
-    if (g_vfs.file) CloseHandle(g_vfs.file);
+    if (g_vfs.file && g_vfs.file != INVALID_HANDLE_VALUE) CloseHandle(g_vfs.file);
 #else
-    if (g_vfs.base) munmap((void*)g_vfs.base, 0);
+    if (g_vfs.base && g_vfs.mappedSize) munmap((void*)g_vfs.base, g_vfs.mappedSize);
     if (g_vfs.file >= 0) close(g_vfs.file);
 #endif
 
+    vfs_reset_handles();
     g_vfsOpen = false;
 }
+
+void vfs_close() {
+    std::scoped_lock lock(g_vfsMutex);
+    vfs_close_locked();
+}
+
 bool vfs_open() {
+    std::scoped_lock lock(g_vfsMutex);
     if (g_vfsOpen) return true;
 
     if (vfs_locate_payload() != kVFS_ERROR_OK) {
-        vfs_close();
+        vfs_close_locked();
         return false;
     }
     g_vfsOpen = true;
     return true;
 }
 
-const VFSFileEntry* vfs_find_file(const std::string& path) {
+static const VFSFileEntry* vfs_find_file_unchecked(const std::string& path) {
     uint32_t left = 0;
     uint32_t right = g_vfs.fileCount;
 
@@ -331,18 +368,28 @@ const VFSFileEntry* vfs_find_file(const std::string& path) {
 
     return nullptr;
 }
-std::string_view vfs_get_entrypoint() { return { g_vfs.entrypoint, g_vfs.entrypointLength }; }
+
+std::string_view vfs_get_entrypoint() {
+    if (!vfs_open()) return {};
+    return { g_vfs.entrypoint, g_vfs.entrypointLength };
+}
+
 std::span<const uint8_t> vfs_read_file(const std::string& path) {
-    auto e = vfs_find_file(path);
+    if (!vfs_open()) return {};
+    auto e = vfs_find_file_unchecked(path);
     if (!e) return {};
     return { (uint8_t*)g_vfs.data + e->dataOffset, (size_t)e->size };
 }
+
 uint64_t vfs_get_mtime(const std::string& path) {
-    auto e = vfs_find_file(path);
+    if (!vfs_open()) return 0;
+    auto e = vfs_find_file_unchecked(path);
     if (!e) return 0;
     return e->mtime;
 }
+
 std::vector<std::string> vfs_list_dir(const std::string& dir) {
+    if (!vfs_open()) return {};
     std::vector<std::string> out;
 
     std::string prefix = dir;
@@ -359,9 +406,13 @@ std::vector<std::string> vfs_list_dir(const std::string& dir) {
     return out;
 }
 
-bool vfs_is_file(const std::string& path) { return vfs_find_file(path) != nullptr; }
+bool vfs_is_file(const std::string& path) {
+    if (!vfs_open()) return false;
+    return vfs_find_file_unchecked(path) != nullptr;
+}
 
 bool vfs_is_dir(const std::string& path) {
+    if (!vfs_open()) return false;
     std::string prefix = path;
     if (!prefix.empty() && prefix.back() != '/') prefix += '/';
 

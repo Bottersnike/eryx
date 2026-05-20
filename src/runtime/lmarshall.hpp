@@ -14,6 +14,7 @@ enum EryxMarshallType : uint8_t {
     ETYPE_STRING = 0x04,
     ETYPE_BUFFER = 0x05,
     ETYPE_VECTOR = 0x06,
+    ETYPE_INTEGER = 0x07,
 
     ETYPE_TABLE = 0x11,
     ETYPE_TABLE_HASH_DELIM = 0x12,

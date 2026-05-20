@@ -31,6 +31,7 @@
 #include "runtime/embedded_modules.h"
 #include "runtime/lexception.hpp"
 #include "runtime/lrequire.hpp"
+#include "runtime/runtime_host.hpp"
 #include "vfs.hpp"
 
 #ifdef ERYX_EMBED
@@ -81,87 +82,15 @@ void eryx_print_error(lua_State* L, int idx) {
     fprintf(stderr, "%s\n", eryx_format_exception(L, idx, should_use_ansi_for_fd(2)).c_str());
 }
 
-static int eryx_find_exception_index(lua_State* L) {
-    for (int index = lua_gettop(L); index >= 1; --index) {
-        if (eryx_get_exception(L, index)) {
-            return index;
-        }
-    }
-
-    return 0;
-}
-
-bool eryx_has_work(EryxRuntime* rt) { return !rt->threads.empty() || uv_loop_alive(rt->loop); }
-
-enum class ERYX_RUN_ONCE_STATE { kNoThreads = 0, kError, kSuccess };
-ERYX_RUN_ONCE_STATE eryx_run_once(lua_State* GL, EryxRuntime* rt, lua_State** runningLua) {
-    uv_run(rt->loop, !rt->threads.empty() ? UV_RUN_NOWAIT : UV_RUN_ONCE);
-
-    if (rt->threads.empty()) {
-        return ERYX_RUN_ONCE_STATE::kNoThreads;
-    }
-
-    EryxThreadInfo thread = eryx_pop_thread(rt);
-
-    lua_getref(GL, thread.threadRef);
-    lua_State* L = lua_tothread(GL, -1);
-    if (L == nullptr) {
-        fprintf(stderr, "%s found non-thread on threads queue (ref: %d)\n", __func__,
-                thread.threadRef);
-        return ERYX_RUN_ONCE_STATE::kError;
-    }
-    *runningLua = L;
-    lua_pop(GL, 1);
-
-    // Skip threads that are already dead (e.g. force-spawned while deferred)
-    int coStatus = lua_costatus(GL, L);
-    if (coStatus != LUA_COSUS) {
-        lua_unref(GL, thread.threadRef);
-        return ERYX_RUN_ONCE_STATE::kSuccess;
-    }
-
-    int status;
-    if (thread.inError) {
-        status = lua_resumeerror(L, nullptr);
-    } else {
-        status = lua_resume(L, nullptr, thread.nargs);
-    }
-
-    // Resuming a queued coroutine transfers ownership of thread.threadRef to
-    // the scheduler for this one resume only. Release that ref now; any fresh
-    // yield path must create its own new ref before returning to the loop.
-    lua_unref(GL, thread.threadRef);
-
-    if (!thread.inError && eryx_require_maybe_finalize_loader(GL, L, status)) {
-        return ERYX_RUN_ONCE_STATE::kSuccess;
-    }
-
-    switch (status) {
-        case LUA_YIELD:
-        case LUA_OK:
-            return ERYX_RUN_ONCE_STATE::kSuccess;
-        default:
-            if (int exceptionIndex = eryx_find_exception_index(L)) {
-                lua_settop(L, exceptionIndex);
-                return ERYX_RUN_ONCE_STATE::kError;
-            }
-            // Wrap raw string errors into LuaException before the coroutine's
-            // frames are discarded. Must happen here while the dead coroutine's
-            // call stack is still introspectable via lua_getinfo.
-            eryx_coerce_to_exception(L);
-            return ERYX_RUN_ONCE_STATE::kError;
-    }
-}
-
 typedef struct {
     int runOk;
     int exitCode;
 } RunState;
-RunState eryx_run_to_completion(lua_State* GL, EryxRuntime* rt) {
-    while (eryx_has_work(rt)) {
+RunState eryx_run_to_completion(EryxRuntimeHost* host) {
+    while (eryx_runtime_has_work(host->rt)) {
         lua_State* runningLua = NULL;
-        auto status = eryx_run_once(GL, rt, &runningLua);
-        if (status == ERYX_RUN_ONCE_STATE::kError) {
+        auto status = eryx_runtime_run_once(host, &runningLua);
+        if (status == EryxRuntimeRunResult::Error) {
             if (runningLua) {
                 LuaException* exception = eryx_get_exception(runningLua, -1);
                 if (exception && strcmp(exception->type, ETYPE_SYSTEM_EXIT) == 0) {
@@ -173,7 +102,7 @@ RunState eryx_run_to_completion(lua_State* GL, EryxRuntime* rt) {
                 fprintf(stderr, "Failed to identify running lua instance for error reporting\n");
             }
 
-            if (!eryx_has_work(rt)) return RunState{ 0, 0 };
+            if (!eryx_runtime_has_work(host->rt)) return RunState{ 0, 0 };
         }
     }
     // No work left, and we didn't hit an error path, so we must be good!
@@ -182,46 +111,27 @@ RunState eryx_run_to_completion(lua_State* GL, EryxRuntime* rt) {
 
 int main_script(const char* filename, const std::string luauCode) {
     int exitCode = 0;
-
-    uv_loop_t loop;
     try {
-        lua_State* GL = eryx_initialise_environment(filename);
-
-        uv_loop_init(&loop);
-        EryxRuntime* rt = eryx_setup_runtime(&loop, GL);
-        lua_setthreaddata(GL, rt);
-
-        // Set up Ctrl+C handler for the UV loop (unref'd so it won't keep the loop alive)
-        uv_signal_t* sigint = new uv_signal_t;
-        uv_signal_init(rt->loop, sigint);
-        uv_unref((uv_handle_t*)sigint);
-        sigint->data = rt;
-        rt->sigint = sigint;
-        uv_signal_start(
-            sigint,
-            [](uv_signal_t* handle, int) {
-                EryxRuntime* r = (EryxRuntime*)handle->data;
-                eryx_interrupt_runtime(r);
-            },
-            SIGINT);
+        EryxRuntimeHost host;
+        if (!eryx_runtime_host_init(&host, filename)) {
+            std::cerr << "Failed to create Lua state" << std::endl;
+            return 1;
+        }
+        eryx_runtime_host_install_sigint(&host);
 
         // Make thread for the root module
-        lua_State* L = lua_newthread(GL);
-        luaL_sandboxthread(L);
+        lua_State* L = eryx_runtime_host_create_thread(&host);
 
         if (!eryx_load_and_prepare_script(L, luauCode, std::string("@") + filename)) {
             // Script loading failed!
             eryx_print_error(L, -1);
-            lua_pop(GL, 1);
+            lua_pop(host.GL, 1);
 
             exitCode = 1;
         } else {
-            lua_rawcheckstack(L, 1);
-            lua_pushthread(L);
-            eryx_push_thread(rt, lua_ref(L, -1), 0, false);
-            lua_pop(L, 1);
+            eryx_runtime_host_enqueue_thread(&host, L, 0, false);
 
-            RunState ran = eryx_run_to_completion(GL, rt);
+            RunState ran = eryx_run_to_completion(&host);
             if (ran.runOk == 2) {
                 // A system exit error, specifically, was thrown
                 exitCode = ran.exitCode;
@@ -235,8 +145,7 @@ int main_script(const char* filename, const std::string luauCode) {
         // releasing their GPU resources. Subsystem cleanup (SDL, WGPU, FreeType,
         // miniaudio) is handled by the _gfx module's atexit handler which runs
         // after main() returns.
-        lua_close(GL);
-        GL = nullptr;
+        eryx_runtime_host_close(&host);
 
         return exitCode;
     } catch (const std::exception& e) {

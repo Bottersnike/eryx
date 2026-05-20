@@ -35,6 +35,8 @@ static void mark_seen(lua_State* L, int t, int visited) {
 
 static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, int visited);
 static void encode_lua_value(lua_State* L, int idx, std::vector<uint8_t>& data, int visited) {
+    idx = lua_absindex(L, idx);
+
     switch ((lua_Type)lua_type(L, idx)) {
         case LUA_TNIL:
             data.push_back(ETYPE_NULL);
@@ -50,6 +52,13 @@ static void encode_lua_value(lua_State* L, int idx, std::vector<uint8_t>& data, 
             data.push_back(ETYPE_DOUBLE);
             auto ptr = reinterpret_cast<const uint8_t*>(&k);
             data.insert(data.end(), ptr, ptr + sizeof(lua_Number));
+            break;
+        }
+        case LUA_TINTEGER: {
+            int64_t k = lua_tointeger64(L, idx, nullptr);
+            data.push_back(ETYPE_INTEGER);
+            auto ptr = reinterpret_cast<const uint8_t*>(&k);
+            data.insert(data.end(), ptr, ptr + sizeof(k));
             break;
         }
         case LUA_TSTRING: {
@@ -99,10 +108,17 @@ static void encode_lua_value(lua_State* L, int idx, std::vector<uint8_t>& data, 
         case LUA_TDEADKEY:
             luaL_error(L, "Something has gone fatally wrong with your Luau runtime.");
             break;
+        default:
+            luaL_error(
+                L, "Something has gone fatally wrong with your Luau runtime. (Unknown TValue %d)",
+                lua_type(L, idx));
+            break;
     }
 }
 
 static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, int visited) {
+    idx = lua_absindex(L, idx);
+
     if (lua_getmetatable(L, idx)) {
         lua_pop(L, 1);
         luaL_error(L, "Cannot marshall tables with metatables");
@@ -131,7 +147,14 @@ static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, 
     lua_pushnil(L);
     while (lua_next(L, idx) != 0) {
         // Skip array keys we already encoded
-        if (lua_type(L, -2) == LUA_TNUMBER) {
+        int keyType = lua_type(L, -2);
+        if (keyType == LUA_TINTEGER) {
+            int64_t k = lua_tointeger64(L, -2, nullptr);
+            if (k >= 1 && k <= n) {
+                lua_pop(L, 1);
+                continue;
+            }
+        } else if (keyType == LUA_TNUMBER) {
             lua_Number k = lua_tonumber(L, -2);
             if (k >= 1 && k <= n && (lua_Integer)k == k) {
                 lua_pop(L, 1);
@@ -151,8 +174,7 @@ static void encode_lua_table(lua_State* L, int idx, std::vector<uint8_t>& data, 
 // ---------------------------------------------------------------------------
 
 void eryx_marshall(lua_State* L, int idx, std::vector<uint8_t>& out) {
-    // Normalize negative indices before we push the visited table
-    if (idx < 0 && idx > LUA_REGISTRYINDEX) idx = lua_gettop(L) + idx + 1;
+    idx = lua_absindex(L, idx);
 
     lua_newtable(L);
     int visited = lua_gettop(L);
@@ -243,6 +265,14 @@ static size_t decode_lua_value(lua_State* L, const uint8_t* data, size_t len) {
             memcpy(&k, data + pos, sizeof(lua_Number));
             pos += sizeof(lua_Number);
             lua_pushnumber(L, k);
+            break;
+        }
+        case ETYPE_INTEGER: {
+            if (len - pos < sizeof(int64_t)) luaL_error(L, "Truncated integer in unmarshall");
+            int64_t k;
+            memcpy(&k, data + pos, sizeof(int64_t));
+            pos += sizeof(int64_t);
+            lua_pushinteger64(L, k);
             break;
         }
         case ETYPE_STRING: {

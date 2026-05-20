@@ -91,6 +91,8 @@ ERYX_API int eryx_debug_get_register(lua_State* L, int frameLevel, int reg);
 ERYX_API const char* eryx_debug_get_register_local_name(lua_State* L, int frameLevel, int reg);
 ERYX_API int eryx_debug_currentpc(lua_State* L, int frameLevel);
 ERYX_API int eryx_debug_current_instructionpc(lua_State* L, int frameLevel);
+ERYX_API bool eryx_prepare_thread_entry_function(lua_State* L, int idx, std::string& bytecode,
+                                                 std::string& chunkName, std::string& error);
 
 using EryxTimingClock = std::chrono::steady_clock;
 

@@ -391,3 +391,6 @@ include(vendor/mpfr.cmake)
 add_luau_module(number src/modules/number.cpp src/modules/number.luau
     EXTRA_LIBS GMP MPFR
 )
+add_luau_module(thread src/modules/thread.cpp src/modules/thread.luau
+    EXTRA_LIBS uv_a
+)
