@@ -1078,7 +1078,8 @@ details.doc-entry {
     font-family: var(--font-mono);
     font-size: 0.88rem;
     line-height: 1.75;
-    white-space: pre;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
     overflow-x: auto;
     /* border-top: 1px solid var(--border-code);
     border-bottom: 1px solid var(--border-code); */
@@ -1598,6 +1599,12 @@ hr.section-sep {
     color: inherit;
 }
 
+.type-display-generics {
+    color: var(--text-dim);
+    font-family: var(--font-mono);
+    font-size: 0.95em;
+}
+
 /* ---- ToC right sidebar ---- */
 .toc-sidebar {
     position: fixed;
@@ -1913,7 +1920,7 @@ pre:hover .code-copy-btn {
     border: 1px solid var(--border-code);
     font-size: 0.84rem;
     line-height: 1.55;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+    overflow: auto;
 }

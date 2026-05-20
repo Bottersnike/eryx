@@ -89,6 +89,38 @@ local function constantDisplayName(owner: string?, name: string): string
 	return name
 end
 
+local function typeDisplayText(typeDoc: any): string
+	if not typeDoc then
+		return ""
+	end
+
+	local generics = typeDoc.generics
+	if generics and #generics > 0 then
+		return typeDoc.name .. "<" .. table.concat(generics, ", ") .. ">"
+	end
+	return typeDoc.name
+end
+
+local function typeDisplayHtml(typeDoc: any): string
+	if not typeDoc then
+		return ""
+	end
+
+	local name = htmlEscapeFilter(typeDoc.name or "")
+	local generics = typeDoc.generics
+	if generics and #generics > 0 then
+		local escapedGenerics: { string } = {}
+		for _, generic in generics do
+			table.insert(escapedGenerics, htmlEscapeFilter(generic))
+		end
+		return `<span class="type-display-name">{name}</span><span class="type-display-generics">&lt;{table.concat(
+			escapedGenerics,
+			", "
+		)}&gt;</span>`
+	end
+	return `<span class="type-display-name">{name}</span>`
+end
+
 local function resolveModuleFunction(mod: modules.ModuleInfo, core: string): { signature: string?, doc: string? }?
 	for _, f in mod.functions do
 		if f.name == core then
@@ -849,6 +881,12 @@ function Renderer.renderPage(
 		end,
 		signatureHtml = signatureHtml,
 		signatureHtmlLinks = signatureHtmlLinks,
+		typeNameHtml = function(typeDoc: any): string
+			return typeDisplayHtml(typeDoc)
+		end,
+		typeNameText = function(typeDoc: any): string
+			return typeDisplayText(typeDoc)
+		end,
 		typeLink = function(typeName: string, ctx: { [string]: any }): string
 			local currentMod: modules.ModuleInfo? = if ctx then (ctx :: any).module else nil
 			if not currentMod then
@@ -1419,7 +1457,7 @@ function Renderer.generateSearchIndex(self: Renderer): string
 
 		for _, cls in allClasses do
 			table.insert(entries, {
-				t = cls.name,
+				t = typeDisplayText(cls),
 				p = modLink .. "#class-" .. cls.name,
 				k = "class",
 				s = truncate(stripMarkdown(cls.doc or ""), 200),
@@ -1439,7 +1477,7 @@ function Renderer.generateSearchIndex(self: Renderer): string
 		-- Types
 		for _, t in mod.types do
 			table.insert(entries, {
-				t = t.name,
+				t = typeDisplayText(t),
 				p = modLink .. "#type-" .. t.name,
 				k = "type",
 				s = truncate(stripMarkdown(t.doc or ""), 200),

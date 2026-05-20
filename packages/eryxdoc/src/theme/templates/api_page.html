@@ -59,7 +59,7 @@
 {% macro renderClass(c) %}
 <details open class="doc-entry" id="class-{{c.name | escape }}">
     <summary class="entry-header">
-        <h3>{{ c.name | escape }}</h3>
+        <h3>{{ c | typeNameHtml }}</h3>
         <span class="type-toggle"></span>
     </summary>
 
@@ -172,7 +172,7 @@
 
         {% if module.primaryExport then %}
         <h3 class="api-category">Exported Class</h3>
-        <div class="summary-class-name"><a href="#class-{{module.primaryExport.name | escape }}">{{primaryExport}}</a></div>
+        <div class="summary-class-name"><a href="#class-{{module.primaryExport.name | escape }}">{{ module.primaryExport | typeNameHtml }}</a></div>
         {% for _, m in module.primaryExport.members do %}
         {% if not m.isMethod and not m.params then %}
         <div class="param-entry">
@@ -199,7 +199,7 @@
         {% if module.classes | length > 0 then %}
         <h3 class="api-category">Classes</h3>
         {% for _, c in module.classes do %}
-        <div class="summary-class-name"><a href="#class-{{c.name | escape }}">{{c.name}}</a></div>
+        <div class="summary-class-name"><a href="#class-{{c.name | escape }}">{{ c | typeNameHtml }}</a></div>
         {% for _, m in c.members do %}
         {% if not m.isMethod and not m.params then %}
         <div class="param-entry">
@@ -289,7 +289,7 @@
         {% for _, t in module.types do %}
         <details open class="doc-entry" id="type-{{ t.name | escape }}">
             <summary class="entry-header">
-                <h3>{{ t.name | escape }}{{ t.genericHtml }}</h3>
+                <h3>{{ t | typeNameHtml }}</h3>
                 <span class="type-toggle"></span>
             </summary>
             {% if t.doc then %}

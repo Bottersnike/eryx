@@ -1255,7 +1255,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				table.insert(aliasParts, tp(renderGenerics(generics), false, "punct"))
 			end
 			table.insert(aliasParts, tp(" = ", false, "punct"))
-			tpExtend(aliasParts, td.describeTypeParts(aliasedType))
+			tpExtend(aliasParts, td.describeTypeFullParts(aliasedType))
 			typeSignatureParts = aliasParts
 		elseif typeMembers and #typeMembers > 0 then
 			local tableParts: { SignaturePart } = { tp("type ", false, "keyword") }

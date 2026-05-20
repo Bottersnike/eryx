@@ -71,6 +71,7 @@ export type ThreadContext<InitialData, SendData, UpdateData, RecvData> = setmeta
 			--[=[
 				Wait for the next message from the parent.
 
+				@yields Yields until the parent sends a value to this child thread.
 				@return Next payload sent from the parent thread or pooled caller.
 			]=]
 			recv: (self: ThreadContext<InitialData, SendData, UpdateData, RecvData>) -> RecvData,
@@ -114,12 +115,14 @@ export type ThreadHandle<SendData, RecvData, ResultData> = setmetatable<
 			--[=[
 				Wait for the next message sent from the child thread.
 
+				@yields Yields until the child thread sends a value or terminates.
 				@return Next payload published by the child through `context:send()`.
 			]=]
 			recv: (self: ThreadHandle<SendData, RecvData, ResultData>) -> RecvData,
 			--[=[
 				Wait for the thread to finish and return its final result.
 
+				@yields Yields until the child thread reaches a terminal state.
 				@return Final value returned by the child entrypoint.
 			]=]
 			join: (self: ThreadHandle<SendData, RecvData, ResultData>) -> ResultData,
@@ -186,6 +189,7 @@ export type Future<UpdateData, ResultData> = setmetatable<
 			--[=[
 				Wait for the job to finish and return its final result.
 
+				@yields Yields until the pooled job reaches a terminal state.
 				@return Final value returned by the pooled job.
 			]=]
 			wait: (self: Future<UpdateData, ResultData>) -> ResultData,
