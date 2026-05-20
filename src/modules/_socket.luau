@@ -72,6 +72,7 @@ export type Socket = setmetatable<
 				@return Socket -- A new socket connected to the client.
 				@return string -- The remote IP address.
 				@return number -- The remote port.
+				@yields
 			]=]
 			accept: (self: Socket) -> (Socket, string, number) | (self: Socket) -> (nil, nil, nil),
 
@@ -84,6 +85,7 @@ export type Socket = setmetatable<
 
 				@param host The remote address to connect to.
 				@param port The remote port number.
+				@yields
 			]=]
 			connect: (self: Socket, host: string, port: number) -> (),
 
@@ -118,6 +120,7 @@ export type Socket = setmetatable<
 
 				@param data The data to send.
 				@return number -- Number of bytes sent.
+				@yields
 			]=]
 			send: (self: Socket, data: string | buffer) -> number?,
 
@@ -131,6 +134,7 @@ export type Socket = setmetatable<
 				operation would have blocked.
 
 				@param data The data to send.
+				@yields
 			]=]
 			sendAll: (self: Socket, data: string | buffer) -> boolean,
 
@@ -147,6 +151,7 @@ export type Socket = setmetatable<
 				@param host The destination address.
 				@param port The destination port.
 				@return number -- Number of bytes sent.
+				@yields
 			]=]
 			sendTo: (self: Socket, data: string | buffer, host: string, port: number) -> number?,
 
@@ -162,6 +167,7 @@ export type Socket = setmetatable<
 
 				@param bufsize Maximum number of bytes to receive.
 				@return buffer -- The received data.
+				@yields
 			]=]
 			recv: (self: Socket, bufsize: number) -> buffer?,
 
@@ -176,6 +182,7 @@ export type Socket = setmetatable<
 				@return buffer -- The received datagram.
 				@return string -- The sender's IP address.
 				@return number -- The sender's port.
+				@yields
 			]=]
 			recvFrom: (self: Socket, bufsize: number) -> (buffer, string, number)
 				| (self: Socket, bufsize: number) -> (nil, nil, nil),

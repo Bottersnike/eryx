@@ -28,6 +28,7 @@ end
 function task.delay<A..., R...>(duration: number?, functionOrThread: ((A...) -> R...) | thread, ...: A...): thread
 	return nil :: any
 end
+--- @yields
 function task.wait(duration: number?): number
 	return 0
 end

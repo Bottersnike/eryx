@@ -50,6 +50,7 @@ export type SslContext = setmetatable<{}, {
 			@param sock A connected `_socket.Socket`.
 			@param serverHostname Hostname for SNI and certificate verification.
 			@return SslSocket -- The wrapped TLS socket.
+			@yields
 		]=]
 		wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
 
@@ -102,6 +103,7 @@ export type SslSocket = setmetatable<
 
 				@param data The data to send.
 				@return number -- Number of bytes sent.
+				@yields
 			]=]
 			send: (self: SslSocket, data: string | buffer) -> number,
 
@@ -110,6 +112,7 @@ export type SslSocket = setmetatable<
 				has been transmitted or an error occurs.
 
 				@param data The data to send.
+				@yields
 			]=]
 			sendAll: (self: SslSocket, data: string | buffer) -> (),
 
@@ -121,6 +124,7 @@ export type SslSocket = setmetatable<
 
 				@param bufsize Maximum number of bytes to receive.
 				@return buffer -- The received data.
+				@yields
 			]=]
 			recv: (self: SslSocket, bufsize: number) -> buffer,
 
@@ -245,6 +249,7 @@ end
 	@param hostname Hostname for SNI and certificate verification.
 		Required when verification is enabled.
 	@return SslSocket -- The wrapped TLS socket.
+	@yields
 ]=]
 function _ssl.wrapSocket(sock: any, hostname: string?): SslSocket
 	return nil :: any

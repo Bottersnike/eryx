@@ -104,6 +104,7 @@ export type SerialPort = setmetatable<
 				Throws on device errors (e.g. disconnection).
 				@param size maximum bytes to read; omit to drain the buffer non-blocking
 				@param timeout timeout in milliseconds; 0 = non-blocking
+				@yields
 			]=]
 			read: ((self: stream.StreamThatCanRead, size: number?) -> string)
 				& ((self: stream.StreamThatCanRead, size: number?, timeout: number) -> string?),

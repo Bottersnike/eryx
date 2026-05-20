@@ -48,6 +48,7 @@ export type ProcessHandle = {
 	--- Readable stream connected to the child process stderr.
 	stderr: stream.ReadOnlyStream,
 	--- Wait for the process to complete
+	--- @yields
 	wait: (self: ProcessHandle) -> ExecResult,
 	--[=[
 		Kill the process
@@ -327,6 +328,7 @@ end
 	@param args Ordered argument list passed to the process.
 	@param opts Optional spawn configuration.
 	@return Process result containing captured output and exit code.
+	@yields
 ]=]
 function os.exec(cmd: string, args: { string }, opts: SpawnOptions?): ExecResult
 	return nil :: any
@@ -366,6 +368,7 @@ end
 	@param cmd Command string to execute through the shell.
 	@param opts Optional spawn configuration.
 	@return Process exit status code.
+	@yields
 ]=]
 function os.shell(cmd: string, opts: SpawnOptions?): number
 	return nil :: any

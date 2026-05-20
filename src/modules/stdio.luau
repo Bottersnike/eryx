@@ -66,6 +66,7 @@ export type ReadLineOptions = {
 	then returns up to `bytes` bytes (default 4096).
 	Returns `""` on EOF. Passing `0` also returns `""`.
 	Only one `read` may be pending at a time.
+	@yields
 ]=]
 function stdio.read(bytes: number?): string
 	return nil :: any
@@ -79,8 +80,11 @@ function stdio.readSync(bytes: number?): string
 	return nil :: any
 end
 
---- Yields and reads from stdin as a `buffer`.
---- Returns an empty buffer on EOF.
+--[=[
+	Yields and reads from stdin as a `buffer`.
+	Returns an empty buffer on EOF.
+	@yields
+]=]
 function stdio.readBuffer(bytes: number?): buffer
 	return nil :: any
 end
@@ -112,19 +116,23 @@ function stdio.readline(options: ReadLineOptions?): string
 end
 
 --- Yields, writes a string to stdout, and returns bytes written.
+--- @yields
 function stdio.write(data: string | buffer): number
 	return 0 :: any
 end
 
 --- Yields, writes a string to stderr, and returns bytes written.
+--- @yields
 function stdio.writeerr(data: string | buffer): number
 	return 0 :: any
 end
 
 --- Yields and flushes the stdout buffer.
+--- @yields
 function stdio.flush() end
 
 --- Yields and flushes the stderr buffer.
+--- @yields
 function stdio.flusherr() end
 
 --- Writes a string to stdout synchronously.
