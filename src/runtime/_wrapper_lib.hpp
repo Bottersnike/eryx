@@ -1,8 +1,6 @@
 #pragma once
 
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
+#include <cstddef>
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -23,6 +21,13 @@ typedef struct {
 typedef void (*EryxInterruptCallback)(struct EryxRuntime* rt, void* ctx);
 typedef void (*EryxDebugFunctionLoadedCallback)(lua_State* L, int funcIndex, const char* chunkName,
                                                 void* ctx);
+
+enum class EryxNativeCodegenMode {
+    Disabled,
+    All,
+    OnlySpecified,
+};
+
 typedef struct EryxRuntime {
     lua_State* GL;  // main thread (for deref'ing refs in timer callbacks)
     uv_loop_t* loop;
@@ -35,7 +40,7 @@ typedef struct EryxRuntime {
     bool hasCliArgs = false;
     std::vector<std::string> cliArgs;
 
-    bool nativeCodegenEnabled = true;
+    EryxNativeCodegenMode nativeCodegenMode = EryxNativeCodegenMode::All;
     int luauOptimizationLevel = 2;
     int luauDebugLevel = 1;
     int luauTypeInfoLevel = 1;
@@ -73,15 +78,6 @@ ERYX_API int eryx_luau_typeAt(lua_State* L);
 ERYX_API int eryx_luau_autocomplete(lua_State* L);
 ERYX_API int eryx_luau_typeofModule(lua_State* L);
 
-// CLI args offset: number of leading argv entries to skip in os.cliargs()
-// (exe, subcommand, script path, etc.). Set by main() before script execution
-// so Luau code only sees user arguments.
-ERYX_API void eryx_set_cliargs_offset(int offset);
-ERYX_API int eryx_get_cliargs_offset();
-ERYX_API void eryx_set_cliargs(int argc, const char** argv);
-ERYX_API int eryx_get_cliargs_argc();
-ERYX_API const char** eryx_get_cliargs_argv();
-
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename);
 
 // Debug helpers that need VM-private stack/proto access. Native modules call
@@ -91,52 +87,18 @@ ERYX_API int eryx_debug_get_register(lua_State* L, int frameLevel, int reg);
 ERYX_API const char* eryx_debug_get_register_local_name(lua_State* L, int frameLevel, int reg);
 ERYX_API int eryx_debug_currentpc(lua_State* L, int frameLevel);
 ERYX_API int eryx_debug_current_instructionpc(lua_State* L, int frameLevel);
+// Paused threads resumed from debugger hooks need temporary stack/base normalization
+// before stack-indexed VM helpers such as lua_getlocal/lua_pushvalue are safe to use.
+struct EryxDebugPausedState {
+    int status = 0;
+    ptrdiff_t baseOffset = 0;
+    ptrdiff_t ciTopOffset = 0;
+    bool active = false;
+};
+ERYX_API bool eryx_debug_begin_paused_state(lua_State* L, EryxDebugPausedState* state);
+ERYX_API void eryx_debug_end_paused_state(lua_State* L, const EryxDebugPausedState* state);
 ERYX_API bool eryx_prepare_thread_entry_function(lua_State* L, int idx, std::string& bytecode,
                                                  std::string& chunkName, std::string& error);
-
-using EryxTimingClock = std::chrono::steady_clock;
-
-inline bool eryx_luau_timing_enabled() {
-    static const bool enabled = [] {
-        const char* env = std::getenv("ERYX_LUAU_TIMING");
-        return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-    }();
-    return enabled;
-}
-
-inline double eryx_timing_elapsed_ms(EryxTimingClock::time_point start,
-                                     EryxTimingClock::time_point end) {
-    return std::chrono::duration<double, std::milli>(end - start).count();
-}
-
-template <typename... Args>
-inline void eryx_luau_timing_log(const char* fmt, Args... args) {
-    if (!eryx_luau_timing_enabled()) return;
-
-    std::fprintf(stderr, "[eryx-luau-timing] ");
-    std::fprintf(stderr, fmt, args...);
-    std::fprintf(stderr, "\n");
-}
-
-struct EryxTimingStat {
-    double totalMs = 0.0;
-    size_t calls = 0;
-
-    void add(double elapsedMs) {
-        totalMs += elapsedMs;
-        calls += 1;
-    }
-};
-
-struct EryxAnalysisTimingStats {
-    EryxTimingStat readSource;
-    EryxTimingStat resolveModule;
-    EryxTimingStat getConfig;
-
-    double callbackTotalMs() const {
-        return readSource.totalMs + resolveModule.totalMs + getConfig.totalMs;
-    }
-};
 
 // This function isn't going to be imported from our shared DLL, because
 // the compiler runs in individual threads, which each need their own

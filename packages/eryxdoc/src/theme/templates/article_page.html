@@ -1,7 +1,7 @@
 {% include "_layout.html" %}
     <main class="main-content">
         <div class="container article-content">
-            {% if not (_pageContext and _pageContext.name == "index") then %}
+            {% if not (_pageContext and (_pageContext.name == "index" or _pageContext.name == "" or _pageContext.path == global.siteRoot)) then %}
             <ol class="breadcrumbs" aria-label="Breadcrumbs" vocab="https://schema.org/" typeof="BreadcrumbList">
                 <li property="itemListElement" typeof="ListItem">
                     <a property="item" typeof="WebPage" href="{{ global.siteRoot }}">
@@ -31,7 +31,6 @@
                 </li>
             </ol>
             {% end %}
-
             {% if article.hero then %}
             <section class="md-hero" {% if article.hero.image then %}style="background-image:url({{ article.hero.image }})"{% end %}>
                 <div class="md-hero-inner">

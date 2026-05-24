@@ -529,9 +529,19 @@ static void eryx_apply_runtime_compile_options(lua_State* L, Luau::CompileOption
     }
 }
 
-static bool eryx_runtime_native_codegen_enabled(lua_State* L) {
+static unsigned int eryx_runtime_native_codegen_flags(lua_State* L) {
     EryxRuntime* rt = eryx_runtime_or_null(L);
-    return !rt || rt->nativeCodegenEnabled;
+    if (!rt) return Luau::CodeGen::CodeGen_ColdFunctions;
+
+    switch (rt->nativeCodegenMode) {
+        case EryxNativeCodegenMode::Disabled:
+            return 0;
+        case EryxNativeCodegenMode::OnlySpecified:
+            return Luau::CodeGen::CodeGen_OnlyNativeModules | Luau::CodeGen::CodeGen_ColdFunctions;
+        case EryxNativeCodegenMode::All:
+        default:
+            return Luau::CodeGen::CodeGen_ColdFunctions;
+    }
 }
 
 ERYX_API bool eryx_load_and_prepare_bytecode(lua_State* L, const std::string& bytecode,
@@ -567,10 +577,11 @@ ERYX_API bool eryx_load_and_prepare_bytecode(lua_State* L, const std::string& by
     }
 
     // Attempt native codegen if we can
-    if (eryx_runtime_native_codegen_enabled(L) && lua_codegen_isSupported()) {
+    unsigned int nativeFlags = eryx_runtime_native_codegen_flags(L);
+    if (nativeFlags != 0 && lua_codegen_isSupported()) {
         Luau::CodeGen::CompilationStats stats = {};
         Luau::CodeGen::CodeGenCompilationResult res =
-            lua_codegen_compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions, &stats);
+            lua_codegen_compile(L, -1, nativeFlags, &stats);
     }
 
     if (EryxRuntime* rt = eryx_runtime_or_null(L)) {

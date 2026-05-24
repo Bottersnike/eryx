@@ -32,7 +32,7 @@
         {% if global.headTags then %} {{ global.headTags }} {% end %}
         {% if global.extraHead then %} {{ global.extraHead }} {% end %} {% slot head %}{% end %}
     </head>
-    <body>
+    <body{% if global.hasDesktopSidebar then %} class="has-sidebar"{% end %}>
         {% if global.announcement then %}
         <div class="announcement-banner" id="announcement-banner">
             <span class="announcement-text">{{ global.announcement }}</span>
@@ -40,9 +40,7 @@
         </div>
         {% end %}
         {% include "_header.html" %}{% end %}
-        {% if not (_pageContext and _pageContext.name == "index") then %}
         {% include "_sidebar.html" %}{% end %}
-        {% end %}
         {% slot default %}{% end %}
 
         <!-- <button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle sidebar">&#9776;</button> -->
@@ -264,17 +262,71 @@
         </script>
 
         <script>
+            // Header dropdown behavior
+            (function () {
+                const groups = Array.from(document.querySelectorAll(".header-nav-group"));
+                if (groups.length === 0) return;
+
+                function closeAll(except) {
+                    groups.forEach(function (group) {
+                        if (group !== except) {
+                            group.open = false;
+                        }
+                    });
+                }
+
+                groups.forEach(function (group) {
+                    group.addEventListener("toggle", function () {
+                        if (group.open) {
+                            closeAll(group);
+                        }
+                    });
+
+                    group.addEventListener("click", function (event) {
+                        const link = event.target.closest("a");
+                        if (link) {
+                            closeAll();
+                        }
+                    });
+                });
+
+                document.addEventListener("click", function (event) {
+                    const target = event.target;
+                    const insideGroup = target && target.closest ? target.closest(".header-nav-group") : null;
+                    if (!insideGroup) {
+                        closeAll();
+                    }
+                });
+
+                document.addEventListener("keydown", function (event) {
+                    if (event.key === "Escape") {
+                        closeAll();
+                    }
+                });
+            })();
+        </script>
+
+        <script>
             // Sidebar toggle and ToC scrolling logic
             (function () {
                 const btn = document.getElementById("sidebar-toggle");
                 const sb = document.getElementById("sidebar");
-                if (!sb) { btn.remove(); }
+                if (!btn || !sb) {
+                    if (btn) btn.remove();
+                    return;
+                }
                 btn.addEventListener("click", function (e) {
                     e.stopPropagation();
                     sb.classList.toggle("open");
                 });
                 document.addEventListener("click", function (e) {
                     if (sb.classList.contains("open") && !sb.contains(e.target)) {
+                        sb.classList.remove("open");
+                    }
+                });
+                sb.addEventListener("click", function (e) {
+                    const target = e.target.closest("a");
+                    if (target && sb.classList.contains("open")) {
                         sb.classList.remove("open");
                     }
                 });
@@ -724,6 +776,7 @@
                 });
             })();
         </script>
+
         {% if global.versionName then %}
         <script>
             // Version picker

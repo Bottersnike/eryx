@@ -1496,7 +1496,6 @@ static int l_serialize_ast(lua_State* L) {
 // luau.parse(source [, options]) -> ParseResult
 // ---------------------------------------------------------------------------
 static int l_parse(lua_State* L) {
-    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1516,8 +1515,6 @@ static int l_parse(lua_State* L) {
     }
 
     int status;
-    double parseMs = 0.0;
-    EryxTimingClock::time_point serializeStart;
     {
         // RAII scope -- Allocator, AstNameTable, and ParseResult are destroyed
         // at the end of this block, even if serialisation raises an error.
@@ -1527,12 +1524,9 @@ static int l_parse(lua_State* L) {
         opts.allowDeclarationSyntax = true;
         opts.captureComments = captureComments || collectSurroundingText;
 
-        const EryxTimingClock::time_point parseStart = EryxTimingClock::now();
         ParseResult result = Parser::parse(src, srcLen, names, allocator, opts);
-        parseMs = eryx_timing_elapsed_ms(parseStart, EryxTimingClock::now());
 
         // Serialise inside lua_pcall so a longjmp doesn't skip destructors.
-        serializeStart = EryxTimingClock::now();
         ParseSerializeCtx ctx{ &result, std::string_view(src, srcLen), captureComments,
                                collectSurroundingText };
         lua_pushcfunction(L, l_serialize_ast, "serialize_ast");
@@ -1543,15 +1537,6 @@ static int l_parse(lua_State* L) {
 
     if (status != 0) lua_error(L);  // re-raise; safe to longjmp now
 
-    const double serializeMs = eryx_timing_elapsed_ms(serializeStart, EryxTimingClock::now());
-    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
-    const double ownMs = totalMs - parseMs;
-    eryx_luau_timing_log(
-        "parse bytes=%zu total=%.3fms own=%.3fms parse=%.3fms serialize=%.3fms captureComments=%d "
-        "collectSurroundingText=%d status=%d",
-        srcLen, totalMs, ownMs, parseMs, serializeMs, captureComments ? 1 : 0,
-        collectSurroundingText ? 1 : 0, status);
-
     return 1;
 }
 
@@ -1559,23 +1544,17 @@ static int l_parse(lua_State* L) {
 // luau.prettyPrint(source) -> string
 // ---------------------------------------------------------------------------
 static int l_prettyPrint(lua_State* L) {
-    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
     std::string_view sv(src, srcLen);
-    const EryxTimingClock::time_point prettyStart = EryxTimingClock::now();
     PrettyPrintResult ppr = prettyPrint(sv);
-    const double prettyMs = eryx_timing_elapsed_ms(prettyStart, EryxTimingClock::now());
 
     if (!ppr.parseError.empty()) {
         luaL_error(L, "parse error: %s", ppr.parseError.c_str());
     }
 
     lua_pushlstring(L, ppr.code.data(), ppr.code.size());
-    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
-    eryx_luau_timing_log("prettyPrint bytes=%zu total=%.3fms own=%.3fms luau=%.3fms", srcLen,
-                         totalMs, totalMs - prettyMs, prettyMs);
     return 1;
 }
 
@@ -1590,7 +1569,6 @@ static int l_prettyPrint(lua_State* L) {
 //   }?
 // ---------------------------------------------------------------------------
 static int l_compile(lua_State* L) {
-    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1613,14 +1591,8 @@ static int l_compile(lua_State* L) {
         lua_pop(L, 1);
     }
 
-    const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
     std::string bytecode = Luau::compile(std::string(src, srcLen), opts);
-    const double compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
     lua_pushlstring(L, bytecode.data(), bytecode.size());
-    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
-    eryx_luau_timing_log(
-        "compile bytes=%zu total=%.3fms own=%.3fms luau_compile=%.3fms outBytes=%zu", srcLen,
-        totalMs, totalMs - compileMs, compileMs, bytecode.size());
     return 1;
 }
 
@@ -1633,7 +1605,6 @@ static int l_compile(lua_State* L) {
 // first character of Luau source.
 // ---------------------------------------------------------------------------
 static int l_load(lua_State* L) {
-    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t dataLen = 0;
     const char* data = luaL_checklstring(L, 1, &dataLen);
     const char* chunkname = luaL_optstring(L, 2, "=load");
@@ -1642,7 +1613,6 @@ static int l_load(lua_State* L) {
 
     std::string bytecode;
     bool isBytecode = (dataLen > 0 && (unsigned char)data[0] <= LBC_VERSION_MAX);
-    double compileMs = 0.0;
 
     if (isBytecode) {
         bytecode.assign(data, dataLen);
@@ -1651,27 +1621,20 @@ static int l_load(lua_State* L) {
         Luau::CompileOptions opts;
         opts.optimizationLevel = 1;
         opts.debugLevel = 1;
-        const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
         bytecode = Luau::compile(std::string(data, dataLen), opts);
-        compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
     }
 
-    const EryxTimingClock::time_point loadStart = EryxTimingClock::now();
     int status = luau_load(L, chunkname, bytecode.data(), bytecode.size(), 0);
-    const double loadMs = eryx_timing_elapsed_ms(loadStart, EryxTimingClock::now());
     if (status != 0) {
         // luau_load pushed an error string
         lua_error(L);
     }
 
     // Attempt native codegen if we can
-    double codegenMs = 0.0;
     if (lua_codegen_isSupported()) {
         Luau::CodeGen::CompilationStats stats = {};
-        const EryxTimingClock::time_point codegenStart = EryxTimingClock::now();
         Luau::CodeGen::CodeGenCompilationResult res =
             lua_codegen_compile(L, -1, Luau::CodeGen::CodeGen_ColdFunctions, &stats);
-        codegenMs = eryx_timing_elapsed_ms(codegenStart, EryxTimingClock::now());
     }
 
     // Populate _DIR and _FILE
@@ -1712,14 +1675,6 @@ static int l_load(lua_State* L) {
         lua_setfenv(L, -2);
     }
 
-    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
-    const double luauMs = compileMs + loadMs + codegenMs;
-    eryx_luau_timing_log(
-        "load chunk=%s inputBytes=%zu bytecodeBytes=%zu total=%.3fms own=%.3fms compile=%.3fms "
-        "luau_load=%.3fms codegen=%.3fms bytecodeInput=%d",
-        chunkname, dataLen, bytecode.size(), totalMs, totalMs - luauMs, compileMs, loadMs,
-        codegenMs, isBytecode ? 1 : 0);
-
     return 1;  // the loaded function
 }
 
@@ -1737,7 +1692,6 @@ static int l_load(lua_State* L) {
 //   }?
 // ---------------------------------------------------------------------------
 static int l_disassemble(lua_State* L) {
-    const EryxTimingClock::time_point totalStart = EryxTimingClock::now();
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
@@ -1777,22 +1731,14 @@ static int l_disassemble(lua_State* L) {
     bcb.setDumpFlags(dumpFlags);
     bcb.setDumpSource(std::string(src, srcLen));
 
-    const EryxTimingClock::time_point compileStart = EryxTimingClock::now();
     try {
         Luau::compileOrThrow(bcb, std::string(src, srcLen), compileOpts);
     } catch (Luau::CompileError& e) {
         luaL_error(L, "compile error: %s", e.what());
     }
-    const double compileMs = eryx_timing_elapsed_ms(compileStart, EryxTimingClock::now());
 
-    const EryxTimingClock::time_point dumpStart = EryxTimingClock::now();
     std::string listing = bcb.dumpEverything();
-    const double dumpMs = eryx_timing_elapsed_ms(dumpStart, EryxTimingClock::now());
     lua_pushlstring(L, listing.data(), listing.size());
-    const double totalMs = eryx_timing_elapsed_ms(totalStart, EryxTimingClock::now());
-    eryx_luau_timing_log(
-        "disassemble bytes=%zu total=%.3fms own=%.3fms compile=%.3fms dump=%.3fms outBytes=%zu",
-        srcLen, totalMs, totalMs - compileMs - dumpMs, compileMs, dumpMs, listing.size());
     return 1;
 }
 

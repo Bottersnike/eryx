@@ -1,5 +1,6 @@
 children:
   - getting-started
+  - cli
   - writing-code
   - ip
   - libs

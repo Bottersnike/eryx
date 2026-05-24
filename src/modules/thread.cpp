@@ -42,12 +42,6 @@ enum class ThreadStatus {
     Interrupted,
 };
 
-enum class ThreadEntryKind {
-    File,
-    Source,
-    Bytecode,
-};
-
 enum class FutureStatus {
     Queued,
     Running,
@@ -62,16 +56,8 @@ struct PoolShared;
 struct WorkerShared;
 static void thread_async_close_cb(uv_handle_t* handle);
 
-struct PreparedThreadEntry {
-    ThreadEntryKind entryKind = ThreadEntryKind::File;
-    std::string program;
-    std::string chunkName;
-    std::string entrySource;
-    std::string entryBytecode;
-};
-
 struct PendingJob {
-    PreparedThreadEntry entry;
+    EryxRuntimeEntry entry;
     std::vector<uint8_t> context;
     std::shared_ptr<FutureShared> future;
 };
@@ -80,7 +66,7 @@ struct ThreadAsyncData {
     std::shared_ptr<ThreadShared> shared;
 };
 
-struct ThreadShared {
+struct ThreadShared : std::enable_shared_from_this<ThreadShared> {
     std::mutex mutex;
 
     EryxRuntime* parentRuntime = nullptr;
@@ -91,11 +77,7 @@ struct ThreadShared {
     bool childAsyncInitialized = false;
     bool mainAsyncCloseRequested = false;
 
-    ThreadEntryKind entryKind = ThreadEntryKind::File;
-    std::string program;
-    std::string chunkName;
-    std::string entrySource;
-    std::string entryBytecode;
+    EryxRuntimeEntry entry;
     std::vector<uint8_t> initialContext;
 
     std::deque<std::vector<uint8_t>> mainToChild;
@@ -164,7 +146,7 @@ struct WorkerShared {
     std::mutex mutex;
 
     EryxRuntime* parentRuntime = nullptr;
-    PreparedThreadEntry job;
+    EryxRuntimeEntry job;
     std::shared_ptr<PoolShared> pool;
 
     int onErrorRef = LUA_NOREF;
@@ -402,78 +384,6 @@ static void thread_push_exception_copy(lua_State* L, const LuaExceptionSnapshot*
     exception->message = source->message;
     exception->traceback = source->traceback;
     exception->parent = thread_copy_exception_snapshot(source->parent.get());
-}
-
-static bool thread_validate_source_entry(lua_State* L, const std::string& source,
-                                         const std::string& chunkName, std::string& error) {
-    lua_State* TL = lua_newthread(L);
-    luaL_sandboxthread(TL);
-
-    bool loaded = eryx_load_and_prepare_script(TL, source, chunkName);
-    if (!loaded) {
-        error = eryx_format_exception(TL, -1, false);
-    }
-
-    lua_pop(L, 1);
-    return loaded;
-}
-
-static bool thread_prepare_entry(lua_State* L, int idx, bool snapshotFiles,
-                                 PreparedThreadEntry& out, std::string& error) {
-    out = PreparedThreadEntry{};
-
-    if (lua_type(L, idx) == LUA_TSTRING) {
-        std::string path = luaL_checkpathlike(L, idx);
-        if (!snapshotFiles) {
-            out.entryKind = ThreadEntryKind::File;
-            out.program = path;
-            out.chunkName = "@" + path;
-            return true;
-        }
-
-        std::ifstream scriptFile(path, std::ios::binary);
-        if (!scriptFile.is_open()) {
-            error = "failed to open file \"" + path + "\"";
-            return false;
-        }
-
-        out.entrySource.assign((std::istreambuf_iterator<char>(scriptFile)),
-                               std::istreambuf_iterator<char>());
-        out.entryKind = ThreadEntryKind::Source;
-        out.program = path;
-        out.chunkName = "@" + path;
-
-        return thread_validate_source_entry(L, out.entrySource, out.chunkName, error);
-    }
-
-    if (lua_type(L, idx) == LUA_TFUNCTION) {
-        std::string bytecode;
-        std::string chunkName;
-        if (!eryx_prepare_thread_entry_function(L, idx, bytecode, chunkName, error)) {
-            return false;
-        }
-
-        out.entryKind = ThreadEntryKind::Bytecode;
-        out.entryBytecode = std::move(bytecode);
-        out.chunkName = std::move(chunkName);
-        out.program = out.chunkName;
-        if (!out.program.empty() && out.program[0] == '@') {
-            out.program.erase(0, 1);
-        }
-        return true;
-    }
-
-    error = std::string("string or function expected, got ") + luaL_typename(L, idx);
-    return false;
-}
-
-static void thread_init_shared_from_entry(const std::shared_ptr<ThreadShared>& shared,
-                                          const PreparedThreadEntry& entry) {
-    shared->entryKind = entry.entryKind;
-    shared->program = entry.program;
-    shared->chunkName = entry.chunkName;
-    shared->entrySource = entry.entrySource;
-    shared->entryBytecode = entry.entryBytecode;
 }
 
 static void thread_schedule_marshaled_callback(EryxRuntime* rt, int callbackRef, int selfRef,
@@ -1165,205 +1075,235 @@ static void thread_prepare_context(lua_State* L, const std::shared_ptr<ThreadSha
     lua_pop(L, 1);
 }
 
-static void thread_worker(const std::shared_ptr<ThreadShared>& shared) {
-    EryxRuntimeHost host;
+static EryxRuntimeHookResult thread_runtime_after_init(EryxRuntimeHost* host, void* userdata,
+                                                       std::string& error) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared || !host || !host->GL || !host->rt) {
+        error = "thread runtime context is invalid";
+        return EryxRuntimeHookResult::Fail;
+    }
 
+    // Thread workers create and compile entry chunks concurrently across many
+    // isolated runtimes. Keep them on the interpreter path for now to avoid
+    // cross-runtime native codegen races.
+    host->rt->nativeCodegenMode = EryxNativeCodegenMode::Disabled;
+
+    {
+        std::lock_guard lock(shared->mutex);
+        shared->childRuntime = host->rt;
+    }
+
+    lua_callbacks(host->GL)->userdata = shared;
+    lua_callbacks(host->GL)->interrupt = [](lua_State* L, int gc) {
+        if (gc >= 0) return;
+
+        auto* shared = static_cast<ThreadShared*>(lua_callbacks(L)->userdata);
+        if (!shared) return;
+
+        bool shouldInterrupt = false;
+        {
+            std::lock_guard lock(shared->mutex);
+            shouldInterrupt = shared->killRequested || shared->interruptRequested;
+        }
+
+        if (!shouldInterrupt) return;
+
+        eryx_exception_push_keyboard_interrupt(L);
+        lua_error(L);
+    };
+
+    std::shared_ptr<ThreadShared> sharedRef = shared->shared_from_this();
+    uv_async_t* childAsync = new uv_async_t;
+    auto* childAsyncData = new ThreadAsyncData{ sharedRef };
+    int asyncStatus = uv_async_init(host->rt->loop, childAsync, thread_child_async_cb);
+    if (asyncStatus != 0) {
+        delete childAsyncData;
+        delete childAsync;
+        error =
+            std::string("failed to create child thread async handle: ") + uv_strerror(asyncStatus);
+        return EryxRuntimeHookResult::Fail;
+    }
+    childAsync->data = childAsyncData;
+
+    {
+        std::lock_guard lock(shared->mutex);
+        shared->childAsync = childAsync;
+        shared->childAsyncInitialized = true;
+        shared->status = ThreadStatus::Running;
+    }
+
+    if (!shared->mainToChild.empty() || shared->killRequested || shared->interruptRequested) {
+        thread_signal_child(sharedRef);
+    }
+
+    return EryxRuntimeHookResult::Continue;
+}
+
+static EryxRuntimeHookResult thread_runtime_after_load(EryxRuntimeHost*, lua_State* rootThread,
+                                                       int* rootArgCount, void* userdata,
+                                                       std::string& error) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared || !rootThread || !rootArgCount) {
+        error = "thread runtime load state is invalid";
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    thread_prepare_context(rootThread, shared->shared_from_this());
+    *rootArgCount = 1;
+    return EryxRuntimeHookResult::Continue;
+}
+
+static EryxRuntimeHookResult thread_runtime_on_load_failure(EryxRuntimeHost*, lua_State* rootThread,
+                                                            lua_State*, void* userdata,
+                                                            std::string& error) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared) {
+        if (error.empty()) {
+            error = "thread failed to load";
+        }
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    auto* exception = rootThread ? eryx_get_exception(rootThread, -1) : nullptr;
+    thread_mark_terminal(shared->shared_from_this(), ThreadStatus::Error,
+                         error.empty() ? "failed to load script" : error, {}, false,
+                         exception ? eryx_copy_exception(exception) : nullptr);
+    return EryxRuntimeHookResult::Stop;
+}
+
+static EryxRuntimeHookResult thread_runtime_before_tick(EryxRuntimeHost*, lua_State*,
+                                                        void* userdata, std::string&) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared) {
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    std::lock_guard lock(shared->mutex);
+    return thread_status_terminal(shared->status) ? EryxRuntimeHookResult::Stop
+                                                  : EryxRuntimeHookResult::Continue;
+}
+
+static EryxRuntimeHookResult thread_runtime_on_no_work(EryxRuntimeHost* host, lua_State*,
+                                                       void* userdata, std::string&) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared) {
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    if (eryx_runtime_has_work(host->rt)) {
+        return EryxRuntimeHookResult::Continue;
+    }
+
+    thread_mark_terminal(shared->shared_from_this(), ThreadStatus::Error,
+                         "thread reached a no-work state without publishing a terminal result", {},
+                         false);
+    return EryxRuntimeHookResult::Stop;
+}
+
+static EryxRuntimeHookResult thread_runtime_on_error(EryxRuntimeHost*, lua_State*,
+                                                     lua_State* runningLua, void* userdata,
+                                                     std::string&) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared) {
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    ThreadStatus terminalStatus = ThreadStatus::Error;
+    std::string message = "thread failed";
+    {
+        std::lock_guard lock(shared->mutex);
+        if (shared->killRequested) {
+            terminalStatus = ThreadStatus::Killed;
+            message = "thread was killed";
+        } else if (shared->interruptRequested) {
+            terminalStatus = ThreadStatus::Interrupted;
+            message = "thread was interrupted";
+        }
+    }
+
+    if (terminalStatus == ThreadStatus::Error && runningLua) {
+        message = eryx_format_exception(runningLua, -1, false);
+    }
+
+    auto* exception = terminalStatus == ThreadStatus::Error && runningLua
+                          ? eryx_get_exception(runningLua, -1)
+                          : nullptr;
+    thread_mark_terminal(shared->shared_from_this(), terminalStatus, message, {}, false,
+                         exception ? eryx_copy_exception(exception) : nullptr);
+    return EryxRuntimeHookResult::Stop;
+}
+
+static EryxRuntimeHookResult thread_runtime_on_root_completed(EryxRuntimeHost*,
+                                                              lua_State* rootThread, lua_State*,
+                                                              void* userdata, std::string& error) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared || !rootThread) {
+        error = "thread completion state is invalid";
+        return EryxRuntimeHookResult::Fail;
+    }
+
+    std::vector<uint8_t> result;
+    bool hasJoinValue = false;
+    int top = lua_gettop(rootThread);
+    if (top >= 1) {
+        thread_store_marshaled_value(rootThread, 1, result);
+        hasJoinValue = true;
+    }
+
+    {
+        std::lock_guard lock(shared->mutex);
+        shared->completedJoinValue = result;
+        shared->hasCompletedJoinValue = hasJoinValue;
+    }
+
+    thread_mark_terminal(shared->shared_from_this(), ThreadStatus::Finished, "", std::move(result),
+                         hasJoinValue);
+    return EryxRuntimeHookResult::Stop;
+}
+
+static void thread_runtime_cleanup(EryxRuntimeHost*, lua_State*, void* userdata) {
+    auto* shared = static_cast<ThreadShared*>(userdata);
+    if (!shared) {
+        return;
+    }
+
+    {
+        std::lock_guard lock(shared->mutex);
+        shared->childRecvWaiterRef = LUA_NOREF;
+        shared->childRuntime = nullptr;
+    }
+
+    thread_close_child_async(shared->shared_from_this());
+}
+
+static void thread_worker(const std::shared_ptr<ThreadShared>& shared) {
     auto fail = [&](ThreadStatus status, const std::string& message,
                     std::unique_ptr<LuaExceptionSnapshot> errorSnapshot = nullptr) {
         thread_mark_terminal(shared, status, message, {}, false, std::move(errorSnapshot));
     };
 
-    auto complete_root = [&](lua_State* rootThread) {
-        std::vector<uint8_t> result;
-        bool hasJoinValue = false;
-        int top = lua_gettop(rootThread);
-        if (top >= 1) {
-            thread_store_marshaled_value(rootThread, 1, result);
-            hasJoinValue = true;
-        }
-
-        {
-            std::lock_guard lock(shared->mutex);
-            shared->completedJoinValue = result;
-            shared->hasCompletedJoinValue = hasJoinValue;
-        }
-        thread_mark_terminal(shared, ThreadStatus::Finished, "", std::move(result), hasJoinValue);
-    };
-
     try {
-        std::string source;
-        std::string chunkName;
-        if (shared->entryKind == ThreadEntryKind::File) {
-            std::ifstream scriptFile(shared->program, std::ios::binary);
-            if (!scriptFile.is_open()) {
-                fail(ThreadStatus::Error, "failed to open file \"" + shared->program + "\"");
-                return;
-            }
+        std::string error;
+        EryxRuntimeRunHooks hooks;
+        hooks.userdata = shared.get();
+        hooks.afterInit = thread_runtime_after_init;
+        hooks.afterLoad = thread_runtime_after_load;
+        hooks.onLoadFailure = thread_runtime_on_load_failure;
+        hooks.beforeTick = thread_runtime_before_tick;
+        hooks.onNoWork = thread_runtime_on_no_work;
+        hooks.onRuntimeError = thread_runtime_on_error;
+        hooks.onRootCompleted = thread_runtime_on_root_completed;
+        hooks.onCleanup = thread_runtime_cleanup;
 
-            source.assign((std::istreambuf_iterator<char>(scriptFile)),
-                          std::istreambuf_iterator<char>());
-            chunkName = "@" + shared->program;
-        } else if (shared->entryKind == ThreadEntryKind::Source) {
-            source = shared->entrySource;
-            chunkName = shared->chunkName;
-        } else {
-            source = shared->entryBytecode;
-            chunkName = shared->chunkName;
+        if (!eryx_runtime_run_entry(shared->entry, &hooks, error)) {
+            fail(ThreadStatus::Error, error.empty() ? "thread worker failed" : error);
         }
-
-        if (!eryx_runtime_host_init(&host, shared->program.c_str())) {
-            fail(ThreadStatus::Error, "failed to create Luau state");
-            return;
-        }
-
-        // Thread workers create and compile entry chunks concurrently across
-        // many isolated runtimes. Keep them on the interpreter path for now
-        // to avoid cross-runtime native codegen races.
-        host.rt->nativeCodegenEnabled = false;
-
-        {
-            std::lock_guard lock(shared->mutex);
-            shared->childRuntime = host.rt;
-        }
-
-        lua_callbacks(host.GL)->userdata = shared.get();
-        lua_callbacks(host.GL)->interrupt = [](lua_State* L, int gc) {
-            if (gc >= 0) return;
-
-            auto* shared = static_cast<ThreadShared*>(lua_callbacks(L)->userdata);
-            if (!shared) return;
-
-            bool shouldInterrupt = false;
-            {
-                std::lock_guard lock(shared->mutex);
-                shouldInterrupt = shared->killRequested || shared->interruptRequested;
-            }
-
-            if (!shouldInterrupt) return;
-
-            eryx_exception_push_keyboard_interrupt(L);
-            lua_error(L);
-        };
-
-        uv_async_t* childAsync = new uv_async_t;
-        auto* childAsyncData = new ThreadAsyncData{ shared };
-        int asyncStatus = uv_async_init(host.rt->loop, childAsync, thread_child_async_cb);
-        if (asyncStatus != 0) {
-            delete childAsyncData;
-            delete childAsync;
-            fail(ThreadStatus::Error, std::string("failed to create child thread async handle: ") +
-                                          uv_strerror(asyncStatus));
-            eryx_runtime_host_close(&host);
-            return;
-        }
-        childAsync->data = childAsyncData;
-
-        {
-            std::lock_guard lock(shared->mutex);
-            shared->childAsync = childAsync;
-            shared->childAsyncInitialized = true;
-            shared->status = ThreadStatus::Running;
-        }
-
-        if (!shared->mainToChild.empty() || shared->killRequested || shared->interruptRequested) {
-            thread_signal_child(shared);
-        }
-
-        lua_State* rootThread = eryx_runtime_host_create_thread(&host);
-        bool loaded = shared->entryKind == ThreadEntryKind::File ||
-                              shared->entryKind == ThreadEntryKind::Source
-                          ? eryx_load_and_prepare_script(rootThread, source, chunkName)
-                          : eryx_load_and_prepare_bytecode(rootThread, source, chunkName);
-        if (!loaded) {
-            std::string error = eryx_format_exception(rootThread, -1, false);
-            auto* exception = eryx_get_exception(rootThread, -1);
-            fail(ThreadStatus::Error, error.empty() ? "failed to load script" : error,
-                 exception ? eryx_copy_exception(exception) : nullptr);
-            lua_pop(host.GL, 1);
-            thread_close_child_async(shared);
-            eryx_runtime_host_close(&host);
-            thread_signal_main(shared);
-            return;
-        }
-
-        thread_prepare_context(rootThread, shared);
-        eryx_runtime_host_enqueue_thread(&host, rootThread, 1, false);
-
-        while (true) {
-            {
-                std::lock_guard lock(shared->mutex);
-                if (thread_status_terminal(shared->status)) {
-                    break;
-                }
-            }
-
-            lua_State* runningLua = nullptr;
-            bool rootCompleted = false;
-            EryxRuntimeRunResult status = eryx_runtime_run_once(&host, &runningLua, &rootCompleted);
-
-            if (status == EryxRuntimeRunResult::NoWork) {
-                if (!eryx_runtime_has_work(host.rt)) {
-                    fail(ThreadStatus::Error,
-                         "thread reached a no-work state without publishing a terminal result");
-                    break;
-                }
-                continue;
-            }
-
-            if (status == EryxRuntimeRunResult::Error) {
-                ThreadStatus terminalStatus = ThreadStatus::Error;
-                std::string message = "thread failed";
-                {
-                    std::lock_guard lock(shared->mutex);
-                    if (shared->killRequested) {
-                        terminalStatus = ThreadStatus::Killed;
-                        message = "thread was killed";
-                    } else if (shared->interruptRequested) {
-                        terminalStatus = ThreadStatus::Interrupted;
-                        message = "thread was interrupted";
-                    }
-                }
-
-                if (terminalStatus == ThreadStatus::Error && runningLua) {
-                    message = eryx_format_exception(runningLua, -1, false);
-                }
-
-                auto* exception = terminalStatus == ThreadStatus::Error && runningLua
-                                      ? eryx_get_exception(runningLua, -1)
-                                      : nullptr;
-                thread_mark_terminal(shared, terminalStatus, message, {}, false,
-                                     exception ? eryx_copy_exception(exception) : nullptr);
-                break;
-            }
-
-            if (runningLua == rootThread && rootCompleted) {
-                complete_root(rootThread);
-                break;
-            }
-        }
-
-        {
-            std::lock_guard lock(shared->mutex);
-            shared->childRecvWaiterRef = LUA_NOREF;
-        }
-
-        thread_close_child_async(shared);
-
-        eryx_runtime_host_close(&host);
         thread_signal_main(shared);
     } catch (const std::exception& ex) {
         fail(ThreadStatus::Error, std::string("thread worker failed: ") + ex.what());
-        if (host.GL || host.rt || host.loopInitialized) {
-            thread_close_child_async(shared);
-            eryx_runtime_host_close(&host);
-        }
         thread_signal_main(shared);
     } catch (...) {
         fail(ThreadStatus::Error, "thread worker failed");
-        if (host.GL || host.rt || host.loopInitialized) {
-            thread_close_child_async(shared);
-            eryx_runtime_host_close(&host);
-        }
         thread_signal_main(shared);
     }
 }
@@ -1763,7 +1703,7 @@ static size_t thread_check_workers_option(lua_State* L, int idx) {
 
 static std::shared_ptr<FutureShared> thread_enqueue_prepared_job(
     lua_State* L, const std::shared_ptr<PoolShared>& pool,
-    const std::shared_ptr<WorkerShared>& worker, const PreparedThreadEntry& entry, int contextIdx) {
+    const std::shared_ptr<WorkerShared>& worker, const EryxRuntimeEntry& entry, int contextIdx) {
     auto future = std::make_shared<FutureShared>();
     future->parentRuntime = eryx_get_runtime(L);
     future->pool = pool;
@@ -1805,7 +1745,7 @@ static void pool_maybe_start_jobs(lua_State* L, const std::shared_ptr<PoolShared
         }
 
         auto shared = std::make_shared<ThreadShared>();
-        thread_init_shared_from_entry(shared, job.entry);
+        shared->entry = job.entry;
         shared->initialContext = std::move(job.context);
         shared->future = job.future;
 
@@ -2107,9 +2047,9 @@ static int thread_pool_newindex(lua_State* L) {
 static int thread_pool_spawn(lua_State* L) {
     std::shared_ptr<PoolShared> pool = check_pool_handle(L, 1);
 
-    PreparedThreadEntry entry;
+    EryxRuntimeEntry entry;
     std::string error;
-    if (!thread_prepare_entry(L, 2, true, entry, error)) {
+    if (!eryx_runtime_prepare_entry(L, 2, true, entry, error)) {
         luaL_error(L, "%s", error.c_str());
     }
 
@@ -2351,12 +2291,12 @@ static void register_thread_worker_metatable(lua_State* L) {
 
 static int thread_spawn(lua_State* L) {
     auto shared = std::make_shared<ThreadShared>();
-    PreparedThreadEntry entry;
+    EryxRuntimeEntry entry;
     std::string error;
-    if (!thread_prepare_entry(L, 1, false, entry, error)) {
+    if (!eryx_runtime_prepare_entry(L, 1, false, entry, error)) {
         luaL_error(L, "%s", error.c_str());
     }
-    thread_init_shared_from_entry(shared, entry);
+    shared->entry = entry;
 
     if (lua_gettop(L) >= 2) {
         thread_store_marshaled_value(L, 2, shared->initialContext);
@@ -2404,7 +2344,7 @@ static int thread_worker_create(lua_State* L) {
 
     lua_getfield(L, 1, "job");
     std::string error;
-    if (!thread_prepare_entry(L, -1, true, worker->job, error)) {
+    if (!eryx_runtime_prepare_entry(L, -1, true, worker->job, error)) {
         lua_pop(L, 1);
         luaL_error(L, "%s", error.c_str());
     }

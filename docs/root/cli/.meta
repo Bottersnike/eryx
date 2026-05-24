@@ -1,0 +1,10 @@
+title: CLI
+children:
+  - overview
+  - run
+  - completion
+  - check
+  - compile
+  - pkg
+  - setup
+  - test

@@ -2,9 +2,9 @@
 
 <main class="main-content">
     <div class="container">
-        <h1>{{ global.title | escape }}</h1>
+        <h1>{% if pageHeading then %}{{ pageHeading | escape }}{% else %}{{ global.title | escape }}{% end %}</h1>
 
-        {% if global.articles | length > 0 then %}
+        {% if showGuides ~= false and global.articles | length > 0 then %}
         <h2>Guides</h2>
         <div class="module-grid">
             {% for _, a in global.articles do %}
@@ -18,7 +18,9 @@
         </div>
         {% end %}
 
+        {% if showApiHeading ~= false then %}
         <h2>API Reference</h2>
+        {% end %}
         <div class="module-grid">
             {% for _, mod in global.modules do %}
             <a class="module-card" href="{{ mod | webPath }}">

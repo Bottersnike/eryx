@@ -141,6 +141,30 @@ local function resolveInModuleInfo(mod: modules.ModuleInfo, name: string): Resol
 	return nil
 end
 
+local PRIMITIVE_TYPE_NAMES: { [string]: boolean } = {
+	boolean = true,
+	integer = true,
+	number = true,
+	string = true,
+}
+
+local function resolveTypeInModule(mod: modules.ModuleInfo, name: string): string?
+	if mod.primaryExport and mod.primaryExport.name == name then
+		return "#class-" .. name
+	end
+	for _, c in mod.classes do
+		if c.name == name then
+			return "#class-" .. name
+		end
+	end
+	for _, t in mod.types do
+		if t.name == name then
+			return "#type-" .. name
+		end
+	end
+	return nil
+end
+
 -- Resolves ClassName.memberName to an HTML anchor within a module.
 -- Returns the anchor string (with leading #), or nil if the class isn't found.
 local function resolveClassMember(mod: modules.ModuleInfo, className: string, memberName: string): string?
@@ -314,7 +338,8 @@ local function resolveWikiLinkInfo(
 
 	-- Pass 1: exact match on name or title
 	for _, articleInfo in articles do
-		if articleInfo.name == core or articleInfo.article.title == core then
+		local articleName = (articleInfo :: any).localName or articleInfo.name
+		if articleInfo.name == core or articleName == core or articleInfo.article.title == core then
 			return {
 				href = getLink(articleInfo.article) .. trailingAnchor,
 				kind = "article",
@@ -325,7 +350,7 @@ local function resolveWikiLinkInfo(
 
 	-- Pass 2: case-insensitive title, last segment of name, or slug match
 	for _, articleInfo in articles do
-		local name = articleInfo.name
+		local name = (articleInfo :: any).localName or articleInfo.name
 		local title = articleInfo.article.title or ""
 
 		-- Case-insensitive title
@@ -395,6 +420,10 @@ local function resolveTypeLink(
 	allModules: { [string]: modules.ModuleInfo },
 	getLink: (any) -> string
 ): string?
+	if PRIMITIVE_TYPE_NAMES[typeName] then
+		return nil
+	end
+
 	-- Fully-qualified module path:
 	-- "@pkg/mod.TypeName" or "@pkg/mod" (module page)
 	if typeName:sub(1, 1) == "@" then
@@ -405,7 +434,7 @@ local function resolveTypeLink(
 			local member = typeName:sub(dotPos + 1)
 			local mod = allModules[modPath]
 			if mod then
-				local anchor = resolveInModule(mod, member)
+				local anchor = resolveTypeInModule(mod, member)
 				if anchor then
 					return getLink(mod) .. anchor
 				end
@@ -429,7 +458,7 @@ local function resolveTypeLink(
 		for _, mod in allModules do
 			local lastSeg = mod.qualifiedName:match("/([^/]+)$") or mod.qualifiedName
 			if lastSeg == prefix then
-				local anchor = resolveInModule(mod, member)
+				local anchor = resolveTypeInModule(mod, member)
 				if anchor then
 					return getLink(mod) .. anchor
 				end
@@ -437,14 +466,14 @@ local function resolveTypeLink(
 		end
 	end
 
-	local anchor = resolveInModule(currentModule, typeName)
+	local anchor = resolveTypeInModule(currentModule, typeName)
 	if anchor then
 		return getLink(currentModule) .. anchor
 	end
 
 	for _, mod in allModules do
 		if mod ~= currentModule then
-			anchor = resolveInModule(mod, typeName)
+			anchor = resolveTypeInModule(mod, typeName)
 			if anchor then
 				return getLink(mod) .. anchor
 			end

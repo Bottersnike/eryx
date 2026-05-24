@@ -12,6 +12,9 @@ export type SpawnOptions = {
 	cwd: PathLike?,
 	--- Specify additional environment variables for the child process
 	env: { [string]: string }?,
+	--- Inherit the parent process stdin/stdout/stderr instead of creating pipes.
+	--- Supported by `os.exec`; `os.spawn` requires piped stdio.
+	inheritStdio: boolean?,
 	--[=[
 		Run this as a shell command
 		:::warning
@@ -306,11 +309,12 @@ function os.chdir(path: PathLike) end
 --[=[
 	Get the command line arguments for this script.
 
-	Returns only the user-supplied arguments; the executable name, subcommand,
-	and script path are automatically stripped.
+	Returns the synthetic script-facing argv for the current runtime: the
+	invoked script name/path first, followed by that script's arguments.
 
-	For example, `eryx run foo.luau --verbose bar` returns `{"--verbose", "bar"}`.
-	@return Ordered list of user-supplied command-line arguments.
+	For example, `eryx -O2 foo.luau --verbose bar` returns
+	`{"foo.luau", "--verbose", "bar"}`.
+	@return Ordered script argv for the current runtime.
 ]=]
 function os.cliargs(): { string }
 	return nil :: any
@@ -323,6 +327,9 @@ end
 	```luau
 	os.spawn(...):wait()
 	```
+
+	When `opts.inheritStdio` is true, stdout and stderr are forwarded live to the
+	parent process and the returned `stdout`/`stderr` fields are empty strings.
 
 	@param cmd Executable path or name to resolve on PATH.
 	@param args Ordered argument list passed to the process.

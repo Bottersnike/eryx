@@ -1,5 +1,27 @@
-<aside class="sidebar" id="sidebar">
+<aside class="sidebar {% if not global.hasDesktopSidebar then %}drawer-only{% end %}" id="sidebar">
     <div class="sidebar-inner">
+        {% if global.headerDrawerLinks and global.headerDrawerLinks | length > 0 then %}
+        <nav class="sidebar-mobile-nav" aria-label="Sections">
+            {% for _, item in global.headerDrawerLinks do %}
+            {% if item.children and item.children | length > 0 then %}
+            <details class="sidebar-mobile-group" {% if item.isActive then %}open{% end %}>
+                <summary class="sidebar-mobile-link {% if item.isActive then %}active{% end %}">{{ item.label | escape }}</summary>
+                <div class="sidebar-mobile-children">
+                    {% if item.href then %}
+                    <a class="sidebar-mobile-child {% if item.isActive then %}active{% end %}" href="{{ item.href }}">{{ item.label | escape }}</a>
+                    {% end %}
+                    {% for _, child in item.children do %}
+                    <a class="sidebar-mobile-child {% if child.isActive then %}active{% end %}" href="{{ child.href }}">{{ child.label | escape }}</a>
+                    {% end %}
+                </div>
+            </details>
+            {% else %}
+            <a class="sidebar-mobile-link {% if item.isActive then %}active{% end %}" href="{{ item.href }}">{{ item.label | escape }}</a>
+            {% end %}
+            {% end %}
+        </nav>
+        {% end %}
+
         {% macro renderArticleGroup(entries) %}
         {% for _, entry in entries do %}
             {% if entry.children then %}
@@ -23,6 +45,29 @@
         {% end %}
         {% end %}
 
+        {% macro renderModuleGroup(modules) %}
+        {% for _, mod in modules do %}
+                {% if mod.children then %}
+                    <li class="sidebar-group">
+                        <details {% if mod.isOpen then %}open{% end %}>
+                            <summary>
+                                {% if mod.filename then %}
+                                <a class="sidebar-link {% if mod.isActive then %}active{% end %}" href="{{ mod | webPath }}">{{ mod.displayName | escape }}</a>
+                                {% else %}
+                                <span class="sidebar-link">{{ mod.displayName | escape }}</span>
+                                {% end %}
+                            </summary>
+                            <ul>
+                                {% use renderModuleGroup(mod.children) %}{% end %}
+                            </ul>
+                        </details>
+                    </li>
+                {% else %}
+                    <li><a class="sidebar-link {% if mod.isActive then %}active{% end %}" href="{{ mod | webPath }}">{{ mod.displayName | escape }}</a></li>
+                {% end %}
+            {% end %}
+        {% end %}
+
         {% if sidebar.articleTopLevel | length > 0 then %}
         <ul class="sidebar-nav sidebar-top-links">
             {% for _, entry in sidebar.articleTopLevel do %}
@@ -41,34 +86,18 @@
         {% end %}
 
         {% if sidebar.modules | length > 0 then %}
+        {% if sidebar.articleTopLevel | length == 0 and sidebar.articleSections | length == 0 then %}
+        <ul class="sidebar-nav sidebar-top-links">
+            {% use renderModuleGroup(sidebar.modules) %}{% end %}
+        </ul>
+        {% else %}
         <details class="sidebar-section" open>
-            <summary class="sidebar-heading">API Reference</summary>
+            <summary class="sidebar-heading">{{ sidebar.moduleTitle | escape }}</summary>
             <ul class="sidebar-nav">
-                {% macro renderModuleGroup(modules) %}
-                {% for _, mod in modules do %}
-                        {% if mod.children then %}
-                            <li class="sidebar-group">
-                                <details {% if mod.isOpen then %}open{% end %}>
-                                    <summary>
-                                        {% if mod.filename then %}
-                                        <a class="sidebar-link {% if mod.isActive then %}active{% end %}" href="{{ mod | webPath }}">{{ mod.displayName | escape }}</a>
-                                        {% else %}
-                                        <span class="sidebar-link">{{ mod.displayName | escape }}</span>
-                                        {% end %}
-                                    </summary>
-                                    <ul>
-                                        {% use renderModuleGroup(mod.children) %}{% end %}
-                                    </ul>
-                                </details>
-                            </li>
-                        {% else %}
-                            <li><a class="sidebar-link {% if mod.isActive then %}active{% end %}" href="{{ mod | webPath }}">{{ mod.displayName | escape }}</a></li>
-                        {% end %}
-                    {% end %}
-                {% end %}
                 {% use renderModuleGroup(sidebar.modules) %}{% end %}
             </ul>
         </details>
+        {% end %}
         {% end %}
 
     </div>

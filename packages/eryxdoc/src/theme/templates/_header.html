@@ -7,7 +7,27 @@
     <div class="header-inner">
         <div class="header-left">
             <a class="header-brand" href="{{ global.siteRoot }}">{{ global.title | escape }}</a>
-            {% if global.pageName then %}
+            {% if global.headerPrimaryLinks and global.headerPrimaryLinks | length > 0 then %}
+            <nav class="header-primary-nav" aria-label="Primary">
+                {% for _, item in global.headerPrimaryLinks do %}
+                {% if item.children and item.children | length > 0 then %}
+                <details class="header-nav-group {% if item.isActive then %}active{% end %}">
+                    <summary class="header-nav-link">{{ item.label | escape }}</summary>
+                    <div class="header-nav-dropdown">
+                        {% if item.href then %}
+                        <a class="header-nav-dropdown-link {% if item.isActive then %}active{% end %}" href="{{ item.href }}">{{ item.label | escape }}</a>
+                        {% end %}
+                        {% for _, child in item.children do %}
+                        <a class="header-nav-dropdown-link {% if child.isActive then %}active{% end %}" href="{{ child.href }}">{{ child.label | escape }}</a>
+                        {% end %}
+                    </div>
+                </details>
+                {% else %}
+                <a class="header-nav-link {% if item.isActive then %}active{% end %}" href="{{ item.href }}">{{ item.label | escape }}</a>
+                {% end %}
+                {% end %}
+            </nav>
+            {% elseif global.pageName then %}
             <span class="header-module">{{ global.pageName | escape }}</span>
             {% end %}
         </div>

@@ -21,10 +21,10 @@ LUAU_MODULE_INFO()
 
 namespace {
 
-constexpr const char* INTEGER_METATABLE = "eryx.number.Integer";
-constexpr const char* RATIONAL_METATABLE = "eryx.number.Rational";
-constexpr const char* FLOAT_METATABLE = "eryx.number.Float";
-constexpr const char* NUMBER_METATABLE = "eryx.number.Number";
+constexpr const char* INTEGER_METATABLE = "Integer";
+constexpr const char* RATIONAL_METATABLE = "Rational";
+constexpr const char* FLOAT_METATABLE = "Float";
+constexpr const char* NUMBER_METATABLE = "Number";
 
 enum class DivMode {
     Trunc,

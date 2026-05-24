@@ -11,6 +11,7 @@ export type SidebarEntry = {
 	name: string,
 	displayName: string,
 	filename: string?,
+	sitePath: string?,
 	children: { SidebarEntry }?,
 	isOpen: boolean,
 	isActive: boolean,
@@ -35,6 +36,7 @@ local function toSidebar(node: TTree, parentPath: string, activePage: string?): 
 				name = fullName,
 				displayName = displayName,
 				filename = v.info and v.info.filename or nil,
+				sitePath = if v.info then (v.info :: any).sitePath :: string? else nil,
 				children = #children > 0 and children or nil,
 				isOpen = false,
 				isActive = false,
@@ -81,6 +83,26 @@ local function buildSidebarModuleTree(
 	stripPrefix: string?
 ): { SidebarEntry }
 	local tree: TTree = {}
+	local stripPrefixParts: { string }? = nil
+
+	if stripPrefix and stripPrefix ~= "" then
+		stripPrefixParts = {}
+		for part in string.gmatch(stripPrefix, "[^/]+") do
+			table.insert(stripPrefixParts, part)
+		end
+	end
+
+	local function matchesPrefix(parts: { string }, prefixParts: { string }): boolean
+		if #parts < #prefixParts then
+			return false
+		end
+		for i, prefixPart in prefixParts do
+			if parts[i] ~= prefixPart then
+				return false
+			end
+		end
+		return true
+	end
 
 	local function splitParts(qname: string): { string }
 		local parts = {}
@@ -88,8 +110,16 @@ local function buildSidebarModuleTree(
 			table.insert(parts, part)
 		end
 
-		if stripPrefix and parts[1] == stripPrefix then
-			table.remove(parts, 1)
+		if stripPrefixParts and matchesPrefix(parts, stripPrefixParts) then
+			if #parts == #stripPrefixParts then
+				return { parts[#parts] }
+			end
+
+			local stripped = {}
+			for i = #stripPrefixParts + 1, #parts do
+				table.insert(stripped, parts[i])
+			end
+			return stripped
 		end
 
 		return parts
@@ -131,6 +161,7 @@ export type ArticleSidebarEntry = {
 
 export type ArticleSidebarSection = {
 	title: string,
+	sitePath: string?,
 	entries: { ArticleSidebarEntry },
 }
 
@@ -240,11 +271,12 @@ local function buildSidebarArticleSections(
 	insertionCounter = 0
 
 	for _, articleInfo in articles do
-		if articleInfo.name == "index" then
+		local localName = (articleInfo :: any).localName or articleInfo.name
+		if localName == "index" then
 			continue
 		end
 		local parts: { string } = {}
-		for part in articleInfo.name:gmatch("[^/]+") do
+		for part in localName:gmatch("[^/]+") do
 			table.insert(parts, part)
 		end
 
@@ -257,7 +289,7 @@ local function buildSidebarArticleSections(
 				cur[part] = { children = {}, insertionOrder = insertionCounter, pathKey = pathKey }
 			end
 			if i == #parts then
-				cur[part].name = articleInfo.name
+				cur[part].name = (articleInfo :: any).key or articleInfo.name
 				cur[part].sitePath = getLink(articleInfo.article)
 				cur[part].title = (articleInfo.article :: any).title
 			end
@@ -299,7 +331,11 @@ local function buildSidebarArticleSections(
 			-- Folder -> becomes a titled section
 			local title = node.title or (if sectionTitles then sectionTitles[stem] else nil) or formatFolderName(stem)
 			local entries, _ = toArticleSidebar(node.children, activePage, folderTitles, folderOrder)
-			table.insert(sections, { title = title, entries = entries })
+			table.insert(sections, {
+				title = title,
+				sitePath = node.sitePath,
+				entries = entries,
+			})
 		else
 			-- Loose top-level article
 			local isActive = node.name ~= nil and node.name == activePage

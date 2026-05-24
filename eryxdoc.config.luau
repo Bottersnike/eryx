@@ -1,10 +1,6 @@
 return {
 	output = "build-docs/",
 
-	modules = "./src/modules",
-	articles = "./docs",
-	prefix = "@eryx",
-
 	title = "Eryx",
 	siteRoot = "/",
 	baseUrl = "https://eryx.bsnk.me",
@@ -19,5 +15,71 @@ return {
 		{ tag = "link", rel = "apple-touch-icon", sizes = "180x180", href = "/apple-touch-icon.png" },
 		{ tag = "meta", name = "apple-mobile-web-app-title", content = "Eryx" },
 		{ tag = "link", rel = "manifest", href = "/site.webmanifest" },
+	},
+	sections = {
+		{
+			id = "docs",
+			label = "Documentation",
+			mount = "/",
+			headerHref = "/getting-started/welcome",
+			articles = "./docs/root",
+		},
+		{
+			id = "api",
+			label = "Libraries",
+			children = {
+				{
+					id = "http",
+					label = "HTTP",
+					mount = "/http",
+					articles = "./docs/http",
+				},
+				{
+					id = "crypto",
+					label = "Cryptography",
+					mount = "/crypto",
+					articles = "./docs/crypto",
+				},
+				{
+					id = "reference",
+					label = "Library Reference",
+					mount = "/api",
+					modules = "./src/modules",
+					prefix = "@eryx",
+					landing = {
+						title = "Library Reference",
+						description = "Browse all available Eryx modules.",
+					},
+				},
+			},
+		},
+		{
+			id = "packages",
+			label = "Packages",
+			children = {
+				{
+					id = "markdown",
+					label = "Markdown",
+					mount = "/packages/markdown",
+					modules = "./packages/markdown/src",
+					prefix = "@markdown",
+					landing = {
+						title = "Markdown Package",
+						description = "Browse the Markdown package API.",
+					},
+				},
+				{
+					id = "eryxdoc",
+					label = "Eryxdoc",
+					mount = "/packages/eryxdoc",
+					modules = "./packages/eryxdoc/src",
+					prefix = "@eryxdoc",
+					landing = {
+						title = "Eryxdoc Package",
+						description = "Browse the Eryxdoc package API.",
+					},
+				},
+			},
+		},
 	},
 }

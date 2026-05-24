@@ -22,6 +22,7 @@ local Article = require("./content/article")
 local Renderer = require("./render/renderer")
 local buildWarnings = require("./warnings")
 local assets = require("./assets")
+local siteModel = require("./siteModel")
 
 local exception = require("@eryx/exception")
 local eryxdoc = require("@self")
@@ -269,9 +270,11 @@ end
 type DevState = {
 	renderer: Renderer.Renderer,
 	allModules: { any },
-	allArticles: { { name: string, article: Article.Article } },
+	allArticles: { any },
+	pageRoutes: { [string]: { kind: string, key: string } },
 	hasCustomIndex: boolean,
 	cfg: Config,
+	sections: { any },
 	themeDir: string,
 	staticDir: string?,
 	staticMount: string,
@@ -300,12 +303,16 @@ local function buildState(cfg: Config): DevState
 		notFound = THEME_DIR .. "/templates/404_page.html",
 	}
 
-	local allModules = if NO_MODULES or not cfg.modules
-		then {}
-		else modulesApi.collectModules(cfg.modules, MODULE_PREFIX, "")
-	local allArticles = if cfg.articles then collectArticles(cfg.articles) else {}
-	local sectionTitles, folderTitles, folderOrder =
-		if cfg.articles then collectFolderTitles(cfg.articles) else {}, {}, {}
+	local collectedSite = siteModel.collect({
+		title = SITE_TITLE,
+		articles = cfg.articles,
+		modules = cfg.modules,
+		prefix = MODULE_PREFIX,
+		noModules = NO_MODULES,
+		sections = cfg.sections,
+	})
+	local allModules = collectedSite.modules
+	local allArticles = collectedSite.articles
 
 	-- Populate last-updated dates from git
 	if cfg.showLastUpdated then
@@ -353,27 +360,56 @@ local function buildState(cfg: Config): DevState
 		apiMetaGenerator = cfg.apiMetaGenerator,
 		customFilters = cfg.customFilters,
 		customGlobals = cfg.customGlobals,
-		sectionTitles = sectionTitles,
-		folderTitles = folderTitles,
-		folderOrder = folderOrder,
+		sections = collectedSite.sections,
+		moduleSectionByName = collectedSite.moduleSectionByName,
+		folderMetaBySectionId = collectedSite.folderMetaBySectionId,
 		assetResolver = function(article: Article.Article, url: string): string
-			return assets.rewriteArticleAssetUrl(cfg.articles, article.sourceFilename, SITE_ROOT, url)
+			return assets.rewriteArticleAssetUrl(article.sourceRoot, article.sourceFilename, SITE_ROOT, url)
 		end,
 	})
 
 	for _, article in allArticles do
-		renderer:registerArticle(article.article, article.name)
+		renderer:registerArticle(article.article, article.key, article.localName, article.sectionId)
 	end
 	for _, mod in allModules do
-		renderer:registerModule(mod)
+		renderer:registerModule(mod, collectedSite.moduleSectionByName[mod.qualifiedName])
 	end
 
 	local hasCustomIndex = false
 	for _, article in allArticles do
-		if article.name == "index" then
+		if article.key == "" then
 			hasCustomIndex = true
 			break
 		end
+	end
+
+	local pageRoutes: { [string]: { kind: string, key: string } } = {}
+	local function registerPageRoute(routePath: string, htmlPath: string, kind: string, key: string)
+		pageRoutes[htmlPath] = { kind = kind, key = key }
+		if routePath == "" then
+			pageRoutes[""] = { kind = kind, key = key }
+		elseif EXPORT_MODE == "directory" then
+			pageRoutes[routePath] = { kind = kind, key = key }
+		end
+	end
+
+	for _, article in allArticles do
+		registerPageRoute(article.key, renderer:getPath(article.article), "article", article.key)
+	end
+	for _, mod in allModules do
+		local routePath = ((mod :: any).sitePath or mod.qualifiedName) :: string
+		registerPageRoute(routePath, renderer:getPath(mod), "module", mod.qualifiedName)
+	end
+	for _, landing in renderer:getGeneratedSectionLandingPages() do
+		registerPageRoute(landing.routePath, renderer:getPathForRoute(landing.routePath), "landing", landing.sectionId)
+	end
+	if (not cfg.sections or #cfg.sections == 0) and renderer:shouldRenderApiIndex() then
+		registerPageRoute(
+			"api",
+			if EXPORT_MODE == "directory" then "api/index.html" else "api.html",
+			"legacy_api",
+			"api"
+		)
 	end
 
 	local warns = buildWarnings.summary()
@@ -391,8 +427,10 @@ local function buildState(cfg: Config): DevState
 		renderer = renderer,
 		allModules = allModules,
 		allArticles = allArticles,
+		pageRoutes = pageRoutes,
 		hasCustomIndex = hasCustomIndex,
 		cfg = cfg,
+		sections = collectedSite.leafSections,
 		themeDir = THEME_DIR,
 		staticDir = STATIC_DIR,
 		staticMount = STATIC_MOUNT,
@@ -445,10 +483,17 @@ local function tryServeStatic(
 	end
 
 	-- Article-local assets referenced from markdown are exposed under /assets.
-	if state.cfg.articles and safePath:sub(1, 7) == "assets/" then
-		local assetPath = state.cfg.articles .. "/" .. safePath:sub(8)
-		if fs.isFile(assetPath) then
-			return 200, fs.openSync(assetPath):readSync(), mimeForPath(assetPath)
+	if safePath:sub(1, 7) == "assets/" then
+		local relAssetPath = safePath:sub(8)
+		local seenRoots: { [string]: boolean } = {}
+		for _, section in state.sections do
+			if section.articles and not seenRoots[section.articles] then
+				seenRoots[section.articles] = true
+				local assetPath = section.articles .. "/" .. relAssetPath
+				if fs.isFile(assetPath) then
+					return 200, fs.openSync(assetPath):readSync(), mimeForPath(assetPath)
+				end
+			end
 		end
 	end
 
@@ -507,11 +552,37 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 
 	-- ── Page routing ─────────────────────────────────────────────────────
 
+	local route = state.pageRoutes[safePath]
+	if route then
+		local ok, content = pcall(function()
+			if route.kind == "article" then
+				return renderer:renderArticle(route.key)
+			end
+			if route.kind == "module" then
+				return renderer:renderModule(route.key)
+			end
+			if route.kind == "landing" then
+				return renderer:renderSectionLanding(route.key)
+			end
+			if route.kind == "legacy_api" then
+				return renderer:renderApiIndex()
+			end
+			error("Unknown route kind: " .. route.kind)
+		end)
+		if ok then
+			return 200, content, "text/html; charset=utf-8"
+		end
+		log:error(string.format("Error rendering %s %s: %s", route.kind, route.key, exception.format(content)))
+		return 500,
+			`<h1>500 â€” Render Error</h1><pre>{exception.format(content)}</pre>`,
+			"text/html; charset=utf-8"
+	end
+
 	-- Index page
 	if safePath == "" or safePath == "index.html" then
 		local ok, content = pcall(function()
 			if state.hasCustomIndex then
-				return renderer:renderArticle("index")
+				return renderer:renderArticle("")
 			else
 				return renderer:renderIndex()
 			end
@@ -530,6 +601,18 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 			return 200, content, "text/html; charset=utf-8"
 		end
 		return 404, "<h1>404</h1>", "text/html; charset=utf-8"
+	end
+
+	-- API index page
+	if
+		renderer:shouldRenderApiIndex() and (safePath == "api" or safePath == "api/" or safePath == "api/index.html")
+	then
+		local ok, content = pcall(renderer.renderApiIndex, renderer)
+		if ok then
+			return 200, content, "text/html; charset=utf-8"
+		end
+		log:error(string.format("Error rendering API index: %s", tostring(content)))
+		return 500, `<h1>500 â€” Render Error</h1><pre>{content}</pre>`, "text/html; charset=utf-8"
 	end
 
 	-- Module pages: api/<qualifiedName>/index.html or api/<qualifiedName>/api.json
@@ -569,12 +652,12 @@ local function handleRequest(state: DevState, reqPath: string): (number, string,
 
 	if articleName and articleName ~= "" then
 		for _, article in state.allArticles do
-			if article.name == articleName then
-				local ok, content = pcall(renderer.renderArticle, renderer, article.name)
+			if article.key == articleName then
+				local ok, content = pcall(renderer.renderArticle, renderer, article.key)
 				if ok then
 					return 200, content, "text/html; charset=utf-8"
 				end
-				log:error(string.format("Error rendering article %s: %s", article.name, exception.format(content)))
+				log:error(string.format("Error rendering article %s: %s", article.key, exception.format(content)))
 				return 500,
 					`<h1>500 — Render Error</h1><pre>{exception.format(content)}</pre>`,
 					"text/html; charset=utf-8"
@@ -717,18 +800,22 @@ local function start(cfg: Config, host: string, port: number): DevHandle
 		table.insert(watchers, w)
 	end
 
-	-- Watch modules (Luau files)
-	if not cfg.noModules and cfg.modules and fs.isDirectory(cfg.modules) then
-		addDirWatcher(cfg.modules, "modules", function(fn)
-			return fn:match("%.luau$") and not fn:match("%.test%.luau$")
-		end)
-	end
+	local watchedModuleRoots: { [string]: boolean } = {}
+	local watchedArticleRoots: { [string]: boolean } = {}
+	for _, section in state.sections do
+		if not cfg.noModules and section.modules and not watchedModuleRoots[section.modules] then
+			watchedModuleRoots[section.modules] = true
+			addDirWatcher(section.modules, "modules", function(fn)
+				return fn:match("%.luau$") and not fn:match("%.test%.luau$")
+			end)
+		end
 
-	-- Watch articles (markdown / txt / .meta)
-	if cfg.articles and fs.isDirectory(cfg.articles) then
-		addDirWatcher(cfg.articles, "articles", function(fn)
-			return fn:match("%.md$") or fn:match("%.txt$") or fn == ".meta"
-		end)
+		if section.articles and not watchedArticleRoots[section.articles] then
+			watchedArticleRoots[section.articles] = true
+			addDirWatcher(section.articles, "articles", function(fn)
+				return fn:match("%.md$") or fn:match("%.txt$") or fn == ".meta"
+			end)
+		end
 	end
 
 	-- Watch theme templates and style

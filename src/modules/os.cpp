@@ -22,7 +22,7 @@
 //     os.clock()              -> number (high-res monotonic)
 //     os.cwd()                -> string
 //     os.chdir(path)
-//     os.cliargs()            -> {string}  (user args only, exe/cmd/script stripped)
+//     os.cliargs()            -> {string}  (script argv: script name/path + script args)
 //
 //   Child processes:
 //     os.exec(cmd, args?, opts?)   -> yields, returns {stdout, stderr, code}
@@ -809,47 +809,9 @@ static bool os_push_runtime_cliargs(lua_State* L) {
 }
 
 static int os_cliargs(lua_State* L) {
-    if (os_push_runtime_cliargs(L)) return 1;
-
-    int offset = eryx_get_cliargs_offset();
-
-#ifdef _WIN32
-    int argc;
-    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-
-    if (offset > argc) offset = argc;
-
-    int userArgc = argc - offset;
-    lua_createtable(L, userArgc, 0);
-
-    if (!argv) return 1;
-
-    for (int i = offset; i < argc; i++) {
-        int size = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, NULL, 0, NULL, NULL);
-        std::string utf8(size - 1, '\0');
-        WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, utf8.data(), size, NULL, NULL);
-
-        lua_pushlstring(L, utf8.data(), utf8.size());
-        lua_rawseti(L, -2, (i - offset) + 1);
+    if (!os_push_runtime_cliargs(L)) {
+        lua_newtable(L);
     }
-
-    LocalFree(argv);
-#else
-    int argc = eryx_get_cliargs_argc();
-    const char** argv = eryx_get_cliargs_argv();
-
-    if (offset > argc) offset = argc;
-
-    int userArgc = argc - offset;
-    lua_createtable(L, userArgc, 0);
-
-    if (!argv) return 1;
-
-    for (int i = offset; i < argc; i++) {
-        lua_pushstring(L, argv[i]);
-        lua_rawseti(L, -2, (i - offset) + 1);
-    }
-#endif
     return 1;
 }
 
@@ -1099,6 +1061,7 @@ struct SpawnOpts {
     std::vector<std::string> args;
     std::string cwd;
     std::vector<std::string> envStrings;
+    bool inheritStdio;
     bool shell;
 };
 
@@ -1127,6 +1090,7 @@ static bool is_args_array(lua_State* L, int idx) {
 
 static SpawnOpts parse_spawn_opts(lua_State* L, int optsIdx) {
     SpawnOpts opts;
+    opts.inheritStdio = false;
     opts.shell = false;
 
     if (optsIdx > 0 && lua_istable(L, optsIdx)) {
@@ -1152,6 +1116,13 @@ static SpawnOpts parse_spawn_opts(lua_State* L, int optsIdx) {
         }
         lua_pop(L, 1);
 
+        // inheritStdio
+        lua_getfield(L, optsIdx, "inheritStdio");
+        if (lua_isboolean(L, -1)) {
+            opts.inheritStdio = lua_toboolean(L, -1);
+        }
+        lua_pop(L, 1);
+
         // shell
         lua_getfield(L, optsIdx, "shell");
         if (lua_isboolean(L, -1)) {
@@ -1166,12 +1137,13 @@ static SpawnOpts parse_spawn_opts(lua_State* L, int optsIdx) {
 static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts, bool isExec,
                                   bool hasOwnerHandle) {
     auto rt = eryx_get_runtime(L);
+    bool inheritStdio = opts.inheritStdio;
 
     auto* pd = new ProcessData();
     pd->rt = rt;
     pd->exited = false;
-    pd->stdoutClosed = false;
-    pd->stderrClosed = false;
+    pd->stdoutClosed = inheritStdio;
+    pd->stderrClosed = inheritStdio;
     pd->exitStatus = 0;
     pd->termSignal = 0;
     pd->threadRef = LUA_NOREF;
@@ -1186,28 +1158,37 @@ static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts
     pd->hasOwnerHandle = hasOwnerHandle;
     pd->ownerAlive = hasOwnerHandle;
     pd->processHandleClosed = false;
-    pd->stdinHandleClosed = false;
-    pd->stdoutHandleClosed = false;
-    pd->stderrHandleClosed = false;
-    pd->hasStdioPipes = true;
-
-    // Init pipes
-    uv_pipe_init(rt->loop, &pd->stdinPipe, 0);
-    uv_pipe_init(rt->loop, &pd->stdoutPipe, 0);
-    uv_pipe_init(rt->loop, &pd->stderrPipe, 0);
-
-    pd->stdinPipe.data = pd;
-    pd->stdoutPipe.data = pd;
-    pd->stderrPipe.data = pd;
+    pd->stdinHandleClosed = inheritStdio;
+    pd->stdoutHandleClosed = inheritStdio;
+    pd->stderrHandleClosed = inheritStdio;
+    pd->hasStdioPipes = !inheritStdio;
 
     // Set up stdio containers
     uv_stdio_container_t stdio[3];
-    stdio[0].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_READABLE_PIPE);
-    stdio[0].data.stream = (uv_stream_t*)&pd->stdinPipe;
-    stdio[1].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_WRITABLE_PIPE);
-    stdio[1].data.stream = (uv_stream_t*)&pd->stdoutPipe;
-    stdio[2].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_WRITABLE_PIPE);
-    stdio[2].data.stream = (uv_stream_t*)&pd->stderrPipe;
+    if (inheritStdio) {
+        stdio[0].flags = UV_INHERIT_FD;
+        stdio[0].data.fd = 0;
+        stdio[1].flags = UV_INHERIT_FD;
+        stdio[1].data.fd = 1;
+        stdio[2].flags = UV_INHERIT_FD;
+        stdio[2].data.fd = 2;
+    } else {
+        // Init pipes
+        uv_pipe_init(rt->loop, &pd->stdinPipe, 0);
+        uv_pipe_init(rt->loop, &pd->stdoutPipe, 0);
+        uv_pipe_init(rt->loop, &pd->stderrPipe, 0);
+
+        pd->stdinPipe.data = pd;
+        pd->stdoutPipe.data = pd;
+        pd->stderrPipe.data = pd;
+
+        stdio[0].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_READABLE_PIPE);
+        stdio[0].data.stream = (uv_stream_t*)&pd->stdinPipe;
+        stdio[1].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_WRITABLE_PIPE);
+        stdio[1].data.stream = (uv_stream_t*)&pd->stdoutPipe;
+        stdio[2].flags = (uv_stdio_flags)(UV_CREATE_PIPE | UV_WRITABLE_PIPE);
+        stdio[2].data.stream = (uv_stream_t*)&pd->stderrPipe;
+    }
 
     // Build args array for uv_spawn
     std::string actualCmd;
@@ -1262,18 +1243,24 @@ static ProcessData* spawn_process(lua_State* L, const char* cmd, SpawnOpts& opts
 
     int r = uv_spawn(rt->loop, &pd->process, &procOpts);
     if (r != 0) {
-        pd->processHandleClosed = true;
-        pd->ownerAlive = false;
-        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
-        uv_close((uv_handle_t*)&pd->stdoutPipe, process_pipe_close_cb);
-        uv_close((uv_handle_t*)&pd->stderrPipe, process_pipe_close_cb);
+        if (pd->hasStdioPipes) {
+            pd->processHandleClosed = true;
+            pd->ownerAlive = false;
+            uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
+            uv_close((uv_handle_t*)&pd->stdoutPipe, process_pipe_close_cb);
+            uv_close((uv_handle_t*)&pd->stderrPipe, process_pipe_close_cb);
+        } else {
+            delete pd;
+        }
         luaL_error(L, "failed to spawn process '%s': %s", cmd, uv_strerror(r));
         return nullptr;
     }
 
-    // Start reading stdout/stderr
-    uv_read_start((uv_stream_t*)&pd->stdoutPipe, alloc_cb, stdout_read_cb);
-    uv_read_start((uv_stream_t*)&pd->stderrPipe, alloc_cb, stderr_read_cb);
+    if (pd->hasStdioPipes) {
+        // Start reading stdout/stderr
+        uv_read_start((uv_stream_t*)&pd->stdoutPipe, alloc_cb, stdout_read_cb);
+        uv_read_start((uv_stream_t*)&pd->stderrPipe, alloc_cb, stderr_read_cb);
+    }
 
     return pd;
 }
@@ -1299,15 +1286,28 @@ static int os_exec(lua_State* L) {
     auto opts = parse_spawn_opts(L, optsIdx);
     opts.args = parse_args(L, cmd, argsIdx);
 
+    if (opts.inheritStdio && opts.shell) {
+        luaL_error(L,
+                   "os.exec with inheritStdio=true cannot be combined with shell=true; use "
+                   "os.shell instead");
+        return 0;
+    }
+
     ProcessData* pd = spawn_process(L, cmd, opts, true, false);
 
     // Close stdin immediately for exec (we don't write to it)
-    uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
+    if (pd->hasStdioPipes) {
+        uv_close((uv_handle_t*)&pd->stdinPipe, process_pipe_close_cb);
+    }
 
     // Ref the current thread so we can resume it later
     lua_pushthread(L);
     pd->threadRef = lua_ref(L, -1);
     lua_pop(L, 1);
+
+    if (pd->exited) {
+        try_resume_exec(pd);
+    }
 
     return lua_yield(L, 0);
 }
@@ -1403,6 +1403,10 @@ static int os_shell(lua_State* L) {
     lua_pushthread(L);
     pd->threadRef = lua_ref(L, -1);
     lua_pop(L, 1);
+
+    if (pd->exited) {
+        try_resume_shell(pd);
+    }
 
     return lua_yield(L, 0);
 }
@@ -1952,6 +1956,11 @@ static int os_spawn(lua_State* L) {
 
     auto opts = parse_spawn_opts(L, optsIdx);
     opts.args = parse_args(L, cmd, argsIdx);
+
+    if (opts.inheritStdio) {
+        luaL_error(L, "os.spawn does not support inheritStdio=true");
+        return 0;
+    }
 
     ProcessData* pd = spawn_process(L, cmd, opts, false, true);
 

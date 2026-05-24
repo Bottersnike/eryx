@@ -2,6 +2,7 @@ local fs = require("@eryx/fs")
 local template = require("@eryx/template")
 local sidebar = require("./sidebar")
 local markdown = require("@markdown")
+local glob = require("@eryx/glob")
 
 local wikilinkRuleBuilder = require("@markdown/extensions/wikilink")
 
@@ -21,6 +22,81 @@ type TOCGroup = {
 	children: { TOCItem },
 }
 type TOC = { TOCItem } | { TOCGroup }
+
+type NavigationLinkConfig = {
+	label: string,
+	href: string,
+	matchPrefix: string?,
+	exact: boolean?,
+	header: boolean?,
+	mobile: boolean?,
+}
+
+type SectionLandingConfig = {
+	title: string?,
+	description: string?,
+	generate: boolean?,
+}
+
+type SectionConfig = {
+	id: string,
+	label: string,
+	mount: string?,
+	headerHref: string?,
+	articles: string?,
+	modules: string?,
+	prefix: string?,
+	landing: SectionLandingConfig?,
+	children: { SectionConfig }?,
+}
+
+type SiteSection = {
+	id: string,
+	label: string,
+	mount: string?,
+	headerHref: string?,
+	articles: string?,
+	modules: string?,
+	prefix: string?,
+	landing: SectionLandingConfig?,
+	children: { SiteSection }?,
+	parentId: string?,
+	topLevelId: string,
+	isLeaf: boolean,
+}
+
+type SectionFolderMeta = {
+	sectionTitles: { [string]: string },
+	folderTitles: { [string]: string },
+	folderOrder: { [string]: number },
+}
+
+type ArticleRecord = {
+	key: string,
+	localName: string,
+	article: Article.Article,
+	sectionId: string,
+}
+
+type NavigationHeaderConfig = {
+	mode: "auto" | "tabs" | "none"?,
+	mobile: {
+		includeSectionLinks: boolean?,
+	}?,
+}
+
+type NavigationConfig = {
+	header: NavigationHeaderConfig?,
+	splitApiReference: boolean?,
+	headerLinks: { NavigationLinkConfig }?,
+}
+
+type HeaderNavLink = {
+	label: string,
+	href: string?,
+	isActive: boolean,
+	children: { HeaderNavLink }?,
+}
 
 local function htmlEscapeFilter(s: string): string
 	if not s then
@@ -166,8 +242,13 @@ type RendererFields = {
 	siteRoot: string,
 	exportMode: "flat" | "directory",
 	modulePrefix: string?,
+	sections: { SiteSection }?,
+	leafSections: { SiteSection },
+	sectionsById: { [string]: SiteSection },
+	moduleSectionByName: { [string]: string }?,
+	navigation: NavigationConfig?,
 	modules: { [string]: modules.ModuleInfo },
-	articles: { { name: string, article: Article.Article } },
+	articles: { ArticleRecord },
 	stylesPath: string,
 	favicon: string?,
 	head: { HeadTag }?,
@@ -181,10 +262,9 @@ type RendererFields = {
 	customGlobals: { [string]: any }?,
 	versionName: string?,
 	versionLabel: string?,
-	sectionTitles: { [string]: string }?,
-	folderTitles: { [string]: string }?,
-	folderOrder: { [string]: number }?,
+	folderMetaBySectionId: { [string]: SectionFolderMeta }?,
 	assetResolver: ((article: Article.Article, url: string) -> string)?,
+	includeMobileSectionLinks: boolean,
 
 	templates: {
 		article: template.Template,
@@ -213,6 +293,9 @@ function Renderer.new(
 		siteRoot: string?,
 		exportMode: ("flat" | "directory")?,
 		modulePrefix: string?,
+		sections: { SiteSection }?,
+		moduleSectionByName: { [string]: string }?,
+		navigation: NavigationConfig?,
 		favicon: string?,
 		head: { HeadTag }?,
 		extraHead: string?,
@@ -225,9 +308,7 @@ function Renderer.new(
 		customGlobals: { [string]: any }?,
 		versionName: string?,
 		versionLabel: string?,
-		sectionTitles: { [string]: string }?,
-		folderTitles: { [string]: string }?,
-		folderOrder: { [string]: number }?,
+		folderMetaBySectionId: { [string]: SectionFolderMeta }?,
 		assetResolver: ((article: Article.Article, url: string) -> string)?,
 		templateReader: ((path: string) -> string)?,
 	}?
@@ -247,6 +328,11 @@ function Renderer.new(
 		siteRoot = siteRoot,
 		exportMode = exportMode,
 		modulePrefix = if options then options.modulePrefix else nil,
+		sections = if options then options.sections else nil,
+		leafSections = {},
+		sectionsById = {},
+		moduleSectionByName = if options then options.moduleSectionByName else nil,
+		navigation = if options then options.navigation else nil,
 		modules = {},
 		articles = {},
 
@@ -263,10 +349,9 @@ function Renderer.new(
 		customGlobals = if options then options.customGlobals else nil,
 		versionName = if options then options.versionName else nil,
 		versionLabel = if options then options.versionLabel else nil,
-		sectionTitles = if options then options.sectionTitles else nil,
-		folderTitles = if options then options.folderTitles else nil,
-		folderOrder = if options then options.folderOrder else nil,
+		folderMetaBySectionId = if options then options.folderMetaBySectionId else nil,
 		assetResolver = if options then options.assetResolver else nil,
+		includeMobileSectionLinks = true,
 		templates = {
 			article = template.compile(readTemplate(templates.article), templates.article),
 			api = template.compile(readTemplate(templates.api), templates.api),
@@ -281,6 +366,22 @@ function Renderer.new(
 		currentArticle = nil,
 	}
 	setmetatable(this, Renderer)
+	if this.sections then
+		local function registerSection(section: SiteSection)
+			this.sectionsById[section.id] = section
+			if section.isLeaf then
+				table.insert(this.leafSections, section)
+			end
+			if section.children then
+				for _, child in section.children do
+					registerSection(child)
+				end
+			end
+		end
+		for _, section in this.sections do
+			registerSection(section)
+		end
+	end
 	local function transformURL(url: string): string
 		if this.currentArticle and this.assetResolver then
 			return this.assetResolver(this.currentArticle, url)
@@ -496,17 +597,17 @@ end
 
 function Renderer._GetPath(self: Renderer, item: modules.ModuleInfo | Article.Article | string): string
 	if typeof(item) == "string" then
-		error(":(")
+		return item
 	end
 
 	-- Sidebar module
 	if (item :: any).displayName then
-		return "api/" .. item.name
+		return ((item :: any).sitePath or (item :: any).name) :: string
 	end
 
 	-- ModuleInfo
 	if (item :: any).functions then
-		return "api/" .. item.qualifiedName
+		return ((item :: any).sitePath or (item :: any).qualifiedName) :: string
 	end
 
 	-- Article — use sitePath (set during registration) which preserves directory nesting
@@ -523,6 +624,9 @@ function Renderer.getPath(self: Renderer, item: (modules.ModuleInfo | Article.Ar
 	end
 
 	local path = self:_GetPath(item)
+	if path == "" then
+		return "index.html"
+	end
 
 	if self.exportMode == "directory" then
 		return path .. "/index.html"
@@ -537,6 +641,9 @@ function Renderer.getLink(self: Renderer, item: (modules.ModuleInfo | Article.Ar
 	end
 
 	local path = self:_GetPath(item)
+	if path == "" then
+		return self.siteRoot
+	end
 
 	if self.exportMode == "directory" then
 		return self.siteRoot .. path
@@ -545,13 +652,410 @@ function Renderer.getLink(self: Renderer, item: (modules.ModuleInfo | Article.Ar
 	end
 end
 
-function Renderer.registerArticle(self: Renderer, article: Article.Article, sitePath: string): ()
-	article.sitePath = sitePath
-	table.insert(self.articles, { name = sitePath, article = article })
+function Renderer.getPathForRoute(self: Renderer, routePath: string): string
+	return self:getPath(routePath)
 end
 
-function Renderer.registerModule(self: Renderer, module: modules.ModuleInfo)
+function Renderer.registerArticle(
+	self: Renderer,
+	article: Article.Article,
+	key: string,
+	localName: string,
+	sectionId: string
+): ()
+	article.sitePath = key
+	table.insert(self.articles, {
+		key = key,
+		localName = localName,
+		article = article,
+		sectionId = sectionId,
+	})
+end
+
+function Renderer.registerModule(self: Renderer, module: modules.ModuleInfo, sectionId: string?)
 	self.modules[module.qualifiedName] = module
+	if sectionId then
+		if not self.moduleSectionByName then
+			self.moduleSectionByName = {}
+		end
+		self.moduleSectionByName[module.qualifiedName] = sectionId
+	end
+end
+
+local function normaliseNavPath(path: string): string
+	if path ~= "/" and path:sub(-1) == "/" then
+		return path:sub(1, -2)
+	end
+	return path
+end
+
+local function resolveConfiguredHref(siteRoot: string, href: string): string
+	if href == "" then
+		return href
+	end
+	if href:match("^[%a][%w+.-]*:") or href:sub(1, 1) == "#" then
+		return href
+	end
+	if href:sub(1, 1) == "/" then
+		return href
+	end
+	return siteRoot .. href:gsub("^/+", "")
+end
+
+local function pathMatches(currentPath: string, targetPath: string, exact: boolean?): boolean
+	local current = normaliseNavPath(currentPath)
+	local target = normaliseNavPath(targetPath)
+
+	if exact then
+		return current == target
+	end
+	if target == "/" then
+		return current:sub(1, 1) == "/"
+	end
+
+	return current == target or current:sub(1, #target + 1) == target .. "/"
+end
+
+local function hasSectionModel(self: Renderer): boolean
+	return self.sections ~= nil and #self.sections > 0
+end
+
+local function getSectionMountHref(self: Renderer, section: SiteSection): string?
+	if not section.mount then
+		return nil
+	end
+	if section.mount == "/" then
+		return self.siteRoot
+	end
+	return self.siteRoot .. section.mount:sub(2)
+end
+
+local function getSectionHref(self: Renderer, section: SiteSection): string?
+	if section.headerHref then
+		return resolveConfiguredHref(self.siteRoot, section.headerHref)
+	end
+	return getSectionMountHref(self, section)
+end
+
+local function getArticleRecord(self: Renderer, key: string): ArticleRecord?
+	for _, articleInfo in self.articles do
+		if articleInfo.key == key then
+			return articleInfo
+		end
+	end
+	return nil
+end
+
+local function findBestSectionForPath(self: Renderer, currentPath: string): SiteSection?
+	local best: SiteSection? = nil
+	local bestScore = -1
+
+	for _, section in self.leafSections do
+		local href = getSectionMountHref(self, section)
+		if href and pathMatches(currentPath, href, false) then
+			local score = #(section.mount or "")
+			if score > bestScore then
+				best = section
+				bestScore = score
+			end
+		end
+	end
+
+	return best
+end
+
+local function getCurrentSection(self: Renderer, pageContext: { [string]: any }?): SiteSection?
+	if not hasSectionModel(self) then
+		return nil
+	end
+
+	if pageContext and pageContext.sectionId and self.sectionsById[pageContext.sectionId] then
+		return self.sectionsById[pageContext.sectionId]
+	end
+
+	local currentPath = if pageContext and pageContext.path then pageContext.path else self.siteRoot
+	return findBestSectionForPath(self, currentPath)
+end
+
+local function buildLegacyHeaderNavigation(self: Renderer, currentPath: string): ({ HeaderNavLink }, { HeaderNavLink })
+	local configured = if self.navigation then self.navigation.headerLinks else nil
+	if not configured or #configured == 0 then
+		return {}, {}
+	end
+
+	local built: { { label: string, href: string, isActive: boolean, header: boolean, mobile: boolean } } = {}
+	local bestMatchIndex: number? = nil
+	local bestMatchLength = -1
+
+	for _, entry in configured do
+		local resolvedHref = resolveConfiguredHref(self.siteRoot, entry.href)
+		table.insert(built, {
+			label = entry.label,
+			href = resolvedHref,
+			isActive = false,
+			header = entry.header ~= false,
+			mobile = entry.mobile ~= false,
+		})
+
+		local matchTarget = resolveConfiguredHref(self.siteRoot, entry.matchPrefix or entry.href)
+		if matchTarget:sub(1, 1) == "/" and pathMatches(currentPath, matchTarget, entry.exact) then
+			local score = #normaliseNavPath(matchTarget)
+			if entry.exact then
+				score += 10000
+			end
+			if score > bestMatchLength then
+				bestMatchLength = score
+				bestMatchIndex = #built
+			end
+		end
+	end
+
+	if bestMatchIndex then
+		built[bestMatchIndex].isActive = true
+	end
+
+	local headerLinks: { HeaderNavLink } = {}
+	local mobileLinks: { HeaderNavLink } = {}
+	for _, link in built do
+		local out: HeaderNavLink = {
+			label = link.label,
+			href = link.href,
+			isActive = link.isActive,
+			children = nil,
+		}
+		if link.header then
+			table.insert(headerLinks, out)
+		end
+		if link.mobile then
+			table.insert(mobileLinks, out)
+		end
+	end
+
+	return headerLinks, mobileLinks
+end
+
+local function buildSectionHeaderNavigation(
+	self: Renderer,
+	pageContext: { [string]: any }?
+): ({ HeaderNavLink }, { HeaderNavLink })
+	local currentPath = if pageContext and pageContext.path then pageContext.path else self.siteRoot
+	local isSiteLanding = normaliseNavPath(currentPath) == normaliseNavPath(self.siteRoot)
+	local currentSection = getCurrentSection(self, pageContext)
+	local currentTopLevelId = if currentSection and not isSiteLanding then currentSection.topLevelId else nil
+
+	local headerMode = if self.navigation
+			and self.navigation.header
+			and self.navigation.header.mode
+		then self.navigation.header.mode
+		else "auto"
+	local visibleHeaderCount = if self.sections then #self.sections else 0
+	local hasHeaderChildren = false
+	if self.sections then
+		for _, section in self.sections do
+			if section.children and #section.children > 0 then
+				hasHeaderChildren = true
+				break
+			end
+		end
+	end
+	local showPrimaryNav = false
+	if headerMode == "tabs" then
+		showPrimaryNav = visibleHeaderCount > 0
+	elseif headerMode == "auto" then
+		showPrimaryNav = visibleHeaderCount > 1 or hasHeaderChildren
+	end
+	local includeMobileSectionLinks = if self.navigation
+			and self.navigation.header
+			and self.navigation.header.mobile
+		then self.navigation.header.mobile.includeSectionLinks ~= false
+		else true
+
+	local headerLinks: { HeaderNavLink } = {}
+	local mobileLinks: { HeaderNavLink } = {}
+
+	for _, section in self.sections :: { SiteSection } do
+		local childHeaderLinks: { HeaderNavLink } = {}
+		local childMobileLinks: { HeaderNavLink } = {}
+		local childActive = false
+		if section.children then
+			for _, child in section.children do
+				local childHref = getSectionHref(self, child)
+				local childMountHref = getSectionMountHref(self, child)
+				local isChildActive = currentSection ~= nil and currentSection.id == child.id
+				if not isChildActive and childMountHref and not isSiteLanding then
+					isChildActive = pathMatches(currentPath, childMountHref, false)
+				end
+				if isChildActive then
+					childActive = true
+				end
+
+				local childLink: HeaderNavLink = {
+					label = child.label,
+					href = childHref,
+					isActive = isChildActive,
+					children = nil,
+				}
+				table.insert(childHeaderLinks, childLink)
+				table.insert(childMobileLinks, childLink)
+			end
+		end
+
+		local isActive = (currentTopLevelId ~= nil and currentTopLevelId == section.id) or childActive
+		local href = getSectionHref(self, section)
+		local mountHref = getSectionMountHref(self, section)
+		if not isActive and mountHref and not isSiteLanding and section.mount ~= "/" then
+			isActive = pathMatches(currentPath, mountHref, false)
+		end
+
+		local item: HeaderNavLink = {
+			label = section.label,
+			href = href,
+			isActive = isActive,
+			children = if #childHeaderLinks > 0 then childHeaderLinks else nil,
+		}
+		if showPrimaryNav then
+			table.insert(headerLinks, item)
+		end
+
+		if includeMobileSectionLinks then
+			table.insert(mobileLinks, {
+				label = section.label,
+				href = href,
+				isActive = isActive,
+				children = if #childMobileLinks > 0 then childMobileLinks else nil,
+			})
+		end
+	end
+
+	return headerLinks, mobileLinks
+end
+
+local function buildHeaderNavigation(
+	self: Renderer,
+	pageContext: { [string]: any }?
+): ({ HeaderNavLink }, { HeaderNavLink })
+	local currentPath = if pageContext and pageContext.path then pageContext.path else self.siteRoot
+
+	if hasSectionModel(self) then
+		return buildSectionHeaderNavigation(self, pageContext)
+	end
+	if self.navigation and self.navigation.headerLinks and #self.navigation.headerLinks > 0 then
+		return buildLegacyHeaderNavigation(self, currentPath)
+	end
+
+	return {}, {}
+end
+
+local function filterArticlesForSection(self: Renderer, section: SiteSection?): { ArticleRecord }
+	if not hasSectionModel(self) or section == nil then
+		return self.articles
+	end
+
+	local filtered: { ArticleRecord } = {}
+	for _, articleInfo in self.articles do
+		if articleInfo.sectionId == section.id then
+			table.insert(filtered, articleInfo)
+		end
+	end
+	return filtered
+end
+
+local function filterModulesForSection(self: Renderer, section: SiteSection?): { [string]: modules.ModuleInfo }
+	if not hasSectionModel(self) or section == nil or not self.moduleSectionByName then
+		return self.modules
+	end
+
+	local filtered: { [string]: modules.ModuleInfo } = {}
+	for _, mod in self.modules do
+		if self.moduleSectionByName[mod.qualifiedName] == section.id then
+			filtered[mod.qualifiedName] = mod
+		end
+	end
+	return filtered
+end
+
+local function getArticleSection(self: Renderer, articleKey: string): SiteSection?
+	local articleInfo = getArticleRecord(self, articleKey)
+	if not articleInfo then
+		return nil
+	end
+	return self.sectionsById[articleInfo.sectionId]
+end
+
+local function getModuleSection(self: Renderer, moduleName: string): SiteSection?
+	if not self.moduleSectionByName then
+		return nil
+	end
+	local sectionId = self.moduleSectionByName[moduleName]
+	if not sectionId then
+		return nil
+	end
+	return self.sectionsById[sectionId]
+end
+
+local function getSectionLandingRoutePath(section: SiteSection): string
+	if not section.mount or section.mount == "/" then
+		return ""
+	end
+	return section.mount:sub(2)
+end
+
+local function sectionHasLandingArticle(self: Renderer, section: SiteSection): boolean
+	for _, articleInfo in self.articles do
+		if articleInfo.sectionId == section.id and articleInfo.localName == "index" then
+			return true
+		end
+	end
+	return false
+end
+
+local function sectionHasModules(self: Renderer, section: SiteSection): boolean
+	if not self.moduleSectionByName then
+		return false
+	end
+	for _, sectionId in self.moduleSectionByName do
+		if sectionId == section.id then
+			return true
+		end
+	end
+	return false
+end
+
+local function shouldRenderSectionLanding(self: Renderer, section: SiteSection): boolean
+	if not section.isLeaf or not section.mount then
+		return false
+	end
+	if sectionHasLandingArticle(self, section) then
+		return false
+	end
+	if not sectionHasModules(self, section) then
+		return false
+	end
+	if section.landing and section.landing.generate == false then
+		return false
+	end
+	return true
+end
+
+function Renderer.shouldRenderApiIndex(self: Renderer): boolean
+	return self.navigation ~= nil and self.navigation.splitApiReference == true and next(self.modules) ~= nil
+end
+
+function Renderer.getGeneratedSectionLandingPages(self: Renderer): { { sectionId: string, routePath: string } }
+	local pages = {}
+	if not hasSectionModel(self) then
+		return pages
+	end
+
+	for _, section in self.leafSections do
+		if shouldRenderSectionLanding(self, section) then
+			table.insert(pages, {
+				sectionId = section.id,
+				routePath = getSectionLandingRoutePath(section),
+			})
+		end
+	end
+	return pages
 end
 
 function Renderer.renderPage(
@@ -564,16 +1068,38 @@ function Renderer.renderPage(
 	pageName: string?,
 	pageDisplayName: string?
 ): string
+	local pageContext = params._pageContext
+	local currentSection = getCurrentSection(self, pageContext)
+	local filteredArticles = filterArticlesForSection(self, currentSection)
+	local filteredModules = filterModulesForSection(self, currentSection)
+	local folderMeta = if currentSection and self.folderMetaBySectionId
+		then self.folderMetaBySectionId[currentSection.id]
+		else nil
 	local articleSections = sidebar.buildSidebarArticleSections(
-		self.articles,
+		filteredArticles,
 		pageName,
 		function(article: Article.Article): string
 			return self:getLink(article)
 		end,
-		self.sectionTitles,
-		self.folderTitles,
-		self.folderOrder
+		if folderMeta then folderMeta.sectionTitles else nil,
+		if folderMeta then folderMeta.folderTitles else nil,
+		if folderMeta then folderMeta.folderOrder else nil
 	)
+	local primaryLinks, drawerLinks = buildHeaderNavigation(self, pageContext)
+	local isHomePage = pageContext == nil
+		or pageContext.kind == "index"
+		or pageContext.name == "index"
+		or pageContext.path == self.siteRoot
+	local pageKind = if pageContext and pageContext.kind then pageContext.kind else "index"
+	local splitApiReference = not hasSectionModel(self) and self:shouldRenderApiIndex()
+	local moduleTitle = "API Reference"
+	local sidebarModulePrefix = self.modulePrefix
+	if currentSection and currentSection.modules ~= nil then
+		moduleTitle = if currentSection.landing and currentSection.landing.title
+			then currentSection.landing.title
+			else currentSection.label
+		sidebarModulePrefix = currentSection.prefix or sidebarModulePrefix
+	end
 
 	local displayName = pageDisplayName or pageName
 
@@ -616,8 +1142,8 @@ function Renderer.renderPage(
 		pageMeta = pageMeta,
 		global = {
 			title = self.siteTitle,
-			modules = self.modules,
-			articles = self.articles,
+			modules = filteredModules,
+			articles = filteredArticles,
 			stylePath = self.stylesPath,
 			pageName = displayName,
 			siteRoot = self.siteRoot,
@@ -628,11 +1154,18 @@ function Renderer.renderPage(
 			announcement = self.announcement,
 			versionName = self.versionName,
 			versionLabel = self.versionLabel or self.versionName,
+			headerPrimaryLinks = primaryLinks,
+			headerDrawerLinks = drawerLinks,
+			hasDesktopSidebar = not isHomePage,
+			pageKind = pageKind,
+			splitApiReference = splitApiReference,
+			currentSection = currentSection,
 		},
 		sidebar = {
 			articleTopLevel = articleSections.topLevel,
 			articleSections = articleSections.sections,
-			modules = sidebar.buildSidebarModuleTree(self.modules, pageName, self.modulePrefix),
+			modules = sidebar.buildSidebarModuleTree(filteredModules, pageName, sidebarModulePrefix),
+			moduleTitle = moduleTitle,
 			page = toc,
 		},
 	}
@@ -1109,6 +1642,7 @@ function Renderer.renderModule(self: Renderer, name: string): string
 	end
 
 	local modulePath = self:getLink(module)
+	local section = getModuleSection(self, module.qualifiedName)
 	return self:renderPage(self.templates.api, toc, {
 		module = module,
 		functionGroups = functionGroups,
@@ -1124,17 +1658,17 @@ function Renderer.renderModule(self: Renderer, name: string): string
 			title = module.qualifiedName,
 			path = modulePath,
 			summary = metaDesc,
+			sectionId = if section then section.id else nil,
 		},
 	}, name)
 end
 
 function Renderer.renderArticle(self: Renderer, name: string): string
 	local article: Article.Article? = nil
-	local articleIndex: number = 0
-	for i, a in self.articles do
-		if a.name == name then
+	local articleInfo = getArticleRecord(self, name)
+	for _, a in self.articles do
+		if a.key == name then
 			article = a.article
-			articleIndex = i
 			break
 		end
 	end
@@ -1165,8 +1699,12 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 	-- Always includes at least the path ancestors; the template prepends "Home"
 	-- and appends the current page title.
 	local breadcrumbs: { { label: string, link: string? } } = {}
+	local currentSection = getArticleSection(self, name)
+	local folderMeta = if currentSection and self.folderMetaBySectionId
+		then self.folderMetaBySectionId[currentSection.id]
+		else nil
 	local parts: { string } = {}
-	for part in name:gmatch("[^/]+") do
+	for part in ((articleInfo and articleInfo.localName) or name):gmatch("[^/]+") do
 		table.insert(parts, part)
 	end
 	if #parts > 1 then
@@ -1178,19 +1716,19 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 			local parentTitle: string? = nil
 			-- Prefer an article's title+link when a matching index article exists
 			for _, a in self.articles do
-				if a.name == pathSoFar then
+				if a.sectionId == (if currentSection then currentSection.id else nil) and a.localName == pathSoFar then
 					parentLink = self:getLink(a.article)
 					parentTitle = a.article.title
 					break
 				end
 			end
 			-- Fall back to folder titles from theme .meta if available
-			if not parentTitle and self.folderTitles and self.folderTitles[pathSoFar] then
-				parentTitle = self.folderTitles[pathSoFar]
+			if not parentTitle and folderMeta and folderMeta.folderTitles[pathSoFar] then
+				parentTitle = folderMeta.folderTitles[pathSoFar]
 			end
 			-- Also consider top-level section title mapping
-			if not parentTitle and self.sectionTitles and self.sectionTitles[parts[i]] then
-				parentTitle = self.sectionTitles[parts[i]]
+			if not parentTitle and folderMeta and folderMeta.sectionTitles[parts[i]] then
+				parentTitle = folderMeta.sectionTitles[parts[i]]
 			end
 			table.insert(
 				breadcrumbs,
@@ -1205,17 +1743,17 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 	local prevArticle: { name: string, title: string, link: string }? = nil
 	local nextArticle: { name: string, title: string, link: string }? = nil
 
-	if name ~= "index" then
-		local navArticles: { { name: string, article: Article.Article } } = {}
+	if articleInfo and articleInfo.localName ~= "index" then
+		local navArticles: { ArticleRecord } = {}
 		for _, a in self.articles do
-			if a.name ~= "index" then
+			if a.localName ~= "index" and a.sectionId == (if currentSection then currentSection.id else nil) then
 				table.insert(navArticles, a)
 			end
 		end
 
 		local navPos: number? = nil
 		for i, a in navArticles do
-			if a.name == name then
+			if a.key == name then
 				navPos = i
 				break
 			end
@@ -1224,11 +1762,11 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 		if navPos then
 			if navPos > 1 then
 				local prev = navArticles[navPos - 1]
-				prevArticle = { name = prev.name, title = prev.article.title, link = self:getLink(prev.article) }
+				prevArticle = { name = prev.key, title = prev.article.title, link = self:getLink(prev.article) }
 			end
 			if navPos < #navArticles then
 				local nxt = navArticles[navPos + 1]
-				nextArticle = { name = nxt.name, title = nxt.article.title, link = self:getLink(nxt.article) }
+				nextArticle = { name = nxt.key, title = nxt.article.title, link = self:getLink(nxt.article) }
 			end
 		end
 	end
@@ -1254,6 +1792,7 @@ function Renderer.renderArticle(self: Renderer, name: string): string
 				title = article.title,
 				path = articlePath,
 				summary = article.summary,
+				sectionId = if currentSection then currentSection.id else nil,
 			},
 		},
 		name,
@@ -1263,21 +1802,91 @@ end
 
 function Renderer.renderIndex(self: Renderer): string
 	self.currentArticle = nil
+	local indexSection = getCurrentSection(self, {
+		kind = "index",
+		name = "index",
+		path = self.siteRoot,
+	})
 	local moduleSummaries = {}
 
-	for _, mod in self.modules do
+	for _, mod in filterModulesForSection(self, indexSection) do
 		if mod.description then
-			local md = markdown.parse(mod.description)
-			for _, i in md.children do
-				if i.type == "paragraph" then
-					moduleSummaries[mod.qualifiedName] = html.inlineNodesToHtml(i.children, {})
-					break
-				end
-			end
+			local summary = mod.description:match("^(.-)\n%s*\n") or mod.description
+			summary = summary:gsub("%s+", " ")
+			summary = summary:match("^%s*(.-)%s*$") or ""
+			moduleSummaries[mod.qualifiedName] = htmlEscapeFilter(summary)
 		end
 	end
 
-	return self:renderPage(self.templates.index, {}, { moduleSummaries = moduleSummaries }, nil)
+	return self:renderPage(self.templates.index, {}, {
+		moduleSummaries = moduleSummaries,
+		_pageContext = {
+			kind = "index",
+			name = "index",
+			title = self.siteTitle,
+			path = self.siteRoot,
+			sectionId = if indexSection then indexSection.id else nil,
+		},
+	}, nil)
+end
+
+function Renderer.renderSectionLanding(self: Renderer, sectionId: string): string
+	self.currentArticle = nil
+	local section = self.sectionsById[sectionId]
+	if not section then
+		error("Unknown section " .. sectionId)
+	end
+
+	local sectionModules = filterModulesForSection(self, section)
+	local moduleSummaries = {}
+
+	for _, mod in sectionModules do
+		if mod.description then
+			local summary = mod.description:match("^(.-)\n%s*\n") or mod.description
+			summary = summary:gsub("%s+", " ")
+			summary = summary:match("^%s*(.-)%s*$") or ""
+			moduleSummaries[mod.qualifiedName] = htmlEscapeFilter(summary)
+		end
+	end
+
+	local sectionIndexPath = self:getLink(getSectionLandingRoutePath(section))
+	local pageHeading = section.label
+	if section.landing and section.landing.title then
+		pageHeading = section.landing.title
+	end
+
+	local pageSummary = "Browse all available Eryx modules."
+	if section.landing and section.landing.description then
+		pageSummary = section.landing.description
+	end
+	local showGuides = section.articles ~= nil
+	return self:renderPage(self.templates.index, {}, {
+		pageHeading = pageHeading,
+		showGuides = showGuides,
+		showApiHeading = showGuides,
+		moduleSummaries = moduleSummaries,
+		_meta = {
+			description = pageSummary,
+			canonicalUrl = sectionIndexPath,
+		},
+		_pageContext = {
+			kind = "module",
+			name = sectionId,
+			title = pageHeading,
+			path = sectionIndexPath,
+			summary = pageSummary,
+			sectionId = section.id,
+		},
+	}, getSectionLandingRoutePath(section), pageHeading)
+end
+
+function Renderer.renderApiIndex(self: Renderer): string
+	for _, landing in self:getGeneratedSectionLandingPages() do
+		if landing.routePath == "api" then
+			return self:renderSectionLanding(landing.sectionId)
+		end
+	end
+	error("No API landing page is configured")
 end
 
 function Renderer.render404(self: Renderer): string?
@@ -1349,11 +1958,36 @@ end
 function Renderer.generateSearchIndex(self: Renderer): string
 	local json = require("@eryx/data/json")
 	local entries = {}
+	if not hasSectionModel(self) and self:shouldRenderApiIndex() then
+		table.insert(entries, {
+			t = "API Reference",
+			p = if self.exportMode == "directory" then self.siteRoot .. "api" else self.siteRoot .. "api.html",
+			k = "module",
+			s = "Browse all available Eryx modules.",
+		})
+	end
+	for _, landing in self:getGeneratedSectionLandingPages() do
+		local section = if hasSectionModel(self) then self.sectionsById[landing.sectionId] else nil
+		local pageTitle = if section then section.label else "API Reference"
+		if section and section.landing and section.landing.title then
+			pageTitle = section.landing.title
+		end
+		table.insert(entries, {
+			t = pageTitle,
+			p = self:getLink(landing.routePath),
+			k = "module",
+			s = if section
+					and section.landing
+					and section.landing.description
+				then section.landing.description
+				else "Browse all available Eryx modules.",
+		})
+	end
 
 	-- Index articles (page-level + per-section)
 	for _, articleInfo in self.articles do
 		local article = articleInfo.article
-		if articleInfo.name == "index" then
+		if articleInfo.key == "" then
 			continue
 		end
 		local articleLink = self:getLink(article)
@@ -1361,7 +1995,7 @@ function Renderer.generateSearchIndex(self: Renderer): string
 
 		-- Page-level entry
 		table.insert(entries, {
-			t = article.title or articleInfo.name,
+			t = article.title or articleInfo.localName,
 			p = articleLink,
 			k = "article",
 			s = truncate(stripMarkdown(body), 300),
@@ -1405,7 +2039,7 @@ function Renderer.generateSearchIndex(self: Renderer): string
 			local sectionText = stripMarkdown(section.text)
 			if #sectionText > 20 then
 				table.insert(entries, {
-					t = (article.title or articleInfo.name) .. " > " .. section.heading,
+					t = (article.title or articleInfo.localName) .. " > " .. section.heading,
 					p = articleLink .. "#" .. section.anchor,
 					k = "article",
 					s = truncate(sectionText, 200),
@@ -1496,21 +2130,39 @@ function Renderer.generateSitemap(self: Renderer, baseUrl: string): string
 	end
 
 	local urls = {}
+	local seenUrls: { [string]: boolean } = {}
+	local function addUrl(url: string)
+		if seenUrls[url] then
+			return
+		end
+		seenUrls[url] = true
+		table.insert(urls, url)
+	end
 
 	-- Index page
-	table.insert(urls, baseUrl .. self.siteRoot)
+	addUrl(baseUrl .. self.siteRoot)
 
 	-- Articles
 	for _, articleInfo in self.articles do
-		if articleInfo.name == "index" then
+		if articleInfo.key == "" then
 			continue
 		end
-		table.insert(urls, baseUrl .. self:getLink(articleInfo.article))
+		addUrl(baseUrl .. self:getLink(articleInfo.article))
 	end
 
 	-- Modules
+	if not hasSectionModel(self) and self:shouldRenderApiIndex() then
+		local legacyApiPath = if self.exportMode == "directory"
+			then self.siteRoot .. "api"
+			else self.siteRoot .. "api.html"
+		addUrl(baseUrl .. legacyApiPath)
+	end
+	for _, landing in self:getGeneratedSectionLandingPages() do
+		addUrl(baseUrl .. self:getLink(landing.routePath))
+	end
+
 	for _, mod in self.modules do
-		table.insert(urls, baseUrl .. self:getLink(mod))
+		addUrl(baseUrl .. self:getLink(mod))
 	end
 
 	local lines = {

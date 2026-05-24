@@ -1,6 +1,11 @@
 #ifdef _WIN32
 #define _CRTDBG_MAP_ALLOC
 #include <crtdbg.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <shellapi.h>
+#include <windows.h>
 #endif
 
 #ifdef __APPLE__
@@ -14,7 +19,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
+#include <string_view>
 #include <vector>
 
 #include "isocline.h"
@@ -86,6 +93,225 @@ typedef struct {
     int runOk;
     int exitCode;
 } RunState;
+
+static constexpr const char* ERYX_FORWARD_RUNTIME_ARGS_ENV = "ERYX_FORWARD_RUNTIME_ARGS";
+
+struct RuntimeCliOverrides {
+    std::optional<int> optimizationLevel;
+    std::optional<EryxNativeCodegenMode> nativeCodegenMode;
+};
+
+struct RuntimeExecutionConfig {
+    int optimizationLevel = 2;
+    EryxNativeCodegenMode nativeCodegenMode = EryxNativeCodegenMode::All;
+};
+
+struct RuntimeCliParseResult {
+    bool ok = true;
+    int nextIndex = 0;
+    RuntimeCliOverrides overrides;
+    std::string error;
+};
+
+struct ProcessCliArgs {
+    std::vector<std::string> storage;
+    std::vector<const char*> argv;
+
+    int argc() const { return int(argv.size()); }
+    const char** data() { return argv.empty() ? nullptr : argv.data(); }
+};
+
+#ifdef _WIN32
+static std::string wide_to_utf8(std::wstring_view value) {
+    if (value.empty()) return "";
+
+    int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), nullptr, 0, nullptr,
+                                   nullptr);
+    if (size <= 0) return "";
+
+    std::string utf8(size, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), int(value.size()), utf8.data(), size, nullptr,
+                        nullptr);
+    return utf8;
+}
+#endif
+
+static void finalize_process_cli_args(ProcessCliArgs& args) {
+    args.argv.clear();
+    args.argv.reserve(args.storage.size());
+    for (const std::string& arg : args.storage) {
+        args.argv.push_back(arg.c_str());
+    }
+}
+
+static ProcessCliArgs build_process_cli_args(int argc, const char* argv[]) {
+    ProcessCliArgs args;
+
+#ifdef _WIN32
+    int wideArgc = 0;
+    LPWSTR* wideArgv = CommandLineToArgvW(GetCommandLineW(), &wideArgc);
+    if (wideArgv) {
+        args.storage.reserve(wideArgc);
+        for (int i = 0; i < wideArgc; ++i) {
+            args.storage.push_back(wide_to_utf8(wideArgv[i]));
+        }
+        LocalFree(wideArgv);
+        finalize_process_cli_args(args);
+        return args;
+    }
+#endif
+
+    args.storage.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+        args.storage.push_back(argv[i] ? argv[i] : "");
+    }
+    finalize_process_cli_args(args);
+    return args;
+}
+
+static std::vector<std::string> make_script_cli_args(const std::string& invokedName, int argc,
+                                                     const char* const* argv,
+                                                     int scriptArgsStartIndex) {
+    std::vector<std::string> cliArgs;
+    cliArgs.reserve(std::max(1, argc - scriptArgsStartIndex + 1));
+    cliArgs.push_back(invokedName);
+    for (int i = scriptArgsStartIndex; i < argc; ++i) {
+        cliArgs.push_back(argv[i]);
+    }
+    return cliArgs;
+}
+
+static std::vector<std::string> make_script_cli_args(int argc, const char* const* argv,
+                                                     int scriptIndex) {
+    return make_script_cli_args(argv[scriptIndex], argc, argv, scriptIndex + 1);
+}
+
+static std::vector<std::string> make_script_cli_args(const std::string& invokedName,
+                                                     const std::vector<std::string>& args,
+                                                     int scriptArgsStartIndex) {
+    std::vector<std::string> cliArgs;
+    cliArgs.reserve(std::max(1, int(args.size()) - scriptArgsStartIndex + 1));
+    cliArgs.push_back(invokedName);
+    for (int i = scriptArgsStartIndex; i < int(args.size()); ++i) {
+        cliArgs.push_back(args[i]);
+    }
+    return cliArgs;
+}
+
+template <typename GetArg>
+static RuntimeCliParseResult parse_runtime_cli_overrides(int count, int startIndex, GetArg getArg) {
+    RuntimeCliParseResult result;
+    result.nextIndex = startIndex;
+
+    while (result.nextIndex < count) {
+        std::string_view arg = getArg(result.nextIndex);
+
+        if (arg == "--") {
+            result.nextIndex += 1;
+            break;
+        }
+
+        if (arg == "-O0" || arg == "-O1" || arg == "-O2") {
+            result.overrides.optimizationLevel = int(arg[2] - '0');
+            result.nextIndex += 1;
+            continue;
+        }
+
+        if (arg == "--native") {
+            result.overrides.nativeCodegenMode = EryxNativeCodegenMode::All;
+            result.nextIndex += 1;
+            continue;
+        }
+
+        if (arg == "--no-native") {
+            result.overrides.nativeCodegenMode = EryxNativeCodegenMode::Disabled;
+            result.nextIndex += 1;
+            continue;
+        }
+
+        if (arg == "--native-only-specified") {
+            result.overrides.nativeCodegenMode = EryxNativeCodegenMode::OnlySpecified;
+            result.nextIndex += 1;
+            continue;
+        }
+
+        if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'O') {
+            result.ok = false;
+            result.error = "Unsupported optimization level '" + std::string(arg) +
+                           "' (expected -O0, -O1, or -O2)";
+            return result;
+        }
+
+        break;
+    }
+
+    return result;
+}
+
+static RuntimeCliOverrides merge_runtime_cli_overrides(const RuntimeCliOverrides& base,
+                                                       const RuntimeCliOverrides& override) {
+    RuntimeCliOverrides merged = base;
+    if (override.optimizationLevel.has_value()) {
+        merged.optimizationLevel = override.optimizationLevel;
+    }
+    if (override.nativeCodegenMode.has_value()) {
+        merged.nativeCodegenMode = override.nativeCodegenMode;
+    }
+    return merged;
+}
+
+static RuntimeExecutionConfig resolve_runtime_execution_config(
+    const RuntimeCliOverrides& overrides) {
+    RuntimeExecutionConfig config;
+    if (overrides.optimizationLevel.has_value()) {
+        config.optimizationLevel = *overrides.optimizationLevel;
+    }
+    if (overrides.nativeCodegenMode.has_value()) {
+        config.nativeCodegenMode = *overrides.nativeCodegenMode;
+    }
+    return config;
+}
+
+static std::vector<std::string> render_runtime_cli_flags(const RuntimeCliOverrides& overrides) {
+    std::vector<std::string> flags;
+    if (overrides.optimizationLevel.has_value()) {
+        flags.push_back("-O" + std::to_string(*overrides.optimizationLevel));
+    }
+    if (overrides.nativeCodegenMode.has_value()) {
+        switch (*overrides.nativeCodegenMode) {
+            case EryxNativeCodegenMode::Disabled:
+                flags.push_back("--no-native");
+                break;
+            case EryxNativeCodegenMode::OnlySpecified:
+                flags.push_back("--native-only-specified");
+                break;
+            case EryxNativeCodegenMode::All:
+            default:
+                flags.push_back("--native");
+                break;
+        }
+    }
+    return flags;
+}
+
+static std::string render_runtime_cli_env_value(const RuntimeCliOverrides& overrides) {
+    std::vector<std::string> flags = render_runtime_cli_flags(overrides);
+    std::string out;
+    for (size_t i = 0; i < flags.size(); ++i) {
+        if (i > 0) out += "\n";
+        out += flags[i];
+    }
+    return out;
+}
+
+static void apply_runtime_execution_config(EryxRuntime* rt, const RuntimeExecutionConfig& config) {
+    if (!rt) return;
+    rt->nativeCodegenMode = config.nativeCodegenMode;
+    rt->luauOptimizationLevel = config.optimizationLevel;
+    rt->luauDebugLevel = 1;
+    rt->luauTypeInfoLevel = 1;
+}
+
 RunState eryx_run_to_completion(EryxRuntimeHost* host) {
     while (eryx_runtime_has_work(host->rt)) {
         lua_State* runningLua = NULL;
@@ -109,7 +335,9 @@ RunState eryx_run_to_completion(EryxRuntimeHost* host) {
     return RunState{ 1, 0 };
 }
 
-int main_script(const char* filename, const std::string luauCode) {
+int main_script(const char* filename, const std::string luauCode,
+                const RuntimeExecutionConfig& runtimeConfig,
+                const std::vector<std::string>& cliArgs) {
     int exitCode = 0;
     try {
         EryxRuntimeHost host;
@@ -117,6 +345,9 @@ int main_script(const char* filename, const std::string luauCode) {
             std::cerr << "Failed to create Lua state" << std::endl;
             return 1;
         }
+        apply_runtime_execution_config(host.rt, runtimeConfig);
+        host.rt->hasCliArgs = true;
+        host.rt->cliArgs = cliArgs;
         eryx_runtime_host_install_sigint(&host);
 
         // Make thread for the root module
@@ -170,6 +401,35 @@ void
 
     va_end(args);
     exit(-1);
+}
+
+static void print_version() {
+    std::cout << "Eryx (Luau " << LUAU_APPROX_VERSION << ", "
+              << std::string(LUAU_GIT_HASH).substr(0, 8) << ")" << std::endl;
+}
+
+static void print_main_help(const char* programName) {
+    std::cout << "Usage:\n";
+    std::cout << "  " << programName << " [options] [script.luau [args...]]\n";
+    std::cout << "  " << programName << " [options] run [options] <script> [args...]\n";
+    std::cout << "  " << programName << " completion <bash|zsh|fish|powershell>\n";
+    std::cout << "  " << programName << " --help\n";
+    std::cout << "  " << programName << " --version\n";
+    std::cout << "\n";
+    std::cout << "Options:\n";
+    std::cout << "  -h, --help                   Show this help text\n";
+    std::cout << "  --version                    Print version information\n";
+    std::cout << "  -O0, -O1, -O2                Set Luau optimization level\n";
+    std::cout << "  --native                     Enable native codegen for all eligible chunks\n";
+    std::cout << "  --no-native                  Disable native codegen\n";
+    std::cout
+        << "  --native-only-specified      Only native-compile chunks marked with --!native\n";
+    std::cout << "\n";
+    std::cout << "Commands:\n";
+    std::cout << "  run                          Resolve and run project/dependency scripts\n";
+    std::cout << "  completion                   Generate shell completion scripts\n";
+    std::cout << "\n";
+    std::cout << "Use -- after options to pass a script name that begins with -.\n";
 }
 
 // TODO: This!
@@ -365,12 +625,13 @@ static void repl_highlight(ic_highlight_env_t* henv, const char* input, void* /*
     }
 }
 
-static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
+static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source,
+                                      const RuntimeExecutionConfig& runtimeConfig) {
     lua_checkstack(L, LUA_MINSTACK);
     const int base = lua_gettop(L);
 
     Luau::CompileOptions opts;
-    opts.optimizationLevel = 2;
+    opts.optimizationLevel = runtimeConfig.optimizationLevel;
     opts.debugLevel = 1;
     opts.typeInfoLevel = 1;
 
@@ -430,7 +691,7 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source) {
     }
 }
 
-int main_repl() {
+int main_repl(const RuntimeExecutionConfig& runtimeConfig) {
     fprintf(stdout, "Eryx (Luau %s, %.8s)\n", LUAU_APPROX_VERSION, LUAU_GIT_HASH);
     std::cout << "Type \"help\" for help" << std::endl;
 
@@ -489,7 +750,8 @@ int main_repl() {
         ctrlCArmed = false;
 
         if (buffer.empty()) {
-            ReplRunResult exprResult = repl_run_snippet(L, std::string("return ") + line.get());
+            ReplRunResult exprResult =
+                repl_run_snippet(L, std::string("return ") + line.get(), runtimeConfig);
             if (exprResult.systemExit) {
                 exitCode = exprResult.exitCode;
                 break;
@@ -503,7 +765,7 @@ int main_repl() {
         if (!buffer.empty()) buffer += "\n";
         buffer += line.get();
 
-        ReplRunResult result = repl_run_snippet(L, buffer);
+        ReplRunResult result = repl_run_snippet(L, buffer, runtimeConfig);
 
         if (result.systemExit) {
             exitCode = result.exitCode;
@@ -691,23 +953,26 @@ struct ScopedEnvVar {
 };
 
 static int main_complete_script_source(const std::string& displayName, const std::string& source,
-                                       int cliOffset, const char* shell) {
+                                       const std::vector<std::string>& cliArgs, const char* shell,
+                                       const RuntimeExecutionConfig& runtimeConfig) {
     if (source.find("@eryx/argparse") == std::string::npos) {
         completion_debug_log("main_complete_script: script does not use @eryx/argparse");
         return 0;
     }
+
     completion_debug_log("main_complete_script: invoking script in completion mode");
+
     ScopedEnvVar completionMode("ERYX_ARGPARSE_COMPLETE", "1");
     ScopedEnvVar completionShell("ERYX_ARGPARSE_COMPLETE_SHELL", shell ? shell : "");
 
-    eryx_set_cliargs_offset(cliOffset);
-    return main_script(displayName.c_str(), source);
+    return main_script(displayName.c_str(), source, runtimeConfig, cliArgs);
 }
 
-static int main_complete_script(const std::filesystem::path& scriptPath, int cliOffset,
-                                const char* shell) {
-    completion_debug_log("main_complete_script: path=" + scriptPath.string() + " cliOffset=" +
-                         std::to_string(cliOffset) + " shell=" + (shell ? shell : ""));
+static int main_complete_script(const std::filesystem::path& scriptPath,
+                                const std::vector<std::string>& cliArgs, const char* shell,
+                                const RuntimeExecutionConfig& runtimeConfig) {
+    completion_debug_log("main_complete_script: path=" + scriptPath.string() +
+                         " shell=" + (shell ? shell : ""));
 
     std::ifstream f(scriptPath, std::ios::binary);
     if (!f) {
@@ -717,7 +982,7 @@ static int main_complete_script(const std::filesystem::path& scriptPath, int cli
     }
 
     std::string source((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
-    return main_complete_script_source(scriptPath.string(), source, cliOffset, shell);
+    return main_complete_script_source(scriptPath.string(), source, cliArgs, shell, runtimeConfig);
 }
 
 static std::string render_completion_script(const std::string& programName,
@@ -891,56 +1156,92 @@ static int main_complete(int argc, const char* argv[]) {
         completion_debug_log(ss.str());
     }
 
-    if (words.empty()) {
+    auto parseWords = [&](int startIndex) {
+        return parse_runtime_cli_overrides(
+            (int)words.size(), startIndex,
+            [&](int index) -> std::string_view { return words[index]; });
+    };
+
+    RuntimeCliParseResult globalParse = parseWords(0);
+    if (!globalParse.ok) return 0;
+    RuntimeExecutionConfig globalConfig = resolve_runtime_execution_config(globalParse.overrides);
+
+    if (globalParse.nextIndex >= (int)words.size()) {
         auto builtins = list_builtin_scripts();
+        builtins.push_back("-h");
+        builtins.push_back("--help");
+        builtins.push_back("--version");
         builtins.push_back("completion");
         builtins.push_back("run");
+        builtins.push_back("-O0");
+        builtins.push_back("-O1");
+        builtins.push_back("-O2");
+        builtins.push_back("--native");
+        builtins.push_back("--no-native");
+        builtins.push_back("--native-only-specified");
         completion_debug_log("main_complete: returning top-level candidates");
         print_completion_candidates(builtins);
         return 0;
     }
 
-    if (words[0] == "run") {
-        if (words.size() < 2) return 0;
+    const std::string& command = words[globalParse.nextIndex];
 
-        fs::path scriptPath = words[1];
+    if (command == "run") {
+        RuntimeCliParseResult runParse = parseWords(globalParse.nextIndex + 1);
+        if (!runParse.ok) return 0;
+        if (runParse.nextIndex >= (int)words.size()) return 0;
+
+        RuntimeExecutionConfig runConfig = resolve_runtime_execution_config(
+            merge_runtime_cli_overrides(globalParse.overrides, runParse.overrides));
+
+        fs::path scriptPath = words[runParse.nextIndex];
         if (fs::exists(scriptPath)) {
             completion_debug_log("main_complete: dispatching to run script " + scriptPath.string());
-            return main_complete_script(scriptPath, wordsStart + 2, shell.c_str());
+            return main_complete_script(
+                scriptPath,
+                make_script_cli_args(words[runParse.nextIndex], words, runParse.nextIndex + 1),
+                shell.c_str(), runConfig);
         }
         completion_debug_log("main_complete: run script does not exist");
         return 0;
     }
 
-    if (words[0] == "completion") {
+    if (command == "completion") {
+        if (globalParse.nextIndex + 1 < (int)words.size()) return 0;
         completion_debug_log("main_complete: returning completion shell names");
         print_completion_candidates({ "bash", "fish", "powershell", "zsh" });
         return 0;
     }
 
-    if (words[0].find('.') == std::string::npos && !fs::exists(words[0])) {
-        if (const EmbeddedScriptModule* builtin = find_embedded_builtin_script(words[0])) {
-            std::string displayName = "@eryx/scripts/" + words[0];
+    if (command.find('.') == std::string::npos && !fs::exists(command)) {
+        if (const EmbeddedScriptModule* builtin = find_embedded_builtin_script(command)) {
+            std::string displayName = "@eryx/scripts/" + command;
             completion_debug_log("main_complete: dispatching to embedded builtin script " +
                                  displayName);
-            return main_complete_script_source(displayName, builtin->source, wordsStart + 1,
-                                               shell.c_str());
+            return main_complete_script_source(
+                displayName, builtin->source,
+                make_script_cli_args(command, words, globalParse.nextIndex + 1), shell.c_str(),
+                globalConfig);
         }
 
-        fs::path builtinPath = getScriptsDir() / (words[0] + ".luau");
+        fs::path builtinPath = getScriptsDir() / (command + ".luau");
         if (fs::exists(builtinPath)) {
             completion_debug_log("main_complete: dispatching to builtin script " +
                                  builtinPath.string());
-            return main_complete_script(builtinPath, wordsStart + 1, shell.c_str());
+            return main_complete_script(
+                builtinPath, make_script_cli_args(command, words, globalParse.nextIndex + 1),
+                shell.c_str(), globalConfig);
         }
-        completion_debug_log("main_complete: builtin script not found for " + words[0]);
+        completion_debug_log("main_complete: builtin script not found for " + command);
     }
 
-    fs::path scriptPath = words[0];
+    fs::path scriptPath = command;
     if (fs::exists(scriptPath)) {
         completion_debug_log("main_complete: dispatching to explicit script " +
                              scriptPath.string());
-        return main_complete_script(scriptPath, wordsStart + 1, shell.c_str());
+        return main_complete_script(scriptPath,
+                                    make_script_cli_args(command, words, globalParse.nextIndex + 1),
+                                    shell.c_str(), globalConfig);
     }
 
     completion_debug_log("main_complete: no completion target matched");
@@ -949,16 +1250,13 @@ static int main_complete(int argc, const char* argv[]) {
 
 // Try to run a built-in script from the scripts/ directory next to the executable.
 // Returns -1 if the script doesn't exist (caller should fall through).
-int main_builtin_script(int argc, const char* argv[], const char* name) {
+int main_builtin_script(const char* name, const std::vector<std::string>& cliArgs,
+                        const RuntimeExecutionConfig& runtimeConfig) {
     namespace fs = std::filesystem;
-    (void)argc;
-    (void)argv;
 
     if (const EmbeddedScriptModule* builtin = find_embedded_builtin_script(name)) {
         std::string displayName = std::string("@eryx/scripts/") + name;
-        // "eryx <command> [args...]" -> user args start at argv[2]
-        eryx_set_cliargs_offset(2);
-        return main_script(displayName.c_str(), builtin->source);
+        return main_script(displayName.c_str(), builtin->source, runtimeConfig, cliArgs);
     }
 
     fs::path scriptPath = getScriptsDir() / (std::string(name) + ".luau");
@@ -972,12 +1270,11 @@ int main_builtin_script(int argc, const char* argv[], const char* name) {
     }
     std::string source((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
 
-    // "eryx <command> [args...]" -> user args start at argv[2]
-    eryx_set_cliargs_offset(2);
-    return main_script(scriptPath.string().c_str(), source);
+    return main_script(scriptPath.string().c_str(), source, runtimeConfig, cliArgs);
 }
 
-int main_run(const char* filename) {
+int main_run(const char* filename, const RuntimeExecutionConfig& runtimeConfig,
+             const std::vector<std::string>& cliArgs) {
     std::ifstream script_file(filename);
     if (!script_file.is_open()) {
         std::cerr << "Failed to open file \"" << filename << "\"" << std::endl;
@@ -987,7 +1284,7 @@ int main_run(const char* filename) {
                           std::istreambuf_iterator<char>());
     script_file.close();
 
-    return main_script(filename, luaScript);
+    return main_script(filename, luaScript, runtimeConfig, cliArgs);
 }
 
 int main(int argc, const char* argv[]) {
@@ -995,7 +1292,9 @@ int main(int argc, const char* argv[]) {
     // while (!IsDebuggerPresent());
     // puts("go");
 
-    eryx_set_cliargs(argc, argv);
+    ProcessCliArgs processCliArgs = build_process_cli_args(argc, argv);
+    argc = processCliArgs.argc();
+    argv = processCliArgs.data();
 #ifdef ERYX_EMBED
     eryx_register_embedded_modules(g_embedded_native_modules, g_embedded_script_modules);
 #endif
@@ -1014,36 +1313,61 @@ int main(int argc, const char* argv[]) {
             return -1;
         }
 
-        // VFS: skip just the exe (argv[0]), user args start at argv[1]
-        eryx_set_cliargs_offset(1);
+        std::vector<std::string> cliArgs;
+        cliArgs.reserve(std::max(1, argc));
+        cliArgs.push_back(std::string(entry));
+        for (int i = 1; i < argc; ++i) {
+            cliArgs.push_back(argv[i]);
+        }
 
         // Build the chunk name with the @@vfs/ prefix.
         // main_script prepends "@" to its filename argument, so we pass
         // the entry prefixed with just "@vfs/" - the outer "@" produces "@@vfs/…".
         std::string vfsChunkName = std::string("@vfs/") + std::string(entry);
-        return main_script(vfsChunkName.c_str(), std::string(std::string_view(
-                                                     (char*)entryData.data(), entryData.size())));
+        return main_script(vfsChunkName.c_str(),
+                           std::string(std::string_view((char*)entryData.data(), entryData.size())),
+                           RuntimeExecutionConfig{}, cliArgs);
     }
 
-    if (argc < 2) {
-        return main_repl();
+    RuntimeCliParseResult globalParse = parse_runtime_cli_overrides(
+        argc, 1, [&](int index) -> std::string_view { return argv[index]; });
+    if (!globalParse.ok) {
+        std::cerr << globalParse.error << std::endl;
+        return 1;
     }
-    const char* command = argv[1];
-    const char* filename = argv[1];
+
+    RuntimeExecutionConfig globalConfig = resolve_runtime_execution_config(globalParse.overrides);
+
+    if (globalParse.nextIndex >= argc) {
+        return main_repl(globalConfig);
+    }
+
+    int commandIndex = globalParse.nextIndex;
+    const char* command = argv[commandIndex];
+
+    if (strcmp(command, "-h") == 0 || strcmp(command, "--help") == 0) {
+        print_main_help(argv[0]);
+        return 0;
+    }
+
+    if (strcmp(command, "--version") == 0) {
+        print_version();
+        return 0;
+    }
 
     if (strcmp(command, "__complete") == 0) {
         return main_complete(argc, argv);
     }
 
     if (strcmp(command, "completion") == 0) {
-        if (argc < 3) {
+        if (commandIndex + 1 >= argc) {
             main_raise_usage(argv, "completion <bash|zsh|fish|powershell>");
             return -1;
         }
 
-        std::string output = render_completion_script(argv[0], argv[2]);
+        std::string output = render_completion_script(argv[0], argv[commandIndex + 1]);
         if (output.empty()) {
-            std::cerr << "Unsupported shell '" << argv[2] << "'" << std::endl;
+            std::cerr << "Unsupported shell '" << argv[commandIndex + 1] << "'" << std::endl;
             return 1;
         }
 
@@ -1051,29 +1375,33 @@ int main(int argc, const char* argv[]) {
         return 0;
     }
 
-    if (strcmp(command, "__run-file") == 0) {
-        if (argc < 3) {
-            main_raise_usage(argv, "__run-file <script>");
-            return -1;
-        }
-        // Internal helper used by scripts/run.luau after it has resolved a
-        // project script name to a concrete file path.
-        eryx_set_cliargs_offset(3);
-        return main_run(argv[2]);
-    }
-
     if (strcmp(command, "run") == 0) {
-        if (argc < 3) {
+        RuntimeCliParseResult runParse = parse_runtime_cli_overrides(
+            argc, commandIndex + 1, [&](int index) -> std::string_view { return argv[index]; });
+        if (!runParse.ok) {
+            std::cerr << runParse.error << std::endl;
+            return 1;
+        }
+        if (runParse.nextIndex >= argc) {
             main_raise_usage(argv, "run <script>");
             return -1;
         }
+
+        RuntimeExecutionConfig runConfig = resolve_runtime_execution_config(
+            merge_runtime_cli_overrides(globalParse.overrides, runParse.overrides));
+
+        std::string inheritedRuntimeArgs = render_runtime_cli_env_value(globalParse.overrides);
         ScopedEnvVar exePath("ERYX_EXE_PATH", getExecutablePath().string().c_str());
-        int result = main_builtin_script(argc, argv, "run");
+        ScopedEnvVar inheritedRuntimeEnv(
+            ERYX_FORWARD_RUNTIME_ARGS_ENV,
+            inheritedRuntimeArgs.empty() ? nullptr : inheritedRuntimeArgs.c_str());
+        int result =
+            main_builtin_script("run", make_script_cli_args(argc, argv, commandIndex), runConfig);
         if (result != -1) return result;
 
         // Fallback for distributions missing scripts/run.luau.
-        eryx_set_cliargs_offset(3);
-        return main_run(argv[2]);
+        return main_run(argv[runParse.nextIndex], runConfig,
+                        make_script_cli_args(argc, argv, runParse.nextIndex));
     }
 
     // If the argument has no file extension and no file with that exact name
@@ -1081,11 +1409,10 @@ int main(int argc, const char* argv[]) {
     namespace fs = std::filesystem;
     std::string cmdStr(command);
     if (cmdStr.find('.') == std::string::npos && !fs::exists(cmdStr)) {
-        int result = main_builtin_script(argc, argv, command);
+        int result = main_builtin_script(command, make_script_cli_args(argc, argv, commandIndex),
+                                         globalConfig);
         if (result != -1) return result;
     }
 
-    // "eryx script.luau ..." -> skip exe and script path
-    eryx_set_cliargs_offset(2);
-    return main_run(command);
+    return main_run(command, globalConfig, make_script_cli_args(argc, argv, commandIndex));
 }

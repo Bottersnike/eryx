@@ -29,6 +29,7 @@ type ArticleFields = {
 	title: string,
 	summary: string?,
 	sitePath: string?, -- set externally when registered; used for URL path
+	sourceRoot: string?, -- set externally when collected; used to resolve local assets
 	lastUpdated: string?, -- ISO date string from git, set externally
 
 	meta: ArticleMeta?,

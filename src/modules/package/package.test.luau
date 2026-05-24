@@ -2103,6 +2103,169 @@ suite:test("git subdir dependencies from the same repo share one cache entry", f
 	end)
 end)
 
+suite:test("eryx run forwards stdio and exit code for direct script paths", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local os = require("@eryx/os")',
+				'local stdio = require("@eryx/stdio")',
+				'print("child-stdout:" .. table.concat(os.cliargs(), "|"))',
+				'stdio.writeerr("child-stderr\\n")',
+				"os.exit(7)",
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, { "run", "script.luau", "alpha beta", "gamma" })
+		test.expect(res.code):toBe(7)
+		test.expect(normalizeNewlines(res.stdout)):toContain("child-stdout:script.luau|alpha beta|gamma")
+		test.expect(normalizeNewlines(res.stderr)):toContain("child-stderr")
+	end, "eryx-run-direct-script-stdio-test")
+end)
+
+suite:test("eryx --help prints top-level usage", function()
+	local res = runEryx(WORKSPACE_ROOT, { "--help" })
+	test.expect(res.code):toBe(0)
+	test.expect(normalizeNewlines(res.stdout)):toContain("Usage:")
+	test.expect(normalizeNewlines(res.stdout)):toContain("[options] run [options] <script> [args...]")
+	test.expect(normalizeNewlines(res.stdout)):toContain("--version")
+end)
+
+suite:test("eryx --version prints version information", function()
+	local res = runEryx(WORKSPACE_ROOT, { "--version" })
+	test.expect(res.code):toBe(0)
+	test.expect(normalizeNewlines(res.stdout)):toContain("Eryx (Luau ")
+end)
+
+suite:test("eryx run --help prints run usage", function()
+	local res = runEryx(WORKSPACE_ROOT, { "run", "--help" })
+	test.expect(res.code):toBe(0)
+	test.expect(normalizeNewlines(res.stdout)):toContain("Usage: eryx run")
+	test.expect(normalizeNewlines(res.stdout)):toContain("--help-scripts")
+end)
+
+suite:test("eryx run --help-scripts lists project scripts", function()
+	tempfile.withTempDir(function(root)
+		writeFile(
+			fs.path.join(root, "eryx.toml"),
+			withScripts(makeProjectManifest("run-root", "0.1.0", nil, nil, nil, nil), {
+				alpha = "scripts/alpha.luau",
+				beta = "scripts/beta.luau",
+			})
+		)
+
+		local res = runEryx(root, { "run", "--help-scripts" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("Project scripts:")
+		test.expect(normalizeNewlines(res.stdout)):toContain("alpha -> scripts/alpha.luau")
+		test.expect(normalizeNewlines(res.stdout)):toContain("beta -> scripts/beta.luau")
+	end, "eryx-run-help-scripts-test")
+end)
+
+suite:test("eryx accepts runtime flags before direct script paths", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local os = require("@eryx/os")',
+				'print("child-args:" .. table.concat(os.cliargs(), "|"))',
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, { "-O0", "--no-native", "script.luau", "alpha", "--help" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("child-args:script.luau|alpha|--help")
+	end, "eryx-runtime-flags-direct-script-test")
+end)
+
+suite:test("argparse defaults ignore synthetic argv[0]", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local argparse = require("@eryx/argparse")',
+				'local parser = argparse.Parser.new("demo")',
+				'parser:addPositional("name", "string", nil, true)',
+				"local result = parser:parse()",
+				'print("parsed-name:" .. result.name)',
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, { "-O0", "script.luau", "alpha" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("parsed-name:alpha")
+	end, "eryx-argparse-synthetic-argv-test")
+end)
+
+suite:test("eryx accepts native-only-specified before direct script paths", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local os = require("@eryx/os")',
+				'print("child-args:" .. table.concat(os.cliargs(), "|"))',
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, { "--native-only-specified", "script.luau", "alpha", "--help" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("child-args:script.luau|alpha|--help")
+	end, "eryx-runtime-flags-native-only-specified-direct-script-test")
+end)
+
+suite:test("eryx run accepts runtime flags before script paths", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local os = require("@eryx/os")',
+				'print("child-args:" .. table.concat(os.cliargs(), "|"))',
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, {
+			"-O0",
+			"--no-native",
+			"run",
+			"-O1",
+			"--native",
+			"script.luau",
+			"beta",
+			"--help",
+		})
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("child-args:script.luau|beta|--help")
+	end, "eryx-runtime-flags-run-script-test")
+end)
+
+suite:test("eryx run accepts native-only-specified before script paths", function()
+	tempfile.withTempDir(function(root)
+		local scriptPath = fs.path.join(root, "script.luau")
+		writeFile(
+			scriptPath,
+			table.concat({
+				'local os = require("@eryx/os")',
+				'print("child-args:" .. table.concat(os.cliargs(), "|"))',
+				"",
+			}, "\n")
+		)
+
+		local res = runEryx(root, { "run", "--native-only-specified", "script.luau", "beta", "--help" })
+		test.expect(res.code):toBe(0)
+		test.expect(normalizeNewlines(res.stdout)):toContain("child-args:script.luau|beta|--help")
+	end, "eryx-runtime-flags-native-only-specified-run-script-test")
+end)
+
 suite:test("eryx run resolves scripts from installed direct dependencies", function()
 	tempfile.withTempDir(function(root)
 		local depDir = fs.path.join(root, "eryxdoc")

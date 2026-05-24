@@ -394,3 +394,6 @@ add_luau_module(number src/modules/number.cpp src/modules/number.luau
 add_luau_module(thread src/modules/thread.cpp src/modules/thread.luau
     EXTRA_LIBS uv_a
 )
+add_luau_module(debugger src/modules/debugger.cpp src/modules/debugger.luau
+    EXTRA_LIBS uv_a
+)

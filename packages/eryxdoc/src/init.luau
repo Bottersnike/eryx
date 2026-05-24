@@ -26,6 +26,7 @@ local Renderer = require("@self/render/renderer")
 local buildWarnings = require("@self/warnings")
 local assets = require("@self/assets")
 local exportData = require("@self/export")
+local siteModel = require("@self/siteModel")
 
 local log = logging.getLogger("eryxdoc.build")
 
@@ -65,6 +66,48 @@ export type HeadTag = {
 	[string]: string,
 }
 
+export type NavigationLinkConfig = {
+	label: string,
+	href: string, -- relative paths resolve from siteRoot; absolute paths and external URLs are kept as-is
+	matchPrefix: string?, -- path prefix used to mark this link active; defaults to href and follows the same resolution rules
+	exact: boolean?, -- when true, only exact path matches activate this link
+	header: boolean?, -- include in the desktop header (default: true)
+	mobile: boolean?, -- include in the mobile drawer nav (default: true)
+}
+
+export type SectionLandingConfig = {
+	title: string?,
+	description: string?,
+	generate: boolean?,
+}
+
+export type SectionConfig = {
+	id: string,
+	label: string,
+	mount: string?,
+	headerHref: string?,
+	articles: string?,
+	modules: string?,
+	prefix: string?,
+	landing: SectionLandingConfig?,
+	children: { SectionConfig }?,
+}
+
+export type NavigationHeaderConfig = {
+	mode: "auto" | "tabs" | "none"?,
+	mobile: {
+		includeSectionLinks: boolean?,
+	}?,
+}
+
+export type NavigationConfig = {
+	header: NavigationHeaderConfig?,
+
+	-- Legacy options. Prefer `sections` for new configs.
+	splitApiReference: boolean?, -- split docs and API sidebars / generate an /api index page
+	headerLinks: { NavigationLinkConfig }?,
+}
+
 export type Config = {
 	-- Required
 	output: string,
@@ -73,6 +116,7 @@ export type Config = {
 	modules: string?,
 	articles: string?,
 	prefix: string?,
+	sections: { SectionConfig }?,
 	noModules: boolean?,
 
 	-- Site settings
@@ -104,6 +148,7 @@ export type Config = {
 	-- Template customisation
 	customFilters: { [string]: (any, { [string]: any }) -> any }?,
 	customGlobals: { [string]: any }?,
+	navigation: NavigationConfig?,
 
 	-- Versioning
 	-- When set, the build output goes into output/{version.name}/ and a
@@ -445,12 +490,16 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 	fs.openSync(OUTPUT_DIR .. "/style.css", "w"):writeSync(fs.openSync(STYLE_PATH):readSync())
 
 	-- Collect content
-	local allModules = if NO_MODULES or not MODULES_DIR
-		then {}
-		else modulesApi.collectModules(MODULES_DIR, MODULE_PREFIX, "")
-	local allArticles = if ARTICLES_DIR then collectArticles(ARTICLES_DIR) else {}
-	local sectionTitles, folderTitles, folderOrder =
-		if ARTICLES_DIR then collectFolderTitles(ARTICLES_DIR) else {}, {}, {}
+	local collectedSite = siteModel.collect({
+		title = SITE_TITLE,
+		articles = ARTICLES_DIR,
+		modules = MODULES_DIR,
+		prefix = MODULE_PREFIX,
+		noModules = NO_MODULES,
+		sections = cfg.sections,
+	})
+	local allModules = collectedSite.modules
+	local allArticles = collectedSite.articles
 
 	-- Populate last-updated dates from git
 	if cfg.showLastUpdated then
@@ -495,22 +544,23 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		apiMetaGenerator = cfg.apiMetaGenerator,
 		customFilters = cfg.customFilters,
 		customGlobals = cfg.customGlobals,
+		sections = collectedSite.sections,
+		moduleSectionByName = collectedSite.moduleSectionByName,
+		navigation = cfg.navigation,
 		versionName = if versionInfo then versionInfo.name else nil,
 		versionLabel = if versionInfo then (versionInfo.label or versionInfo.name) else nil,
-		sectionTitles = sectionTitles,
-		folderTitles = folderTitles,
-		folderOrder = folderOrder,
+		folderMetaBySectionId = collectedSite.folderMetaBySectionId,
 		assetResolver = function(article: Article.Article, url: string): string
-			assets.copyArticleAsset(ARTICLES_DIR, article.sourceFilename, OUTPUT_DIR, url)
-			return assets.rewriteArticleAssetUrl(ARTICLES_DIR, article.sourceFilename, SITE_ROOT, url)
+			assets.copyArticleAsset(article.sourceRoot, article.sourceFilename, OUTPUT_DIR, url)
+			return assets.rewriteArticleAssetUrl(article.sourceRoot, article.sourceFilename, SITE_ROOT, url)
 		end,
 	})
 
 	for _, article in allArticles do
-		renderer:registerArticle(article.article, article.name)
+		renderer:registerArticle(article.article, article.key, article.localName, article.sectionId)
 	end
 	for _, mod in allModules do
-		renderer:registerModule(mod)
+		renderer:registerModule(mod, collectedSite.moduleSectionByName[mod.qualifiedName])
 	end
 
 	for _, mod in allModules do
@@ -519,20 +569,36 @@ function eryxdoc.build(cfg: Config): { warnings: { string }, moduleCount: number
 		writeFileMkdir(OUTPUT_DIR .. "/" .. modPath, page)
 	end
 
+	local hasGeneratedRootLanding = false
+	for _, landing in renderer:getGeneratedSectionLandingPages() do
+		if landing.routePath == "" then
+			hasGeneratedRootLanding = true
+		end
+		local landingPath = renderer:getPathForRoute(landing.routePath)
+		local page =
+			applyPageHook(renderer:renderSectionLanding(landing.sectionId), "index", landing.sectionId, landingPath)
+		writeFileMkdir(OUTPUT_DIR .. "/" .. landingPath, page)
+	end
+	if (not cfg.sections or #cfg.sections == 0) and renderer:shouldRenderApiIndex() then
+		local apiIndexPath = if EXPORT_MODE == "directory" then "api/index.html" else "api.html"
+		local page = applyPageHook(renderer:renderApiIndex(), "index", "api", apiIndexPath)
+		writeFileMkdir(OUTPUT_DIR .. "/" .. apiIndexPath, page)
+	end
+
 	local hasCustomIndex = false
 	local indexPath = renderer:getPath(nil)
 	for _, article in allArticles do
-		if article.name == "index" then
+		if article.key == "" then
 			hasCustomIndex = true
-			local page = applyPageHook(renderer:renderArticle("index"), "article", "index", indexPath)
+			local page = applyPageHook(renderer:renderArticle(article.key), "article", article.key, indexPath)
 			writeFileMkdir(OUTPUT_DIR .. "/" .. indexPath, page)
 		else
 			local articlePath = renderer:getPath(article.article)
-			local page = applyPageHook(renderer:renderArticle(article.name), "article", article.name, articlePath)
+			local page = applyPageHook(renderer:renderArticle(article.key), "article", article.key, articlePath)
 			writeFileMkdir(OUTPUT_DIR .. "/" .. articlePath, page)
 		end
 	end
-	if not hasCustomIndex then
+	if not hasCustomIndex and not hasGeneratedRootLanding then
 		local page = applyPageHook(renderer:renderIndex(), "index", nil, indexPath)
 		writeFileMkdir(OUTPUT_DIR .. "/" .. indexPath, page)
 	end

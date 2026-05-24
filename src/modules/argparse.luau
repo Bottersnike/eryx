@@ -21,7 +21,6 @@
 ]=]
 
 local os = require("@eryx/os")
-local fs = require("@eryx/fs")
 local stdio = require("@eryx/stdio")
 local argparse = {}
 
@@ -402,32 +401,6 @@ local function escapePowerShellSingleQuoted(s: string): string
 	return (s:gsub("'", "''"))
 end
 
-local function completionDebugPath(): string?
-	local value = os.getenv("ERYX_COMPLETION_DEBUG")
-	if value == nil or value == "" then
-		return nil
-	end
-
-	if value == "1" then
-		local tmp = os.getenv("TMPDIR") or os.getenv("TEMP") or os.getenv("TMP") or "/tmp"
-		return fs.path.join(tmp, "eryx-completion.log")
-	end
-
-	return value
-end
-
-local function completionDebugLog(message: string)
-	local path = completionDebugPath()
-	-- print(path, message)
-	if path == nil then
-		return
-	end
-
-	local handle = fs.openSync(path, "a")
-	handle:writeSync(message .. "\n")
-	handle:closeSync()
-end
-
 local function buildCompletionSpecs(self: Parser, path: string, specs: { CompletionSpec })
 	local commands = {}
 	local options = {}
@@ -517,6 +490,23 @@ local function coerce(value: string, expectedType: "string" | "number"): string 
 	return value
 end
 
+local function defaultArguments(arguments: { string }?): { string }
+	if arguments ~= nil then
+		return arguments
+	end
+
+	local cliargs = os.cliargs()
+	if #cliargs == 0 then
+		return cliargs
+	end
+
+	local args = {}
+	for i = 2, #cliargs do
+		table.insert(args, cliargs[i])
+	end
+	return args
+end
+
 --[=[
 	Returns shell completion candidates for the parser after consuming the
 	provided fully-typed arguments.
@@ -526,8 +516,7 @@ end
 	to filename or custom value completion.
 ]=]
 function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): { string }
-	local args: { string } = arguments or os.cliargs()
-	completionDebugLog(`argparse.getCompletionCandidates: parser={self.name} args={table.concat(args, " ")}`)
+	local args: { string } = defaultArguments(arguments)
 	local provided: { [string]: boolean } = {}
 	local positionalIndex = 1
 	local i = 1
@@ -536,7 +525,6 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 		local arg = args[i]
 
 		if arg == "--" then
-			completionDebugLog(`argparse.getCompletionCandidates: end-of-options marker encountered`)
 			return {}
 		elseif string.sub(arg, 1, 2) == "--" then
 			local body = string.sub(arg, 3)
@@ -546,7 +534,6 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 				local key = string.sub(body, 1, eqPos - 1)
 				local opt = findOptionByLong(self, key)
 				if not opt then
-					completionDebugLog(`argparse.getCompletionCandidates: unknown long option --{key}`)
 					return {}
 				end
 				provided[opt.longName] = true
@@ -557,12 +544,10 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 				else
 					local opt = findOptionByLong(self, body)
 					if not opt then
-						completionDebugLog(`argparse.getCompletionCandidates: unknown long token --{body}`)
 						return {}
 					end
 					local arity = opt.arity or 1
 					if (#args - i) < arity then
-						completionDebugLog(`argparse.getCompletionCandidates: waiting for value of --{opt.longName}`)
 						return {}
 					end
 					provided[opt.longName] = true
@@ -585,19 +570,14 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 					if #rest == 0 then
 						local arity = opt.arity or 1
 						if (#args - i) < arity then
-							completionDebugLog(`argparse.getCompletionCandidates: waiting for value of -{ch}`)
 							return {}
 						end
 						i += arity
 					elseif (opt.arity or 1) ~= 1 then
-						completionDebugLog(
-							`argparse.getCompletionCandidates: inline short option value rejected for -{ch}`
-						)
 						return {}
 					end
 					break
 				else
-					completionDebugLog(`argparse.getCompletionCandidates: unknown short token -{ch}`)
 					return {}
 				end
 				j += 1
@@ -608,11 +588,9 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 			for k = i + 1, #args do
 				table.insert(remaining, args[k])
 			end
-			completionDebugLog(`argparse.getCompletionCandidates: descending into subcommand {arg}`)
 			return sub:getCompletionCandidates(remaining)
 		else
 			if positionalIndex > #self.positionals then
-				completionDebugLog(`argparse.getCompletionCandidates: unexpected positional token {arg}`)
 				return {}
 			end
 
@@ -663,9 +641,6 @@ function Parser.getCompletionCandidates(self: Parser, arguments: { string }?): {
 	end
 
 	table.sort(candidates)
-	completionDebugLog(
-		`argparse.getCompletionCandidates: parser={self.name} candidates={table.concat(candidates, ",")}`
-	)
 	return candidates
 end
 
@@ -674,13 +649,9 @@ local function maybeEmitCompletionCandidates(self: Parser, args: { string }): bo
 		return false
 	end
 
-	completionDebugLog(
-		`argparse.maybeEmitCompletionCandidates: parser={self.name} shell={os.getenv("ERYX_ARGPARSE_COMPLETE_SHELL") or ""}`
-	)
 	for _, candidate in self:getCompletionCandidates(args) do
 		print(candidate)
 	end
-	completionDebugLog(`argparse.maybeEmitCompletionCandidates: emitted completion candidates`)
 	os.exit(0)
 	return true
 end
@@ -1074,12 +1045,13 @@ end
 	If the built-in `--help` flag is set, the help handler is invoked
 	**before** required-argument validation, so `mytool --help` always works.
 
-	@param arguments Argument list to parse. Defaults to `os.cliargs()`.
+	@param arguments Argument list to parse. Defaults to the current script arguments
+		from `os.cliargs()`, excluding argv[0].
 	@return { [string]: any } -- A table mapping argument names to their parsed values.
 	@error Throws on unknown flags/options, missing required arguments, or type coercion failures.
 ]=]
 function Parser.parse(self: Parser, arguments: { string }?, exitOnError: boolean?): { [string]: any }
-	local args: { string } = arguments or os.cliargs()
+	local args: { string } = defaultArguments(arguments)
 	local shouldExitOnError = if exitOnError ~= nil then exitOnError else arguments == nil
 	if maybeEmitCompletionCandidates(self, args) then
 		return {}

@@ -215,6 +215,7 @@ local cfg: eryxdoc.Config = {
 	modules = resolve("modules", fileConfig.modules),
 	articles = resolve("articles", fileConfig.articles),
 	prefix = resolve("prefix", fileConfig.prefix),
+	sections = fileConfig.sections,
 	title = resolve("title", fileConfig.title),
 	siteRoot = resolve("site-root", fileConfig.siteRoot),
 	exportMode = resolve("export-mode", fileConfig.exportMode),
@@ -237,6 +238,14 @@ local cfg: eryxdoc.Config = {
 	head = fileConfig.head,
 	extraHead = fileConfig.extraHead,
 	extraScripts = fileConfig.extraScripts,
+	announcement = fileConfig.announcement,
+	openGraph = fileConfig.openGraph,
+	articleMetaGenerator = fileConfig.articleMetaGenerator,
+	apiMetaGenerator = fileConfig.apiMetaGenerator,
+	customFilters = fileConfig.customFilters,
+	customGlobals = fileConfig.customGlobals,
+	navigation = fileConfig.navigation,
+	redirects = fileConfig.redirects,
 }
 
 local IS_DEV: boolean = if args["dev"] ~= nil then not not args["dev"] else false
@@ -287,16 +296,17 @@ local function validateConfig(config: eryxdoc.Config): { string }
 		table.insert(errors, string.format("Static assets directory does not exist: %s", config.static))
 	end
 
+	local hasSections = config.sections ~= nil and #config.sections > 0
 	local hasModules = not isBlank(config.modules)
 	local hasArticles = not isBlank(config.articles)
-	if not hasModules and not hasArticles then
+	if not hasSections and not hasModules and not hasArticles then
 		table.insert(
 			errors,
 			"Missing documentation sources. Set `modules` and/or `articles` in eryxdoc.config.luau, or pass --modules <dir> and/or --articles <dir>."
 		)
 	end
 
-	if config.noModules and not hasArticles then
+	if config.noModules and not hasSections and not hasArticles then
 		table.insert(
 			errors,
 			"Articles-only mode requires an articles directory. Set `articles` or pass --articles <dir>."
@@ -309,6 +319,54 @@ local function validateConfig(config: eryxdoc.Config): { string }
 
 	if hasArticles and not fs.isDirectory(config.articles :: string) then
 		table.insert(errors, string.format("Articles directory does not exist: %s", config.articles :: string))
+	end
+
+	if hasSections then
+		local function validateSections(sections: { any }, depth: number)
+			for _, section in sections do
+				local hasChildren = section.children ~= nil and #section.children > 0
+				if hasChildren then
+					if depth >= 1 then
+						table.insert(
+							errors,
+							"Only one level of nested sections is supported in the first implementation."
+						)
+					end
+					if section.mount or section.articles or section.modules or section.prefix then
+						table.insert(
+							errors,
+							string.format("Parent section cannot own content: %s", tostring(section.id))
+						)
+					end
+					validateSections(section.children, depth + 1)
+				else
+					if isBlank(section.mount) then
+						table.insert(errors, string.format("Leaf section is missing `mount`: %s", tostring(section.id)))
+					end
+					if isBlank(section.articles) and (config.noModules or isBlank(section.modules)) then
+						table.insert(
+							errors,
+							string.format(
+								"Leaf section must define `articles` and/or `modules`: %s",
+								tostring(section.id)
+							)
+						)
+					end
+					if not isBlank(section.articles) and not fs.isDirectory(section.articles) then
+						table.insert(errors, string.format("Articles directory does not exist: %s", section.articles))
+					end
+					if
+						not config.noModules
+						and not isBlank(section.modules)
+						and not fs.isDirectory(section.modules)
+					then
+						table.insert(errors, string.format("Modules directory does not exist: %s", section.modules))
+					end
+				end
+			end
+		end
+
+		validateSections(config.sections :: any, 0)
 	end
 
 	return errors

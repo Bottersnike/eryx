@@ -12,7 +12,7 @@ struct EryxLuaLocation {
     int endcolumn;
 };
 
-static constexpr const char* ERYX_LUA_LOCATION_METATABLE = "eryx.Location";
+static constexpr const char* ERYX_LUA_LOCATION_METATABLE = "Location";
 
 static int eryx_lua_location_index(lua_State* L) {
     EryxLuaLocation* location =
