@@ -16,6 +16,7 @@ extern "C" {
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <sstream>
 
 #include "../vfs.hpp"
 #include "embedded_modules.h"
