@@ -11,18 +11,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os:
+          - runner: ubuntu-latest
+            name: linux
+            shared_lib_ext: .so
+            exe_ext: ""
+          - runner: windows-latest
+            name: windows
+            shared_lib_ext: .dll
+            exe_ext: .exe
+          - runner: macos-15-intel
+            name: macos-x86_64
+            shared_lib_ext: .dylib
+            exe_ext: ""
+          - runner: macos-14
+            name: macos-arm64
+            shared_lib_ext: .dylib
+            exe_ext: ""
         mode: [standard, embed, hybrid]
         include:
           - mode: standard
-            cmake-flags: ""
+            cmake_flags: ""
           - mode: embed
-            cmake-flags: "-DERYX_EMBED=ON"
+            cmake_flags: "-DERYX_EMBED=ON"
           - mode: hybrid
-            cmake-flags: "-DERYX_HYBRID=ON"
+            cmake_flags: "-DERYX_HYBRID=ON"
 
-    runs-on: ${{ matrix.os }}
-    name: ${{ matrix.mode }} (${{ matrix.os == 'ubuntu-latest' && 'linux' || 'windows' }})
+    runs-on: ${{ matrix.os.runner }}
+    name: ${{ matrix.mode }} (${{ matrix.os.name }})
 
     steps:
       - uses: actions/checkout@v4
@@ -56,7 +72,7 @@ jobs:
           key: fetchcontent-${{ runner.os }}-${{ hashFiles('runtime.cmake', 'CMakeLists.txt', 'modules_native.cmake', 'vendor/*.cmake') }}
 
       - name: Configure
-        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ runner.os == 'Linux' && '-DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_C_COMPILER=gcc-14' || '' }} ${{ matrix.cmake-flags }}
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_STANDARD=23 ${{ runner.os == 'Linux' && '-DCMAKE_CXX_COMPILER=g++-14 -DCMAKE_C_COMPILER=gcc-14' || '' }} ${{ matrix.cmake_flags }}
 
       - name: Build
         run: cmake --build build --parallel
@@ -64,10 +80,10 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: eryx-${{ matrix.mode }}-${{ matrix.os == 'ubuntu-latest' && 'linux' || 'windows' }}
+          name: eryx-${{ matrix.mode }}-${{ matrix.os.name }}
           path: |
-            build/eryx${{ runner.os == 'Windows' && '.exe' || '' }}
-            build/EryxShared${{ runner.os == 'Windows' && '.dll' || '.so' }}
+            build/eryx${{ matrix.os.exe_ext }}
+            build/EryxShared${{ matrix.os.shared_lib_ext }}
             build/modules/
             build/scripts/
           if-no-files-found: ignore
