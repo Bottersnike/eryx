@@ -6,6 +6,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 #include "../vfs.hpp"
 #include "_wrapper_lib.hpp"
 #include "embedded_modules.h"

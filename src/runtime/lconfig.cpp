@@ -6,6 +6,10 @@
 #include "lrequire.hpp"
 #include "lresolve.hpp"
 
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+
 namespace fs = std::filesystem;
 
 static std::string path_to_string(const fs::path& p) {
