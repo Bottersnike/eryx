@@ -306,7 +306,10 @@ if (ERYX_USE_ZLIB)
 endif()
 
 # Setup dyncall
-include(vendor/dyncall.cmake)
+# Only needed for the Windows-only FFI module.
+if(WIN32)
+    include(vendor/dyncall.cmake)
+endif()
 
 if(ERYX_USE_CRYPTOGRAPHY)
     include(vendor/openssl.cmake)
