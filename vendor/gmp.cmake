@@ -26,12 +26,13 @@ else()
 
     file(MAKE_DIRECTORY "${GMP_INSTALL_DIR}/include")
 
-    if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
-        set(GMP_HOST "x86_64-pc-linux-gnu")
-    elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
-        set(GMP_HOST "aarch64-unknown-linux-gnu")
-    else()
-        set(GMP_HOST "")
+    set(GMP_HOST "")
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$")
+            set(GMP_HOST "x86_64-pc-linux-gnu")
+        elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "^(aarch64|arm64|ARM64)$")
+            set(GMP_HOST "aarch64-unknown-linux-gnu")
+        endif()
     endif()
 
     set(GMP_CONFIGURE_ARGS

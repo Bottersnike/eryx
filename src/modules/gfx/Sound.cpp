@@ -276,7 +276,7 @@ int sound_load(lua_State* L) {
             error << " (";
             error << result;
             error << ")";
-            luaL_error(L, error.str().c_str());
+            luaL_error(L, "%s", error.str().c_str());
             // Continue anyway - voices will be silent
         } else {
             // Don't auto-play
