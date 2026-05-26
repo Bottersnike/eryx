@@ -290,7 +290,7 @@ struct ThreadSerializedTableField {
 static bool thread_bytecode_write_table_constant(lua_State* L, const Proto* proto,
                                                  const TValue* tableValue, std::string& data,
                                                  std::string& error) {
-    luaA_pushobject(L, tableValue);
+    luaA_pushvalue(L, tableValue);
     int tableIndex = lua_absindex(L, -1);
 
     lua_pushnil(L);
@@ -640,7 +640,7 @@ ERYX_API int eryx_debug_get_register(lua_State* L, int frameLevel, int reg) {
     }
 
     luaC_threadbarrier(L);
-    luaA_pushobject(L, ci->base + reg);
+    luaA_pushvalue(L, ci->base + reg);
     return 1;
 }
 

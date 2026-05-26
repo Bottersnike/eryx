@@ -298,12 +298,13 @@ end
 function tempfile.withTempFile<T...>(fn: (file: TempFile) -> T..., options: { name: string?, mode: string? }?): T...
 	local opts = options or ({} :: { name: string?, mode: string? })
 	local file = createTempFile(opts.name, opts.mode)
-	local result = table.pack(pcall(fn, file))
+	local result = table.pack((pcall :: any)(fn, file))
 	file:close()
 	if not result[1] then
 		error(result[2], 2)
 	end
-	return table.unpack(result, 2, result.n)
+	local values = result :: any
+	return table.unpack(values, 2, values.n)
 end
 
 --[=[
@@ -318,12 +319,13 @@ end
 ]=]
 function tempfile.withTempDir<T...>(fn: (path: string) -> T..., name: string?): T...
 	local dir = createTempDir(name)
-	local result = table.pack(pcall(fn, dir.path))
+	local result = table.pack((pcall :: any)(fn, dir.path))
 	dir:close()
 	if not result[1] then
 		error(result[2], 2)
 	end
-	return table.unpack(result, 2, result.n)
+	local values = result :: any
+	return table.unpack(values, 2, values.n)
 end
 
 return table.freeze(tempfile)

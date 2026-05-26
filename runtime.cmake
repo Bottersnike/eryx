@@ -9,7 +9,7 @@ include(FetchContent)
 FetchContent_Declare(
     luau
     GIT_REPOSITORY https://github.com/luau-lang/luau.git
-    GIT_TAG 0.721
+    GIT_TAG 0.722
     PATCH_COMMAND ${CMAKE_COMMAND} -DPATCH_FILE=${CMAKE_SOURCE_DIR}/vendor/luau.diff -P ${CMAKE_SOURCE_DIR}/vendor/apply_patch.cmake
 )
 

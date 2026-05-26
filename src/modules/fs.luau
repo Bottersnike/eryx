@@ -13,24 +13,32 @@ local stream = require("@eryx/stream")
 local pathlib = require("@eryx/path")
 
 type PathLike = pathlib.PathLike
+type FileLineNext = (state: any, last: number?) -> (number?, string?, string?)
 
-export type BaseFile = {
-	--- The file path passed to `open`.
-	read path: string,
-	--- The underlying file descriptor number.
-	read fd: number,
-	--- `true` if the file has not been closed.
-	read isOpen: boolean,
-	--- `true` if the file was opened for reading.
-	read readable: boolean,
-	--- `true` if the file was opened for writing.
-	read writable: boolean,
+export type BaseFile = setmetatable<
+	{
+		--- The file path passed to `open`.
+		read path: string,
+		--- The underlying file descriptor number.
+		read fd: number,
+		--- `true` if the file has not been closed.
+		read isOpen: boolean,
+		--- `true` if the file was opened for reading.
+		read readable: boolean,
+		--- `true` if the file was opened for writing.
+		read writable: boolean,
 
-	--- Truncates the file to `size` bytes, or at the current position if `nil`.
-	truncate: (self: BaseFile, size: number?) -> (),
-	--- Returns the file size in bytes.
-	size: (self: BaseFile) -> number,
-}
+		--- Truncates the file to `size` bytes, or at the current position if `nil`.
+		truncate: (self: BaseFile, size: number?) -> (),
+		--- Returns the file size in bytes.
+		size: (self: BaseFile) -> number,
+	},
+	{
+		--- Iterates lines as `(number, line, ending)`. `ending` is `"\n"`,
+		--- `"\r\n"`, `"\r"`, or `""` for the final unterminated line.
+		__iter: (self: BaseFile) -> (FileLineNext, any, number?),
+	}
+>
 
 export type ReadableFile = BaseFile & stream.StreamThatCanSeek & stream.StreamThatCanFlush & stream.ReadOnlyStream
 export type WritableFile = BaseFile & stream.StreamThatCanSeek & stream.StreamThatCanFlush & stream.WriteOnlyStream
@@ -99,6 +107,28 @@ export type FileStat = {
 	--- `true` when readonly is enabled/effective.
 	readonly: boolean?,
 }
+
+export type WalkOptions = {
+	--- Whether to descend into child directories.
+	recursive: boolean?,
+	--- Whether directory symlinks should be followed while walking.
+	followSymlinks: boolean?,
+}
+
+export type WalkEntry = {
+	--- Filename component.
+	name: string,
+	--- Parent directory path.
+	directory: string,
+	--- Full entry path.
+	path: string,
+}
+
+type WalkNext = (state: any) -> WalkEntry?
+
+export type WalkIterator = setmetatable<{}, {
+	__iter: (self: WalkIterator) -> (WalkNext, any, nil),
+}>
 
 type Open =
 	((path: PathLike, mode: nil) -> ReadableFile)
@@ -226,6 +256,16 @@ end
 --- @param path Directory path.
 --- @return Entry names from the directory.
 function fs.listDir(path: PathLike): { string }
+	return nil :: any
+end
+--[=[
+	Returns an iterator over entries in `root`.
+
+	@param root Directory to walk.
+	@param options Walk options. `recursive` and `followSymlinks` default to `false`.
+	@return Iterator yielding [[WalkEntry]] tables.
+]=]
+function fs.walk(root: PathLike, options: WalkOptions?): WalkIterator
 	return nil :: any
 end
 --[=[

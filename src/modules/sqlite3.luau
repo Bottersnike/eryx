@@ -44,6 +44,7 @@ type PathLike = path.PathLike
 --- A row returned from a query. Keys are column names, values are the
 --- corresponding column values (number, string, buffer, or nil).
 export type Row = { [string]: number | string | buffer | boolean | nil }
+type StatementNext = (state: any) -> Row?
 
 --[=[
 	A prepared SQL statement.
@@ -56,25 +57,31 @@ export type Statement = setmetatable<
 	{
 		--- Resets the statement and binds new parameters (positional).
 		--- Returns the statement for chaining.
+		--- @yields
 		bind: (self: Statement, ...any) -> Statement,
 
 		--- Fetches the next result row, or `nil` when no more rows remain.
+		--- @yields
 		step: (self: Statement) -> Row?,
 
 		--- Resets the statement so it can be stepped again from the
 		--- beginning (without changing bindings).
+		--- @yields
 		reset: (self: Statement) -> Statement,
 
 		--- Convenience: resets, binds parameters, and returns all result
 		--- rows as an array of [[Row]] tables.
+		--- @yields
 		all: (self: Statement, ...any) -> { Row },
 
 		--- Convenience: resets, binds parameters, and executes the
 		--- statement discarding any results.  Use for INSERT/UPDATE/DELETE.
+		--- @yields
 		run: (self: Statement, ...any) -> (),
 	},
 	{
 		__tostring: (self: Statement) -> string,
+		__iter: (self: Statement) -> (StatementNext, any, nil),
 	}
 >
 
@@ -92,19 +99,23 @@ export type Database = setmetatable<
 		Executes one or more SQL statements that return no results
 		(DDL, INSERT, UPDATE, DELETE, etc.).  Multiple statements
 		separated by `;` are supported.
+		@yields
 		]=]
 		exec: (self: Database, sql: string, ...any) -> (),
 
 		--[=[
 		Executes a SQL query with optional positional parameters and
 		returns all result rows as an array of [[Row]] tables.
+		@yields
 		]=]
 		query: (self: Database, sql: string, ...any) -> { Row },
 
 		--- Compiles a SQL string into a reusable prepared [[Statement]].
+		--- @yields
 		prepare: (self: Database, sql: string) -> Statement,
 
 		--- Explicitly closes the database connection.  Safe to call multiple times.
+		--- @yields
 		close: (self: Database) -> (),
 
 		--- Returns `true` if the database connection is still open.
@@ -143,6 +154,7 @@ export type Database = setmetatable<
 	Opens (or creates) a SQLite database at the given path.
 	Use `":memory:"` for an in-memory database.
 	@error Throws if the database cannot be opened.
+	@yields
 ]=]
 function sqlite3.open(path: PathLike): Database
 	return nil :: any

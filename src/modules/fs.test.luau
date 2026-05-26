@@ -98,4 +98,93 @@ suite:test("Windows ACL get/set roundtrip", function()
 	end)
 end)
 
+suite:test("File iterator yields numbered lines with line endings", function()
+	tempfile.withTempFile(function(file)
+		local handle = file.file :: any
+		handle:writeSync("a\r\nb\nc\rd")
+		handle:seek(0)
+
+		local rows = {}
+		for number, line, ending in handle do
+			table.insert(rows, `{number}:{line}:{#ending}`)
+		end
+
+		test.expect(table.concat(rows, "|")):toBe("1:a:2|2:b:1|3:c:1|4:d:0")
+	end)
+end)
+
+suite:test("File iterator handles empty files and chunk-spanning lines", function()
+	tempfile.withTempFile(function(file)
+		local handle = file.file :: any
+		local longLine = string.rep("x", 70 * 1024)
+		handle:writeSync(longLine .. "\nlast")
+		handle:seek(0)
+
+		local rows = {}
+		for number, line, ending in handle do
+			table.insert(rows, { number = number, length = #line, ending = ending })
+		end
+
+		test.expect(#rows):toBe(2)
+		test.expect(rows[1].number):toBe(1)
+		test.expect(rows[1].length):toBe(#longLine)
+		test.expect(rows[1].ending):toBe("\n")
+		test.expect(rows[2].number):toBe(2)
+		test.expect(rows[2].length):toBe(4)
+		test.expect(rows[2].ending):toBe("")
+	end)
+
+	tempfile.withTempFile(function(file)
+		local count = 0
+		for _number, _line, _ending in file.file :: any do
+			count += 1
+		end
+		test.expect(count):toBe(0)
+	end)
+end)
+
+suite:test("walk iterates directory entries", function()
+	tempfile.withTempDir(function(dir)
+		local filePath = fs.path.join(dir, "item.txt")
+		local handle = fs.openSync(filePath, "w")
+		handle:writeSync("ok")
+		handle:closeSync()
+
+		local found = false
+		for entry in fs.walk(dir, { recursive = true, followSymlinks = false }) do
+			if entry.name == "item.txt" then
+				found = entry.directory == dir and entry.path == filePath
+			end
+		end
+
+		test.expect(found):toBeTrue()
+	end)
+end)
+
+suite:test("walk respects recursive option", function()
+	tempfile.withTempDir(function(dir)
+		local childDir = fs.path.join(dir, "child")
+		fs.mkdir(childDir)
+
+		local childFile = fs.path.join(childDir, "nested.txt")
+		local handle = fs.openSync(childFile, "w")
+		handle:writeSync("ok")
+		handle:closeSync()
+
+		local nonRecursive = {}
+		for entry in fs.walk(dir, { recursive = false }) do
+			table.insert(nonRecursive, entry.name)
+		end
+		test.expect(table.concat(nonRecursive, ",")):toBe("child")
+
+		local foundNested = false
+		for entry in fs.walk(dir, { recursive = true }) do
+			if entry.name == "nested.txt" then
+				foundNested = true
+			end
+		end
+		test.expect(foundNested):toBeTrue()
+	end)
+end)
+
 return suite

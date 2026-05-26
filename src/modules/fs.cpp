@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,8 @@ static const LuauModuleInfo INFO = {
 LUAU_MODULE_INFO()
 
 static const char* FILE_METATABLE = "File";
+static const char* FILE_LINE_ITER_METATABLE = "FileLineIterator";
+static const char* WALK_ITER_METATABLE = "FsWalkIterator";
 
 namespace fs = std::filesystem;
 
@@ -212,6 +215,31 @@ static LuaFile* check_file_any(lua_State* L, int idx = 1) {
     LuaFile* f = (LuaFile*)luaL_checkudata(L, idx, FILE_METATABLE);
     if (!f) luaL_error(L, "expected File");
     return f;
+}
+
+struct FileLineIterator {
+    std::string buffered;
+    int lineNumber = 0;
+    bool eof = false;
+};
+
+struct WalkIterator {
+    fs::path root;
+    bool recursive = false;
+    bool followSymlinks = false;
+    std::vector<fs::directory_iterator> stack;
+};
+
+static void file_line_iter_dtor(void* ud) { ((FileLineIterator*)ud)->~FileLineIterator(); }
+
+static void walk_iter_dtor(void* ud) { ((WalkIterator*)ud)->~WalkIterator(); }
+
+static FileLineIterator* check_line_iter(lua_State* L, int idx) {
+    return (FileLineIterator*)luaL_checkudata(L, idx, FILE_LINE_ITER_METATABLE);
+}
+
+static WalkIterator* check_walk_iter(lua_State* L, int idx) {
+    return (WalkIterator*)luaL_checkudata(L, idx, WALK_ITER_METATABLE);
 }
 
 // "b" suffix is accepted but ignored -- all I/O is binary.
@@ -812,6 +840,144 @@ static int file_size(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
+// File line iterator
+// ---------------------------------------------------------------------------
+
+static bool file_line_try_push(lua_State* L, FileLineIterator* it) {
+    std::string& s = it->buffered;
+
+    for (size_t i = 0; i < s.size(); i++) {
+        char ch = s[i];
+        if (ch == '\n') {
+            std::string line = s.substr(0, i);
+            s.erase(0, i + 1);
+            lua_pushinteger(L, ++it->lineNumber);
+            lua_pushlstring(L, line.data(), line.size());
+            lua_pushliteral(L, "\n");
+            return true;
+        }
+
+        if (ch == '\r') {
+            if (i + 1 >= s.size() && !it->eof) return false;
+
+            size_t endingLen = (i + 1 < s.size() && s[i + 1] == '\n') ? 2 : 1;
+            std::string line = s.substr(0, i);
+            s.erase(0, i + endingLen);
+            lua_pushinteger(L, ++it->lineNumber);
+            lua_pushlstring(L, line.data(), line.size());
+            lua_pushlstring(L, endingLen == 2 ? "\r\n" : "\r", endingLen);
+            return true;
+        }
+    }
+
+    if (it->eof && !s.empty()) {
+        lua_pushinteger(L, ++it->lineNumber);
+        lua_pushlstring(L, s.data(), s.size());
+        lua_pushliteral(L, "");
+        s.clear();
+        return true;
+    }
+
+    return false;
+}
+
+struct FileLineAsyncOp {
+    lua_State* L;
+    int threadRef;
+    EryxRuntime* rt;
+    FileLineIterator* iter;
+    uv_file fd;
+    uv_buf_t buf;
+};
+
+static void end_line_async(FileLineAsyncOp* op, uv_fs_t* req, int nresults, bool inError) {
+    uv_fs_req_cleanup(req);
+    eryx_push_thread(op->rt, op->threadRef, nresults, inError);
+    free(op->buf.base);
+    delete req;
+    delete op;
+}
+
+static void file_line_read_cb(uv_fs_t* req) {
+    FileLineAsyncOp* op = (FileLineAsyncOp*)req->data;
+    if (req->result < 0) {
+        lua_pushfstring(op->L, "read failed: %s", uv_strerror((int)req->result));
+        end_line_async(op, req, 1, true);
+        return;
+    }
+
+    if (req->result == 0) {
+        op->iter->eof = true;
+    } else {
+        op->iter->buffered.append(op->buf.base, (size_t)req->result);
+    }
+
+    if (file_line_try_push(op->L, op->iter)) {
+        end_line_async(op, req, 3, false);
+        return;
+    }
+
+    if (op->iter->eof) {
+        end_line_async(op, req, 0, false);
+        return;
+    }
+
+    uv_fs_req_cleanup(req);
+    req->data = op;
+    uv_fs_read(op->rt->loop, req, op->fd, &op->buf, 1, -1, file_line_read_cb);
+}
+
+static int file_line_next(lua_State* L) {
+    luaL_checktype(L, 1, LUA_TTABLE);
+
+    lua_getfield(L, 1, "_file");
+    LuaFile* f = check_open_file(L, -1);
+    if (!f->canRead) luaL_error(L, "file not opened for reading");
+    lua_pop(L, 1);
+
+    lua_getfield(L, 1, "_iter");
+    FileLineIterator* it = check_line_iter(L, -1);
+    lua_pop(L, 1);
+
+    if (file_line_try_push(L, it)) return 3;
+    if (it->eof) return 0;
+
+    FileLineAsyncOp* op = new FileLineAsyncOp;
+    op->L = L;
+    op->rt = eryx_get_runtime(L);
+    op->iter = it;
+    op->fd = f->fd;
+    op->buf = uv_buf_init((char*)malloc(64 * 1024), 64 * 1024);
+
+    lua_pushthread(L);
+    op->threadRef = lua_ref(L, -1);
+    lua_pop(L, 1);
+
+    uv_fs_t* req = new uv_fs_t;
+    req->data = op;
+    uv_fs_read(op->rt->loop, req, f->fd, &op->buf, 1, -1, file_line_read_cb);
+    return lua_yield(L, 0);
+}
+
+static int file_iter(lua_State* L) {
+    check_open_file(L, 1);
+
+    lua_pushcfunction(L, file_line_next, "File.lines.next");
+    lua_createtable(L, 0, 2);
+
+    lua_pushvalue(L, 1);
+    lua_setfield(L, -2, "_file");
+
+    void* ud = lua_newuserdatadtor(L, sizeof(FileLineIterator), file_line_iter_dtor);
+    new (ud) FileLineIterator();
+    luaL_getmetatable(L, FILE_LINE_ITER_METATABLE);
+    lua_setmetatable(L, -2);
+    lua_setfield(L, -2, "_iter");
+
+    return 2;
+}
+
+// ---------------------------------------------------------------------------
 // File __tostring
 // ---------------------------------------------------------------------------
 
@@ -1053,6 +1219,104 @@ static int fs_listDir(lua_State* L) {
         }
     }
 
+    return 1;
+}
+
+static void push_walk_entry(lua_State* L, const fs::directory_entry& entry) {
+    fs::path p = entry.path();
+    lua_createtable(L, 0, 3);
+
+    std::string name = p.filename().string();
+    lua_pushlstring(L, name.data(), name.size());
+    lua_setfield(L, -2, "name");
+
+    std::string directory = p.parent_path().string();
+    lua_pushlstring(L, directory.data(), directory.size());
+    lua_setfield(L, -2, "directory");
+
+    std::string path = p.string();
+    lua_pushlstring(L, path.data(), path.size());
+    lua_setfield(L, -2, "path");
+}
+
+static fs::directory_options walk_options(bool followSymlinks) {
+    fs::directory_options opts = fs::directory_options::skip_permission_denied;
+    if (followSymlinks) opts |= fs::directory_options::follow_directory_symlink;
+    return opts;
+}
+
+static int walk_next(lua_State* L) {
+    WalkIterator* it = check_walk_iter(L, 1);
+
+    while (!it->stack.empty()) {
+        fs::directory_iterator& current = it->stack.back();
+        if (current == fs::directory_iterator()) {
+            it->stack.pop_back();
+            continue;
+        }
+
+        fs::directory_entry entry = *current;
+        std::error_code ec;
+        current.increment(ec);
+        if (ec) {
+            it->stack.pop_back();
+            continue;
+        }
+
+        if (it->recursive) {
+            std::error_code statusEc;
+            fs::file_status status =
+                it->followSymlinks ? entry.status(statusEc) : entry.symlink_status(statusEc);
+            if (!statusEc && fs::is_directory(status)) {
+                fs::directory_iterator child(entry.path(), walk_options(it->followSymlinks), ec);
+                if (!ec) it->stack.push_back(child);
+            }
+        }
+
+        push_walk_entry(L, entry);
+        return 1;
+    }
+
+    return 0;
+}
+
+static int walk_iter(lua_State* L) {
+    check_walk_iter(L, 1);
+    lua_pushcfunction(L, walk_next, "fs.walk.next");
+    lua_pushvalue(L, 1);
+    return 2;
+}
+
+// fs.walk(root, options?) -> walk iterator
+static int fs_walk(lua_State* L) {
+    std::string root = luaL_checkpathlike(L, 1);
+    bool recursive = false;
+    bool followSymlinks = false;
+
+    if (!lua_isnoneornil(L, 2)) {
+        luaL_checktype(L, 2, LUA_TTABLE);
+
+        lua_getfield(L, 2, "recursive");
+        recursive = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+
+        lua_getfield(L, 2, "followSymlinks");
+        followSymlinks = lua_toboolean(L, -1);
+        lua_pop(L, 1);
+    }
+
+    void* ud = lua_newuserdatadtor(L, sizeof(WalkIterator), walk_iter_dtor);
+    WalkIterator* it = new (ud) WalkIterator();
+    it->root = fs::path(root);
+    it->recursive = recursive;
+    it->followSymlinks = followSymlinks;
+
+    std::error_code ec;
+    fs::directory_iterator first(it->root, walk_options(followSymlinks), ec);
+    if (!ec) it->stack.push_back(first);
+
+    luaL_getmetatable(L, WALK_ITER_METATABLE);
+    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -1741,11 +2005,23 @@ static int fs_setAcl(lua_State* L) {
 // ===========================================================================
 
 LUAU_MODULE_EXPORT int luauopen_fs(lua_State* L) {
+    luaL_newmetatable(L, FILE_LINE_ITER_METATABLE);
+    lua_setreadonly(L, -1, true);
+    lua_pop(L, 1);
+
+    luaL_newmetatable(L, WALK_ITER_METATABLE);
+    lua_pushcfunction(L, walk_iter, "__iter");
+    lua_setfield(L, -2, "__iter");
+    lua_setreadonly(L, -1, true);
+    lua_pop(L, 1);
+
     // -- File metatable --
     luaL_newmetatable(L, FILE_METATABLE);
 
     lua_pushcfunction(L, file_tostring, "__tostring");
     lua_setfield(L, -2, "__tostring");
+    lua_pushcfunction(L, file_iter, "__iter");
+    lua_setfield(L, -2, "__iter");
 
     // Build methods table (used as upvalue for __index)
     lua_newtable(L);  // methods table
@@ -1836,6 +2112,8 @@ LUAU_MODULE_EXPORT int luauopen_fs(lua_State* L) {
     lua_setfield(L, -2, "copy");
     lua_pushcfunction(L, fs_listDir, "listDir");
     lua_setfield(L, -2, "listDir");
+    lua_pushcfunction(L, fs_walk, "walk");
+    lua_setfield(L, -2, "walk");
     lua_pushcfunction(L, fs_symlink, "symlink");
     lua_setfield(L, -2, "symlink");
     lua_pushcfunction(L, fs_readlink, "readlink");
