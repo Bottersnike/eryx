@@ -1,10 +1,10 @@
 --[=[
-SQLite3 module – embedded relational database.
+SQLite3 library – embedded relational database.
 
 Wraps the SQLite3 C library to provide full SQL database access from Luau.
 
 ## Availability
-This module is a typed facade over an optional native backend. In builds
+This library is a typed facade over an optional native backend. In builds
 without SQLite support, `require("@eryx/sqlite3")` fails immediately
 with a clear capability error.
 

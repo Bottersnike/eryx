@@ -46,3 +46,6 @@
 [submodule "vendor/libwebp"]
 	path = vendor/libwebp
 	url = https://github.com/webmproject/libwebp
+[submodule "vendor/wxWidgets"]
+	path = vendor/wxWidgets
+	url = https://github.com/wxWidgets/wxWidgets

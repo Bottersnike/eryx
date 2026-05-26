@@ -1,5 +1,5 @@
 --[=[
-The `unicode` module provides Unicode-aware string operations built on top of Luau's built-in `utf8` library.
+The `unicode` library provides Unicode-aware string operations built on top of Luau's built-in `utf8` library.
 It covers encoding conversion (UTF-8 <-> UTF-16 <-> UTF-32), normalisation (NFC/NFD/NFKC/NFKD),
 case conversion, character name lookup, and grapheme-based string slicing.
 

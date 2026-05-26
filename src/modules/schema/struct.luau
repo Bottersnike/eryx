@@ -1,7 +1,7 @@
 --[=[
 	Struct (table) schema primitives.
 	Supports field validation, unknown-key policies, schema transforms, and shape composition.
-	This module is the primary tool for object-like contracts where each key
+	This library is the primary tool for object-like contracts where each key
 	has its own schema and unknown-key behavior must be explicit.
 ]=]
 local t = require("./types")

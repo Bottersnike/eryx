@@ -50,7 +50,7 @@
 	print(whole) -- 2
 	```
 
-	If you already know which numeric domain you want, prefer the explicit module for clarity.
+	If you already know which numeric domain you want, prefer the explicit library for clarity.
 	Reach for `number.number` when you want convenience first and explicit domain control second.
 ]=]
 
@@ -1068,7 +1068,7 @@ type IntegerModule = {
 	binomial: (n: Integer | number, k: Integer | number) -> Integer,
 
 	--[=[
-		Checks whether a value is an Integer userdata produced by this module.
+		Checks whether a value is an Integer userdata produced by this library.
 		This is useful for validation and dynamic dispatch.
 		@param value The value to inspect.
 		@return `true` if `value` is an Integer, otherwise `false`.
@@ -1130,7 +1130,7 @@ type RationalModule = {
 	one: () -> Rational,
 
 	--[=[
-		Checks whether a value is a Rational userdata produced by this module.
+		Checks whether a value is a Rational userdata produced by this library.
 		This is useful for validation and dynamic dispatch.
 		@param value The value to inspect.
 		@return `true` if `value` is a Rational, otherwise `false`.
@@ -1184,13 +1184,13 @@ type FloatModule = {
 	fromRational: (value: Rational, precision: number?, mode: RoundingMode?) -> Float,
 
 	--[=[
-		Returns the module-wide default MPFR precision.
+		Returns the library-wide default MPFR precision.
 		Dynamic Number promotion into floats also follows this shared precision setting.
 		@return The default precision in bits.
 	]=]
 	defaultPrecision: () -> number,
 	--[=[
-		Sets the module-wide default MPFR precision.
+		Sets the library-wide default MPFR precision.
 		This affects newly created floats that do not provide an explicit precision, including dynamic Number promotions.
 		@param bits The new default precision in bits.
 	]=]
@@ -1212,7 +1212,7 @@ type FloatModule = {
 	one: (precision: number?) -> Float,
 
 	--[=[
-		Checks whether a value is a Float userdata produced by this module.
+		Checks whether a value is a Float userdata produced by this library.
 		This is useful for validation and dynamic dispatch.
 		@param value The value to inspect.
 		@return `true` if `value` is a Float, otherwise `false`.
@@ -1277,7 +1277,7 @@ type NumberModule = {
 	one: () -> Number,
 
 	--[=[
-		Checks whether a value is a Number userdata produced by this module.
+		Checks whether a value is a Number userdata produced by this library.
 		This is useful for validation and dynamic dispatch.
 		@param value The value to inspect.
 		@return `true` if `value` is a Number, otherwise `false`.

@@ -1,5 +1,5 @@
 --[=[
-Lightweight datetime module backed by C++20 `std::chrono`.
+Lightweight datetime library backed by C++20 `std::chrono`.
 
 Two core types are exposed:
 - [[DateTime]]: a specific instant in time, paired with a display timezone.

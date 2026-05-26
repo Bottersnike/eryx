@@ -14,6 +14,12 @@ static void mark_seen(lua_State* L, int t, int visited) {
     lua_rawset(L, visited);
 }
 
+static void unmark_seen(lua_State* L, int t, int visited) {
+    lua_pushvalue(L, t);
+    lua_pushnil(L);
+    lua_rawset(L, visited);
+}
+
 static void print_escaped_string(const char* s, size_t len) {
     putchar('"');
     for (size_t i = 0; i < len; i++) {
@@ -104,13 +110,11 @@ static bool is_legal_name(const char* name) {
 static void print_table(lua_State* L, int index, int visited) {
     index = lua_absindex(L, index);
 
-    // TODO: This recursive broken is totally broken.
-    // TODO: We need to un-mark as seen once we leave a table?
-    // if (already_seen(L, index, visited)) {
-    //     // printf("{...}");
-    //     // return;
-    // }
-    // mark_seen(L, index, visited);
+    if (already_seen(L, index, visited)) {
+        printf("{...}");
+        return;
+    }
+    mark_seen(L, index, visited);
 
     printf("{");
 
@@ -160,13 +164,6 @@ static void print_table(lua_State* L, int index, int visited) {
                 print_escaped_string(kstr, klen);
                 printf("]");
             }
-
-            // We don't have recursion protection yet, so we can't be printing index!
-            if (strcmp(key, "__index") == 0) {
-                printf(" = ...");
-                lua_pop(L, 2);
-                return;
-            }
         } else {
             printf("[");
             print_value(L, -2, visited);
@@ -180,6 +177,32 @@ static void print_table(lua_State* L, int index, int visited) {
     }
 
     printf("}");
+    unmark_seen(L, index, visited);
+}
+
+static void print_default_value(lua_State* L, int index) {
+    size_t len = 0;
+    const char* s = luaL_tolstring(L, index, &len);
+    fwrite(s, 1, len, stdout);
+    lua_pop(L, 1);
+}
+
+static bool try_print_metamethod_tostring(lua_State* L, int index) {
+    index = lua_absindex(L, index);
+
+    if (!luaL_callmeta(L, index, "__tostring")) {
+        return false;
+    }
+
+    if (!lua_isstring(L, -1)) {
+        luaL_error(L, "'__tostring' must return a string");
+    }
+
+    size_t len = 0;
+    const char* s = lua_tolstring(L, -1, &len);
+    fwrite(s, 1, len, stdout);
+    lua_pop(L, 1);
+    return true;
 }
 
 static void print_value(lua_State* L, int index, int visited) {
@@ -195,24 +218,13 @@ static void print_value(lua_State* L, int index, int visited) {
             else
                 printf("false");
             break;
-        // case LUA_TLIGHTUSERDATA:
-        //     printf("lightuserdata");
-        //     break;
-        case LUA_TNUMBER: {
-            double num = lua_tonumber(L, index);
-            if (ceil(num) == floor(num)) {
-                printf("%d", (unsigned int)num);
-            } else if (isnan(num)) {
-                printf("NaN");
-            } else if (isinf(num)) {
-                printf("Inf");
-            } else {
-                printf("%f", lua_tonumber(L, index));
-            }
+        case LUA_TNUMBER:
+            print_default_value(L, index);
             break;
-        }
         case LUA_TTABLE:
-            print_table(L, index, visited);
+            if (!try_print_metamethod_tostring(L, index)) {
+                print_table(L, index, visited);
+            }
             break;
 
         case LUA_TSTRING: {
@@ -222,35 +234,28 @@ static void print_value(lua_State* L, int index, int visited) {
             break;
         }
 
-        default: {
-            size_t len;
-            const char* s = luaL_tolstring(L, index, &len);
-            fwrite(s, 1, len, stdout);
-            lua_pop(L, 1);
+        default:
+            print_default_value(L, index);
             break;
-        }
     }
 }
 
 int eryx_lua_print(lua_State* L) {
     int n = lua_gettop(L);
 
-    // puts("Refusing to print for now :(");
+    lua_newtable(L);
+    int visited = lua_gettop(L);
 
     for (int i = 1; i <= n; i++) {
         if (i > 1) printf("\t");
-        // Top-level strings don't have "s around them
-        if (lua_type(L, i) == LUA_TSTRING) {
-            printf("%s", lua_tostring(L, i));
-        } else {
-            // TODO: This recursive checker is totally broken!!
-            lua_newtable(L);
-            int visited = lua_gettop(L);
+        if (lua_type(L, i) == LUA_TTABLE) {
             print_value(L, i, visited);
-            lua_pop(L, 1);
+        } else {
+            print_default_value(L, i);
         }
     }
 
+    lua_pop(L, 1);
     printf("\n");
     return 0;
 }

@@ -77,7 +77,7 @@ The remainder of this page lists out every available library. Each available lib
 
 [^fs]: No access to permissions, potentially other missing features
 
-[^vfs]: Module not sufficiently tested to be confidently complete
+[^vfs]: Library not sufficiently tested to be confidently complete
 
 ## Networking
 

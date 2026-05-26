@@ -1,7 +1,7 @@
 --[=[
 	Data encoding and decoding utilities.
 
-	This module re-exports all encoding sub-modules, giving convenient
+	This library re-exports all encoding sub-libraries, giving convenient
 	access to common binary-to-text encodings from a single import.
 
 	```luau
@@ -14,7 +14,7 @@
 	print(hex) -- "ff0a"
 	```
 
-	Available sub-modules:
+	Available sub-libraries:
 	- [[base32]] - RFC 4648 Base32
 	- [[base64]] - RFC 4648 Base64 (standard & URL-safe)
 	- [[base85]] - Z85 encoding

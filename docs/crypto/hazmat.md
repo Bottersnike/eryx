@@ -1,6 +1,6 @@
 # Hazmat Crypto
 
-The hazmat crypto modules expose low-level primitives. They are useful and often necessary, but they do less hand-holding and expect more protocol knowledge from the caller.
+The hazmat crypto libraries expose low-level primitives. They are useful and often necessary, but they do less hand-holding and expect more protocol knowledge from the caller.
 
 In other words: this layer gives you power, not safety rails.
 
@@ -24,7 +24,7 @@ Those should usually use the high-level APIs instead.
 
 ## Hashes and MACs
 
-These are the simplest hazmat modules and often the most useful:
+These are the simplest hazmat libraries and often the most useful:
 
 - [[@eryx/crypto/hazmat/hash]]
 - [[@eryx/crypto/hazmat/hmac]]
@@ -33,7 +33,7 @@ Use `hash` for unkeyed digests.
 
 Use `hmac` for keyed authenticity checks.
 
-These modules expose raw digest bytes and make no decisions about encoding, comparison strategy, truncation, or message framing. That is your job at this layer.
+These libraries expose raw digest bytes and make no decisions about encoding, comparison strategy, truncation, or message framing. That is your job at this layer.
 
 ## Randomness
 
@@ -68,7 +68,7 @@ Use it when you need exact Argon2 control or interoperability with an existing A
 
 ## Symmetric Ciphers
 
-The hazmat symmetric modules include:
+The hazmat symmetric libraries include:
 
 - [[@eryx/crypto/hazmat/aes]]
 - [[@eryx/crypto/hazmat/camellia]]
@@ -87,7 +87,7 @@ For example, ChaCha20-Poly1305 is a strong primitive, but if every caller invent
 
 ## Asymmetric Crypto
 
-The hazmat asymmetric modules include:
+The hazmat asymmetric libraries include:
 
 - [[@eryx/crypto/hazmat/rsa]]
 - [[@eryx/crypto/hazmat/ecc]]
@@ -104,7 +104,7 @@ This is the right layer for implementing protocols and key-management flows, but
 
 ## Formats and Interop
 
-The low-level format modules are:
+The low-level format libraries are:
 
 - [[@eryx/crypto/hazmat/pem]]
 - [[@eryx/crypto/hazmat/asn1]]
@@ -118,8 +118,7 @@ ASN.1 is particularly sharp-edged. It is powerful, widely used, and easy to get 
 A good engineering pattern is:
 
 1. implement the tricky protocol-specific work in terms of hazmat primitives
-2. wrap that in a small higher-level module with stable defaults
+2. wrap that in a small higher-level library with stable defaults
 3. make application code call the wrapper rather than the primitives
 
 That keeps the sharp edges concentrated in one place and gives the rest of the codebase a safer API.
-

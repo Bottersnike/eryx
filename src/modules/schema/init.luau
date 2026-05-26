@@ -3,7 +3,7 @@
 
 	Runtime schema construction, validation, and parsing.
 
-	This module is the public entrypoint for value schemas. It is designed
+	This library is the public entrypoint for value schemas. It is designed
 	for runtime data boundaries: request bodies, config files, CLI input,
 	persisted payloads, plugin data, and any other dynamic values that should
 	be validated before your application logic depends on them.
@@ -223,7 +223,7 @@
 	- Schema modifiers are immutable-style: chaining creates new schema objects.
 	- Error messages are path-oriented for easier debugging of nested failures.
 	- Favor small, reusable schema fragments and compose them.
-	- Keep schemas close to your domain modules for discoverability and drift
+	- Keep schemas close to your domain libraries for discoverability and drift
 	  prevention.
 ]=]
 local literal = require("@self/literal")

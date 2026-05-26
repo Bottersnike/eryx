@@ -35,7 +35,7 @@ Sometimes we don't know where the file we want is located exactly, or we wish to
 
 ## Interacting with paths
 
-Filesystem paths can be complex, especially when there is a desire to support multiple operating systems. [[@eryx/path]] is the high-level module for lexical path parsing and manipulation, and filesystem APIs across Eryx generally accept either a raw string or a `Path` object.
+Filesystem paths can be complex, especially when there is a desire to support multiple operating systems. [[@eryx/path]] is the high-level library for lexical path parsing and manipulation, and filesystem APIs across Eryx generally accept either a raw string or a `Path` object.
 
 ```luau
 local fs = require("@eryx/fs")

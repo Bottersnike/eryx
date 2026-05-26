@@ -1,7 +1,7 @@
 --[=[
 	Debug Luau programs from Luau code.
 
-	The debugger module runs a target program under debugger control and exposes
+	The debugger library runs a target program under debugger control and exposes
 	the primitives needed by debuggers and editor adapters: session lifecycle,
 	event delivery, source lookup, breakpoints, coroutine threads, stack frames,
 	scopes, variable inspection, expression evaluation, variable assignment,

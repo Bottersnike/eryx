@@ -37,7 +37,7 @@ vfs.build({
 
 The resulting executable is a complete copy of the Eryx runtime with the file archive appended at the end. It can be distributed and run on its own - no separate Eryx install required.
 
-> **Important:** The bundle executable must be able to find the shared libraries it needs (e.g. native modules). The simplest approach is to place the bundle in the same directory as the original Eryx executable.
+> **Important:** The bundle executable must be able to find the shared libraries it needs (e.g. native libraries). The simplest approach is to place the bundle in the same directory as the original Eryx executable.
 
 ## How the bundle runs
 
@@ -46,7 +46,7 @@ When the bundle starts:
 1. Eryx detects the appended archive and opens it automatically.
 2. The entrypoint script is loaded from the archive and executed.
 3. All `require` calls from VFS scripts resolve against the archive first.
-4. `@eryx/*` modules (built-in / native) remain available as usual.
+4. `@eryx/*` libraries (built-in / native) remain available as usual.
 
 No special flags or arguments are needed - just run the executable directly. Any command-line arguments are forwarded to the script.
 
@@ -68,7 +68,7 @@ local utils = require("./utils")
 
 ### Alias requires (`@eryx/*`, `@self`, config aliases)
 
-- `@eryx/*` resolves to built-in / native modules as normal.
+- `@eryx/*` resolves to built-in / native libraries as normal.
 - `@self` resolves relative to the caller's own directory inside the VFS.
 - Config aliases (defined in `.luaurc` or `*.config.luau`) are resolved from config files found inside the archive, walking from the caller's directory up to the VFS root.
 

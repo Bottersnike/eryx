@@ -1,7 +1,7 @@
 --[=[
 	Luau source code parser, compiler, type checker, and AST query library.
 
-	This is the unified `@eryx/luau` facade. It re-exports all sub-modules
+	This is the unified `@eryx/luau` facade. It re-exports all sub-libraries
 	under a single table:
 
 	- `luau.parse`    — Parse source into an AST, extract comments, and pretty-print.
@@ -10,7 +10,7 @@
 	- `luau.query`    — Walk and query AST nodes with a chainable `Query` API.
 	- `luau.ast`      — Shared AST type definitions (mostly for type imports).
 
-	Sub-modules can also be required individually as `@eryx/luau/parse`,
+	Sub-libraries can also be required individually as `@eryx/luau/parse`,
 	`@eryx/luau/analysis`, etc.
 
 	```luau

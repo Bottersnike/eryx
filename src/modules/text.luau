@@ -1,11 +1,11 @@
 --[=[
 	Text-processing helpers for everyday string manipulation.
 
-	This module provides a small set of "boring but useful" text utilities:
+	This library provides a small set of "boring but useful" text utilities:
 	indentation helpers, wrapping and truncation, prefix/suffix checks, simple
 	literal substring counting, and configurable trimming.
 
-	The functions in this module operate on Lua strings as byte sequences. They
+	The functions in this library operate on Lua strings as byte sequences. They
 	do not perform Unicode-aware grapheme segmentation, display-width
 	calculation, locale-sensitive casing, or language-aware hyphenation. That
 	makes them a good fit for:

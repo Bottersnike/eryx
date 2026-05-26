@@ -1,7 +1,7 @@
 --[=[
 	Low-level BSD socket API for Luau.
 
-	This module exposes the platform's native socket interface, providing
+	This library exposes the platform's native socket interface, providing
 	TCP and UDP networking with non-blocking I/O support. All data transfer
 	uses Luau `buffer` objects for zero-copy efficiency.
 

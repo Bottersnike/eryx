@@ -1,7 +1,7 @@
 --[=[
 	PKCS#7 padding helpers for block ciphers.
 
-	This module is intended to pair with the raw block-cipher APIs in
+	This library is intended to pair with the raw block-cipher APIs in
 	`@eryx/crypto/hazmat/*`. It pads arbitrary-length data up to a block
 	boundary and validates/removes PKCS#7 padding explicitly.
 

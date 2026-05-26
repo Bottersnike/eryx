@@ -1,7 +1,7 @@
 --[=[
 	High-level TCP and UDP networking helpers built on top of `@eryx/_socket`.
 
-	This module wraps the low-level BSD-style socket API with friendlier
+	This library wraps the low-level BSD-style socket API with friendlier
 	client/server classes, socket-option helpers, IPv4/IPv6 family selection,
 	and both signal-driven and manual server accept loops.
 

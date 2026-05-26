@@ -1,7 +1,7 @@
 --[=[
 	High-level symmetric authenticated encryption.
 
-	This module provides a simple "secretbox"-style API built on
+	This library provides a simple "secretbox"-style API built on
 	ChaCha20-Poly1305. It is intended as the user-facing way to encrypt a
 	message with a shared secret key without manually managing nonces or
 	separate authentication tags.

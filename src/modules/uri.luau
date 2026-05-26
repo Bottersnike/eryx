@@ -1,7 +1,7 @@
 --[=[
 	RFC 3986 URI parsing and validation utilities.
 
-	This module provides parsing helpers for:
+	This library provides parsing helpers for:
 	- Generic URI references (`URI-reference`)
 	- Absolute URIs (`URI`)
 	- Network-style URLs

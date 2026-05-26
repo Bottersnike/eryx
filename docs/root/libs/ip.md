@@ -1,6 +1,6 @@
 # Working with IP addresses
 
-The IP module has a lot of surface area, so this guide focuses on what to use in day-to-day code.
+The IP library has a lot of surface area, so this guide focuses on what to use in day-to-day code.
 
 Use this when you want to:
 - parse and validate IP input

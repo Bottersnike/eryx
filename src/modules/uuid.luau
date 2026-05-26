@@ -1,12 +1,12 @@
 --[=[
 	UUID generation, parsing, and formatting.
 
-	This module implements the RFC 9562 UUID families `v1`, `v3`, `v4`,
+	This library implements the RFC 9562 UUID families `v1`, `v3`, `v4`,
 	`v5`, `v6`, `v7`, and `v8`, along with parsing, coercion, comparison,
 	and formatting helpers.
 
 	UUIDs may be consumed as canonical strings, raw 16-byte `buffer`
-	values, or metatable-backed UUID objects returned by this module.
+	values, or metatable-backed UUID objects returned by this library.
 	Parsed and generated UUID objects expose common metadata such as
 	`variant`, `version`, and `bytes`, with additional version-specific
 	fields available on timestamped layouts like `v1`, `v6`, and `v7`.
@@ -889,7 +889,7 @@ end
 --[=[
 	Generate a version 7 Unix-time-ordered UUID.
 
-	When `sequence` is omitted, this module applies monotonic sequencing so
+	When `sequence` is omitted, this library applies monotonic sequencing so
 	that repeated calls remain bytewise ordered even within the same
 	millisecond.
 

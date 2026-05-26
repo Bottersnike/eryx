@@ -1,12 +1,12 @@
 --[=[
-XML module – DOM parsing, manipulation, serialisation and XPath queries.
+XML library – DOM parsing, manipulation, serialisation and XPath queries.
 
 Backed by pugixml. Provides two core types:
 - [[XmlDocument]]: An XML document that owns the DOM tree.
 - [[XmlNode]]: A lightweight handle to a single element within a document.
 
 ## Availability
-This module is a typed facade over an optional pugixml backend. In
+This library is a typed facade over an optional pugixml backend. In
 builds without XML support, `require("@eryx/xml")` fails immediately
 with a clear capability error.
 

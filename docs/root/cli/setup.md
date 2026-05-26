@@ -1,6 +1,6 @@
 # setup
 
-`eryx setup` configures your current project so editors and tooling can resolve `@eryx/*` modules.
+`eryx setup` configures your current project so editors and tooling can resolve `@eryx/*` libraries.
 
 ## Usage
 
@@ -10,7 +10,7 @@ eryx setup
 
 ## What it does
 
-`eryx setup` looks for Eryx's bundled modules and then updates `.luaurc` in the current directory to add an `eryx` alias.
+`eryx setup` looks for Eryx's bundled libraries and then updates `.luaurc` in the current directory to add an `eryx` alias.
 
 If `.luaurc` does not exist, it creates one. If it already exists, it updates the `aliases.eryx` entry.
 

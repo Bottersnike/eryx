@@ -3,7 +3,7 @@
 	iteration, seekable indexing, PAX metadata, GNU long-name records, ACL sideband
 	entries, and GNU sparse-file reconstruction.
 
-	This module is designed for archive inspection and extraction workflows rather
+	This library is designed for archive inspection and extraction workflows rather
 	than archive creation. Use `tar.open` for one-pass reading from any readable
 	stream, `tar.openSeekable` when the stream also supports seeking, or
 	`tar.openPath` to open a TAR file directly from disk. Sequential readers expose
@@ -16,7 +16,7 @@
 	Returned members preserve both normalized fields such as `kind`, `path`, and
 	`linkPath`, and lower-level format details such as the original header, merged
 	PAX attributes, stored payload size, and sparse-file metadata. This makes the
-	module suitable both for straightforward unpacking and for tooling that needs to
+	library suitable both for straightforward unpacking and for tooling that needs to
 	inspect TAR format behavior more closely.
 ]=]
 

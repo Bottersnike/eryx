@@ -1,7 +1,7 @@
 --[=[
 	Structured, hierarchical logging for Luau applications.
 
-	This module provides:
+	This library provides:
 	- named loggers with parent/child inheritance (`app`, `app.http`, ...)
 	- leveled logging (`debug`..`critical`)
 	- handler-based output routing

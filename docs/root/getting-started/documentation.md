@@ -23,15 +23,15 @@ local result = 42
 
 All documentation strings are expected to be written using markdown.
 
-The API documenter locates the final `return` statement from your module. Only fields that are present on that returned value are documented.
+The API documenter locates the final `return` statement from your library. Only fields that are present on that returned value are documented.
 
-Modules with multiple returns or dynamic assignment to their returned table will not have documentation correctly generated.
+Libraries with multiple returns or dynamic assignment to their returned table will not have documentation correctly generated.
 
-## Documenting modules
+## Documenting libraries
 
 A comment at the very first line is considered a documentation comment.
 
-If a code line is present immediately below this documentation comment, and that code line is documentable, the comment will be associated with that code line. As such, it's recommended to always leave a blank line after a module comment.
+If a code line is present immediately below this documentation comment, and that code line is documentable, the comment will be associated with that code line. As such, it's recommended to always leave a blank line after a library comment.
 
 ## Documenting functions
 

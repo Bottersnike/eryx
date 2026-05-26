@@ -7,7 +7,7 @@
 	:::warning
 	Temporary resources are explicit-lifecycle. You must call `:close()`
 	on returned handles to ensure cleanup.
-	Unlike some runtimes, this module does not rely on GC finalizers.
+	Unlike some runtimes, this library does not rely on GC finalizers.
 ]=]
 
 --[=[

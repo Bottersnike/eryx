@@ -1,7 +1,7 @@
 --[=[
 Utilities for working with sequence-like data through a small iterator API.
 
-Functions in this module accept three kinds of iterable input:
+Functions in this library accept three kinds of iterable input:
 
 1. Dense array-like tables such as `{ "a", "b", "c" }`
 2. Simple iterator functions of the form `() -> (index?, value)`
@@ -10,7 +10,7 @@ Functions in this module accept three kinds of iterable input:
 Most transforming helpers return a `SimpleIterator`, which is a stateful
 iterator function yielding `(index, value)` pairs until it returns `nil`.
 
-Use this module when you want to write code against "something iterable"
+Use this library when you want to write code against "something iterable"
 without caring whether the source is an array, an iterator callback, or a
 custom object with `__iter`.
 

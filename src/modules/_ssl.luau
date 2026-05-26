@@ -6,7 +6,7 @@
 	certificate parsing utilities.
 
 	:::note Optional capability
-	This module is a typed facade over an optional native backend. In
+	This library is a typed facade over an optional native backend. In
 	builds without TLS/cryptography support, `require("@eryx/_ssl")`
 	fails immediately with a clear capability error.
 	:::

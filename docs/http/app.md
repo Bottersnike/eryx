@@ -328,7 +328,7 @@ Use `http.App` when:
 
 - you want routing and middleware
 - your application is endpoint-oriented
-- you want grouped APIs and mounted modules
+- you want grouped APIs and mounted libraries
 
 Use `http.HttpServer` directly when:
 

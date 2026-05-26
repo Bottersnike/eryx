@@ -1,7 +1,7 @@
 --[=[
 	Type facade for the optional native crypto backend.
 
-	This module keeps the typed hazmat crypto surface available to Luau
+	This library keeps the typed hazmat crypto surface available to Luau
 	callers. In builds without cryptography support,
 	`require("@eryx/crypto/hazmat/_crypto")` fails immediately with a
 	clear capability error.

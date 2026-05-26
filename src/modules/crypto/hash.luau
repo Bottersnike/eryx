@@ -1,7 +1,7 @@
 --[=[
 	High-level message digests.
 
-	This module provides a single digest API for application code that
+	This library provides a single digest API for application code that
 	does not want to care which hash function is currently preferred.
 
 	The returned digest is a tagged `buffer`, allowing the underlying

@@ -1,7 +1,7 @@
 --[=[
 	WebView2 window integration.
 
-	This module is a typed facade over an optional native backend. In
+	This library is a typed facade over an optional native backend. In
 	builds without WebView support, or on unsupported platforms,
 	`require("@eryx/webview")` fails immediately with a clear capability
 	error.

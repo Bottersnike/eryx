@@ -1,7 +1,7 @@
 --[=[
 	HTTP/1.1 client and server library.
 
-	Built on top of `@eryx/_socket` and `@eryx/_ssl`, this module provides
+	Built on top of `@eryx/_socket` and `@eryx/_ssl`, this library provides
 	both one-shot convenience functions and lower-level connection and
 	server classes for HTTP and HTTPS, with cookie jars, pooled sessions,
 	streaming request and response bodies, multipart/form helpers, and

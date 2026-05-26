@@ -2,7 +2,7 @@
 
 [[@eryx/http]] is Eryx's HTTP/1.1 client and server library. It is designed to cover the common "just make a request" workflow, but it also scales down into lower-level transport control when you need connection reuse, streaming, long-polling, or protocol-aware server behavior.
 
-At a high level, the module gives you five layers:
+At a high level, the library gives you five layers:
 
 1. One-shot client helpers like `http.get()` and `http.post()`.
 2. Pooled client sessions with `http.Session`.
@@ -24,7 +24,7 @@ print(data.slideshow.title)
 
 That is the "requests-style" path: make a request, get a buffered response, decode it, move on.
 
-## What the Module Handles for You
+## What the Library Handles for You
 
 The client side already covers a lot of HTTP behavior that you normally only notice when it breaks:
 

@@ -1,7 +1,7 @@
 --[=[
 	Shared type definitions for `@eryx/logging`.
 
-	This module exists to keep the core logger and built-in handlers aligned
+	This library exists to keep the core logger and built-in handlers aligned
 	on one set of record and handler contracts.
 ]=]
 local types = {}

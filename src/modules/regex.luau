@@ -1,10 +1,10 @@
 --[=[
-	PCRE2-based regular expression module.
+	PCRE2-based regular expression library.
 	Supports Perl-compatible regex with compilation, matching, searching,
 	replacement, and splitting.
 
 	:::note Optional capability
-	This module is a typed facade over an optional PCRE2 backend. In
+	This library is a typed facade over an optional PCRE2 backend. In
 	builds without PCRE2 support, `require("@eryx/regex")` fails
 	immediately with a clear capability error.
 	:::

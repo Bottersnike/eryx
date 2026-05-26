@@ -1,7 +1,7 @@
 --[=[
 	High-level keyed message authentication.
 
-	This module provides a single HMAC API for application code that wants
+	This library provides a single HMAC API for application code that wants
 	authenticity and integrity without choosing a concrete hash function at
 	every call site.
 

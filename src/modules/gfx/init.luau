@@ -1,6 +1,6 @@
 --[=[
-	Graphics module aggregator. Provides convenient access to all
-	gfx sub-modules via a single require:
+	Graphics library aggregator. Provides convenient access to all
+	gfx sub-libraries via a single require:
 
 	```luau
 	local gfx = require("@eryx/gfx")
@@ -8,7 +8,7 @@
 	local img = gfx.texture.load("sprite.png")
 	```
 
-	Or require individual sub-modules directly:
+	Or require individual sub-libraries directly:
 	```luau
 	local window = require("@eryx/gfx/window")
 	```

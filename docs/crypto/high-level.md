@@ -28,7 +28,7 @@ That is the part most applications benefit from. The more of that an API can do 
 
 Use [[@eryx/crypto/password]] for stored passwords.
 
-This module currently uses Argon2id under the hood and returns a tagged string format suitable for storing in a database.
+This library currently uses Argon2id under the hood and returns a tagged string format suitable for storing in a database.
 
 ```luau
 local password = require("@eryx/crypto/password")
@@ -54,7 +54,7 @@ If you are authenticating humans, this is the right default.
 
 Use [[@eryx/crypto/secretbox]] when you want to encrypt data with a symmetric shared secret and you want authentication as well as confidentiality.
 
-This module currently uses ChaCha20-Poly1305 underneath and serializes a self-contained ciphertext format:
+This library currently uses ChaCha20-Poly1305 underneath and serializes a self-contained ciphertext format:
 
 - `algorithm || nonce || ciphertext || tag`
 

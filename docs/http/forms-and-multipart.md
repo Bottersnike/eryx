@@ -1,6 +1,6 @@
 # Forms and Multipart
 
-HTTP applications spend a lot of time exchanging structured bodies. The `@eryx/http` module includes helpers for the most common formats on both the client and server sides.
+HTTP applications spend a lot of time exchanging structured bodies. The `@eryx/http` library includes helpers for the most common formats on both the client and server sides.
 
 ## URL-Encoded Forms
 
@@ -147,7 +147,7 @@ end, {
 
 ## Lower-Level Helpers
 
-The module also exposes lower-level helpers directly:
+The library also exposes lower-level helpers directly:
 
 - `http.formEncode(table)`
 - `http.formDecode(string)`

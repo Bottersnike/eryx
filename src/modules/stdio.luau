@@ -1,5 +1,5 @@
 --[=[
-	Standard I/O module -- read/write access to stdin, stdout, and stderr.
+	Standard I/O library -- read/write access to stdin, stdout, and stderr.
 
 	Provides both synchronous (blocking) and asynchronous (yielding) APIs
 	for interacting with the process's standard streams.

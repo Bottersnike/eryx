@@ -5,7 +5,7 @@
 	keys and certificates. A PEM file wraps a base64-encoded DER blob
 	between `-----BEGIN <label>-----` and `-----END <label>-----` markers.
 
-	This module handles the text-level encoding only - it converts between
+	This library handles the text-level encoding only - it converts between
 	PEM strings and raw DER `buffer` values. It does not parse the ASN.1
 	structure inside the DER. To work with RSA keys specifically, see
 	`@eryx/crypto/rsa` which provides [[rsa.private_to_der]], etc.

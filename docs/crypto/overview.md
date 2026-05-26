@@ -40,7 +40,7 @@ The hazmat layer exposes the raw building blocks:
 - Secure random data generation
 - Argon2 in its low-level forms
 
-These modules are powerful, but they assume you know what you are doing. They are the right choice when you are implementing or interoperating with a protocol, reproducing an existing format, or composing several primitives into a scheme of your own.
+These libraries are powerful, but they assume you know what you are doing. They are the right choice when you are implementing or interoperating with a protocol, reproducing an existing format, or composing several primitives into a scheme of your own.
 
 Start here: [[Hazmat Crypto]]
 

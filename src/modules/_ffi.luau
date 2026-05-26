@@ -6,7 +6,7 @@
 	typed [[ForeignValue]] wrappers to ensure correct ABI alignment.
 
 	:::note Optional capability
-	This module is a typed facade over a platform-specific native backend.
+	This library is a typed facade over a platform-specific native backend.
 	On unsupported platforms, `require("@eryx/_ffi")` fails immediately
 	with a clear capability error.
 	:::

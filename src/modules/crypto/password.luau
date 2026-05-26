@@ -1,7 +1,7 @@
 --[=[
 	High-level password hashing and verification.
 
-	This module is the user-facing API for password storage. It hashes
+	This library is the user-facing API for password storage. It hashes
 	passwords with Argon2id using sensible defaults and stores them in a
 	tagged string format so the scheme can evolve later without guessing.
 
@@ -63,7 +63,7 @@ end
 --[=[
 	Verifies a plaintext password against a stored hash.
 
-	The hash must be in this module's tagged format. Returns `true` if the
+	The hash must be in this library's tagged format. Returns `true` if the
 	password matches, otherwise `false`. Raises an error if the hash uses
 	an unsupported tag or is malformed.
 

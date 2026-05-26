@@ -1,7 +1,7 @@
 --[=[
 	Queue data structures.
 
-	This module provides three small queue-shaped containers:
+	This library provides three small queue-shaped containers:
 	- `Queue` for ordinary FIFO usage
 	- `Deque` for pushing/popping at both ends
 	- `PriorityQueue` for heap-backed min/max priority scheduling

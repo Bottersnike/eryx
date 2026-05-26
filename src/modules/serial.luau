@@ -1,5 +1,5 @@
 --[=[
-	Serial port I/O module backed by OS serial APIs.
+	Serial port I/O library backed by OS serial APIs.
 
 	Supports full-duplex communication over RS-232, USB CDC, and similar
 	serial interfaces. Reads are asynchronous and yield the calling

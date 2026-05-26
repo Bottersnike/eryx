@@ -397,3 +397,9 @@ add_luau_module(thread src/modules/thread.cpp src/modules/thread.luau
 add_luau_module(debugger src/modules/debugger.cpp src/modules/debugger.luau
     EXTRA_LIBS uv_a
 )
+
+if(ERYX_MODULE_GUI)
+    add_luau_module(gui src/modules/gui.cpp src/modules/gui.luau
+        EXTRA_LIBS wxWidgets::wxWidgets
+    )
+endif()

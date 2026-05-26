@@ -1,7 +1,7 @@
 --[[
 	Docgen build engine — the programmatic API.
 
-	Use this module when you want to drive eryxdoc from your own script
+	Use this library when you want to drive eryxdoc from your own script
 	instead of going through main.luau's CLI.
 
 	```luau
