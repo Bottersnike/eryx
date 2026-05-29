@@ -7,7 +7,7 @@
 
 	:::note Optional capability
 	This library is a typed facade over a platform-specific native backend.
-	On unsupported platforms, `require("@eryx/_ffi")` fails immediately
+	On unsupported platforms, `require("@eryx/experimental/_ffi")` fails immediately
 	with a clear capability error.
 	:::
 
@@ -18,7 +18,7 @@
 	:::
 
 	```luau
-	local ffi = require("@eryx/_ffi")
+	local ffi = require("@eryx/experimental/_ffi")
 
 	local user32 = ffi.loadLibrary("user32.dll")
 	local msgBox = user32:getFunction(

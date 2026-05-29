@@ -123,11 +123,11 @@ add_luau_script_module(luau/
     src/modules/luau/analysis.luau
     src/modules/luau/query.luau
 )
-add_luau_script_module(_ffi src/modules/_ffi.luau)
+add_luau_script_module(experimental/_ffi src/modules/experimental/_ffi.luau)
 add_luau_script_module(_ssl src/modules/_ssl.luau)
 add_luau_script_module(sqlite3 src/modules/sqlite3.luau)
 add_luau_script_module(regex src/modules/regex.luau)
-add_luau_script_module(webview src/modules/webview.luau)
+add_luau_script_module(experimental/webview src/modules/experimental/webview.luau)
 add_luau_script_module(crypto/hazmat/_crypto src/modules/crypto/hazmat/_crypto.luau)
 add_luau_script_module(websocket src/modules/websocket.luau)
 
@@ -141,7 +141,7 @@ add_luau_script_module(unicode/_data/
 )
 
 if(WIN32)
-add_luau_script_module(webui src/modules/webui.luau)
+add_luau_script_module(experimental/webui src/modules/experimental/webui.luau)
 endif()
 
 # Documentation engine

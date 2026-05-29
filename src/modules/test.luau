@@ -290,7 +290,7 @@ test.Suite = Suite
 
 local Expecter = {}
 Expecter.__index = Expecter
-type Expecter = setmetatable<{
+export type Expecter = setmetatable<{
 	values: { [number]: any, n: number },
 }, typeof(Expecter)>
 

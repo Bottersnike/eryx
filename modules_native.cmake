@@ -16,7 +16,7 @@ add_luau_module(_socket src/modules/_socket.cpp src/modules/_socket.luau
 
 if(WIN32)
 # TODO: Implement FFI on platforms other than Windows
-add_luau_module(_native/_ffi src/modules/_ffi.cpp src/modules/_native/stub.luau
+add_luau_module(_native/_ffi src/modules/experimental/_ffi.cpp src/modules/_native/stub.luau
     EXTRA_LIBS dyncall
     EXTRA_INCLUDES "${dyncall_SOURCE_DIR}/dyncall"
 )
@@ -207,7 +207,7 @@ endif()
 # -- WebView module
 # On windows, we're going to need to pull WebView2 down with nuget
 if(WIN32)
-add_luau_module(_native/webview src/modules/webview.cpp src/modules/_native/stub.luau)
+add_luau_module(_native/webview src/modules/experimental/webview.cpp src/modules/_native/stub.luau)
 
 set(NUGET_EXE ${CMAKE_BINARY_DIR}/nuget.exe)
 if(NOT EXISTS ${NUGET_EXE})

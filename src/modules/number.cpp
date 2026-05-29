@@ -10,6 +10,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
+#include "module_helpers.hpp"
 #include "mpfr.h"
 
 static const LuauModuleInfo INFO = {
@@ -153,40 +154,25 @@ static LuaNumber* check_number(lua_State* L, int index) {
     return static_cast<LuaNumber*>(luaL_checkudata(L, index, NUMBER_METATABLE));
 }
 
-static void* test_udata(lua_State* L, int index, const char* metatableName) {
-    void* userdata = lua_touserdata(L, index);
-    if (userdata == nullptr) return nullptr;
-    if (!lua_getmetatable(L, index)) return nullptr;
-
-    luaL_getmetatable(L, metatableName);
-    bool matches = lua_rawequal(L, -1, -2) != 0;
-    lua_pop(L, 2);
-    return matches ? userdata : nullptr;
-}
-
 static bool is_integer(lua_State* L, int index) {
-    return test_udata(L, index, INTEGER_METATABLE) != nullptr;
+    return eryx_testudata(L, index, INTEGER_METATABLE) != nullptr;
 }
 
 static bool is_rational(lua_State* L, int index) {
-    return test_udata(L, index, RATIONAL_METATABLE) != nullptr;
+    return eryx_testudata(L, index, RATIONAL_METATABLE) != nullptr;
 }
 
 static bool is_float(lua_State* L, int index) {
-    return test_udata(L, index, FLOAT_METATABLE) != nullptr;
+    return eryx_testudata(L, index, FLOAT_METATABLE) != nullptr;
 }
 
 static bool is_number(lua_State* L, int index) {
-    return test_udata(L, index, NUMBER_METATABLE) != nullptr;
+    return eryx_testudata(L, index, NUMBER_METATABLE) != nullptr;
 }
 
 static LuaInteger* push_integer(lua_State* L) {
-    auto* integer =
-        static_cast<LuaInteger*>(lua_newuserdatadtor(L, sizeof(LuaInteger), integer_dtor));
+    auto* integer = eryx_newuserdatadtor<LuaInteger>(L, INTEGER_METATABLE, integer_dtor);
     std::memset(integer, 0, sizeof(LuaInteger));
-
-    luaL_getmetatable(L, INTEGER_METATABLE);
-    lua_setmetatable(L, -2);
 
     mpz_init(integer->value);
     integer->initialized = true;
@@ -194,12 +180,8 @@ static LuaInteger* push_integer(lua_State* L) {
 }
 
 static LuaRational* push_rational(lua_State* L) {
-    auto* rational =
-        static_cast<LuaRational*>(lua_newuserdatadtor(L, sizeof(LuaRational), rational_dtor));
+    auto* rational = eryx_newuserdatadtor<LuaRational>(L, RATIONAL_METATABLE, rational_dtor);
     std::memset(rational, 0, sizeof(LuaRational));
-
-    luaL_getmetatable(L, RATIONAL_METATABLE);
-    lua_setmetatable(L, -2);
 
     mpq_init(rational->value);
     rational->initialized = true;
@@ -207,11 +189,8 @@ static LuaRational* push_rational(lua_State* L) {
 }
 
 static LuaFloat* push_float(lua_State* L, mpfr_prec_t precision = mpfr_get_default_prec()) {
-    auto* floatValue = static_cast<LuaFloat*>(lua_newuserdatadtor(L, sizeof(LuaFloat), float_dtor));
+    auto* floatValue = eryx_newuserdatadtor<LuaFloat>(L, FLOAT_METATABLE, float_dtor);
     std::memset(floatValue, 0, sizeof(LuaFloat));
-
-    luaL_getmetatable(L, FLOAT_METATABLE);
-    lua_setmetatable(L, -2);
 
     mpfr_init2(floatValue->value, precision);
     mpfr_set_zero(floatValue->value, 0);
@@ -220,11 +199,8 @@ static LuaFloat* push_float(lua_State* L, mpfr_prec_t precision = mpfr_get_defau
 }
 
 static LuaNumber* push_number_integer(lua_State* L) {
-    auto* number = static_cast<LuaNumber*>(lua_newuserdatadtor(L, sizeof(LuaNumber), number_dtor));
+    auto* number = eryx_newuserdatadtor<LuaNumber>(L, NUMBER_METATABLE, number_dtor);
     std::memset(number, 0, sizeof(LuaNumber));
-
-    luaL_getmetatable(L, NUMBER_METATABLE);
-    lua_setmetatable(L, -2);
 
     number->kind = NumberKind::Integer;
     mpz_init(number->integerValue);
@@ -233,11 +209,8 @@ static LuaNumber* push_number_integer(lua_State* L) {
 }
 
 static LuaNumber* push_number_float(lua_State* L, mpfr_prec_t precision = mpfr_get_default_prec()) {
-    auto* number = static_cast<LuaNumber*>(lua_newuserdatadtor(L, sizeof(LuaNumber), number_dtor));
+    auto* number = eryx_newuserdatadtor<LuaNumber>(L, NUMBER_METATABLE, number_dtor);
     std::memset(number, 0, sizeof(LuaNumber));
-
-    luaL_getmetatable(L, NUMBER_METATABLE);
-    lua_setmetatable(L, -2);
 
     number->kind = NumberKind::Float;
     mpfr_init2(number->floatValue, precision);
@@ -572,8 +545,7 @@ static mpfr_rnd_t check_mpfr_round_mode(lua_State* L, int index, const char* con
 }
 
 static NumberKind classify_number_operand(lua_State* L, int index, const char* expected) {
-    if (auto* number = static_cast<LuaNumber*>(test_udata(L, index, NUMBER_METATABLE)))
-        return number->kind;
+    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) return number->kind;
 
     int64_t whole = 0;
     if (try_get_whole_number64(L, index, whole)) return NumberKind::Integer;
@@ -584,7 +556,7 @@ static NumberKind classify_number_operand(lua_State* L, int index, const char* e
 
 static void load_number_integer_operand_no_string(lua_State* L, int index, mpz_ptr out,
                                                   const char* expected) {
-    if (auto* number = static_cast<LuaNumber*>(test_udata(L, index, NUMBER_METATABLE))) {
+    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind != NumberKind::Integer) luaL_typeerror(L, index, expected);
         mpz_set(out, number->integerValue);
         return;
@@ -596,7 +568,7 @@ static void load_number_integer_operand_no_string(lua_State* L, int index, mpz_p
 
 static void load_number_float_operand_no_string(lua_State* L, int index, mpfr_ptr out,
                                                 mpfr_rnd_t rounding, const char* expected) {
-    if (auto* number = static_cast<LuaNumber*>(test_udata(L, index, NUMBER_METATABLE))) {
+    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Float) {
             mpfr_set(out, number->floatValue, rounding);
         } else {
@@ -610,7 +582,7 @@ static void load_number_float_operand_no_string(lua_State* L, int index, mpfr_pt
 }
 
 static mpfr_prec_t number_operand_precision(lua_State* L, int index) {
-    if (auto* number = static_cast<LuaNumber*>(test_udata(L, index, NUMBER_METATABLE))) {
+    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Float) return mpfr_get_prec(number->floatValue);
         return 53;
     }
@@ -761,7 +733,7 @@ static void divmod(mpz_ptr quotient, mpz_ptr remainder, mpz_srcptr lhs, mpz_srcp
 
 static void load_integer_operand_no_string(lua_State* L, int index, mpz_ptr out,
                                            const char* expected) {
-    if (auto* integer = static_cast<LuaInteger*>(test_udata(L, index, INTEGER_METATABLE))) {
+    if (auto* integer = eryx_testudata<LuaInteger>(L, index, INTEGER_METATABLE)) {
         mpz_set(out, integer->value);
         return;
     }
@@ -873,12 +845,12 @@ static void set_rational_from_string(lua_State* L, mpq_ptr out, const std::strin
 
 static void load_rational_operand_no_string(lua_State* L, int index, mpq_ptr out,
                                             const char* expected) {
-    if (auto* rational = static_cast<LuaRational*>(test_udata(L, index, RATIONAL_METATABLE))) {
+    if (auto* rational = eryx_testudata<LuaRational>(L, index, RATIONAL_METATABLE)) {
         mpq_set(out, rational->value);
         return;
     }
 
-    if (auto* integer = static_cast<LuaInteger*>(test_udata(L, index, INTEGER_METATABLE))) {
+    if (auto* integer = eryx_testudata<LuaInteger>(L, index, INTEGER_METATABLE)) {
         mpq_set_integer(out, integer->value);
         return;
     }
@@ -900,7 +872,7 @@ static void load_rational_like(lua_State* L, int index, mpq_ptr out, const char*
 
 static void load_float_operand_no_string(lua_State* L, int index, mpfr_ptr out, mpfr_rnd_t rounding,
                                          const char* expected) {
-    if (auto* floatValue = static_cast<LuaFloat*>(test_udata(L, index, FLOAT_METATABLE))) {
+    if (auto* floatValue = eryx_testudata<LuaFloat>(L, index, FLOAT_METATABLE)) {
         mpfr_set(out, floatValue->value, rounding);
         return;
     }
@@ -911,7 +883,7 @@ static void load_float_operand_no_string(lua_State* L, int index, mpfr_ptr out, 
 }
 
 static mpfr_prec_t float_operand_precision(lua_State* L, int index) {
-    if (auto* floatValue = static_cast<LuaFloat*>(test_udata(L, index, FLOAT_METATABLE)))
+    if (auto* floatValue = eryx_testudata<LuaFloat>(L, index, FLOAT_METATABLE))
         return mpfr_get_prec(floatValue->value);
     return 53;
 }
@@ -1339,7 +1311,7 @@ static int integer_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* integer = static_cast<LuaInteger*>(test_udata(L, 1, INTEGER_METATABLE))) {
+    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
         return push_integer_copy(L, integer->value);
     }
 
@@ -1713,13 +1685,13 @@ static int rational_new(lua_State* L) {
     }
 
     if (lua_isnoneornil(L, 2)) {
-        if (auto* rational = static_cast<LuaRational*>(test_udata(L, 1, RATIONAL_METATABLE))) {
+        if (auto* rational = eryx_testudata<LuaRational>(L, 1, RATIONAL_METATABLE)) {
             return push_rational_copy(L, rational->value);
         }
 
         auto* out = push_rational(L);
 
-        if (auto* integer = static_cast<LuaInteger*>(test_udata(L, 1, INTEGER_METATABLE))) {
+        if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
             mpq_set_integer(out->value, integer->value);
             return 1;
         }
@@ -2024,7 +1996,7 @@ static int float_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* existing = static_cast<LuaFloat*>(test_udata(L, 1, FLOAT_METATABLE))) {
+    if (auto* existing = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(existing->value) : check_precision(L, 2);
         auto* out = push_float(L, precision);
@@ -2557,7 +2529,7 @@ static int number_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* number = static_cast<LuaNumber*>(test_udata(L, 1, NUMBER_METATABLE))) {
+    if (auto* number = eryx_testudata<LuaNumber>(L, 1, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Integer)
             return push_number_integer_copy(L, number->integerValue);
 
@@ -2568,10 +2540,10 @@ static int number_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* integer = static_cast<LuaInteger*>(test_udata(L, 1, INTEGER_METATABLE)))
+    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE))
         return push_number_integer_copy(L, integer->value);
 
-    if (auto* floatValue = static_cast<LuaFloat*>(test_udata(L, 1, FLOAT_METATABLE))) {
+    if (auto* floatValue = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(floatValue->value) : check_precision(L, 2);
         auto* out = push_number_float(L, precision);
@@ -2633,7 +2605,7 @@ static int number_from_number(lua_State* L) {
 }
 
 static int number_from_integer(lua_State* L) {
-    if (auto* integer = static_cast<LuaInteger*>(test_udata(L, 1, INTEGER_METATABLE)))
+    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE))
         return push_number_integer_copy(L, integer->value);
 
     auto* out = push_number_integer(L);
@@ -2642,7 +2614,7 @@ static int number_from_integer(lua_State* L) {
 }
 
 static int number_from_float(lua_State* L) {
-    if (auto* floatValue = static_cast<LuaFloat*>(test_udata(L, 1, FLOAT_METATABLE))) {
+    if (auto* floatValue = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(floatValue->value) : check_precision(L, 2);
         auto* out = push_number_float(L, precision);

@@ -12,6 +12,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
+#include "module_helpers.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -831,7 +832,7 @@ static int db_transaction(lua_State* L) {
     lua_pushvalue(L, 2);                 // push fn
     lua_pushvalue(L, 1);                 // push db (self)
     int top_before = lua_gettop(L) - 2;  // stack top before fn + db
-    int status = lua_pcall(L, 1, LUA_MULTRET, 0);
+    int status = eryx_pcall(L, 1, LUA_MULTRET, 0);
     ud->inTransaction = false;
 
     if (status != 0) {
@@ -859,10 +860,7 @@ static int db_transaction(lua_State* L) {
 
 static int db_index(lua_State* L) {
     // Fall through to metatable for methods
-    lua_getmetatable(L, 1);
-    lua_pushvalue(L, 2);
-    lua_rawget(L, -2);
-    return 1;
+    return eryx_metatable_index(L);
 }
 
 // ── Statement methods ─────────────────────────────────────────────────────────
@@ -1049,10 +1047,7 @@ static int stmt_run(lua_State* L) {
 
 static int stmt_index(lua_State* L) {
     // Fall through to metatable for methods
-    lua_getmetatable(L, 1);
-    lua_pushvalue(L, 2);
-    lua_rawget(L, -2);
-    return 1;
+    return eryx_metatable_index(L);
 }
 
 // ── Module entry ──────────────────────────────────────────────────────────────

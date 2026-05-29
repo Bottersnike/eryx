@@ -973,8 +973,16 @@ static int main_complete_script_source(const std::string& displayName, const std
 static int main_complete_script(const std::filesystem::path& scriptPath,
                                 const std::vector<std::string>& cliArgs, const char* shell,
                                 const RuntimeExecutionConfig& runtimeConfig) {
+    namespace fs = std::filesystem;
+
     completion_debug_log("main_complete_script: path=" + scriptPath.string() +
                          " shell=" + (shell ? shell : ""));
+
+    std::error_code ec;
+    if (fs::is_directory(scriptPath, ec)) {
+        completion_debug_log("main_complete_script: script path is a directory");
+        return 0;
+    }
 
     std::ifstream f(scriptPath, std::ios::binary);
     if (!f) {
@@ -1277,6 +1285,14 @@ int main_builtin_script(const char* name, const std::vector<std::string>& cliArg
 
 int main_run(const char* filename, const RuntimeExecutionConfig& runtimeConfig,
              const std::vector<std::string>& cliArgs) {
+    namespace fs = std::filesystem;
+
+    std::error_code ec;
+    if (fs::is_directory(filename, ec)) {
+        std::cerr << "Failed to open file \"" << filename << "\": is a directory" << std::endl;
+        return 1;
+    }
+
     std::ifstream script_file(filename);
     if (!script_file.is_open()) {
         std::cerr << "Failed to open file \"" << filename << "\"" << std::endl;

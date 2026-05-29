@@ -1526,12 +1526,12 @@ static int l_parse(lua_State* L) {
 
         ParseResult result = Parser::parse(src, srcLen, names, allocator, opts);
 
-        // Serialise inside lua_pcall so a longjmp doesn't skip destructors.
+        // Serialise inside a protected call so a longjmp doesn't skip destructors.
         ParseSerializeCtx ctx{ &result, std::string_view(src, srcLen), captureComments,
                                collectSurroundingText };
         lua_pushcfunction(L, l_serialize_ast, "serialize_ast");
         lua_pushlightuserdata(L, &ctx);
-        status = lua_pcall(L, 1, 1, 0);
+        status = eryx_pcall(L, 1, 1, 0);
     }
     // Allocator, names, result all cleanly destroyed here.
 

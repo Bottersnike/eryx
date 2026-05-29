@@ -8,6 +8,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
+#include "module_helpers.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -737,10 +738,7 @@ static int dt_index(lua_State* L) {
     }
 
     // Fall through to metatable for methods
-    lua_getmetatable(L, 1);
-    lua_pushvalue(L, 2);
-    lua_rawget(L, -2);
-    return 1;
+    return eryx_metatable_index(L);
 }
 
 static int dt_format(lua_State* L) {
@@ -1015,10 +1013,7 @@ static int dur_index(lua_State* L) {
         lua_pushnumber(L, std::chrono::duration<double>(remainder).count());
     } else {
         // Fall through to metatable for methods
-        lua_getmetatable(L, 1);
-        lua_pushvalue(L, 2);
-        lua_rawget(L, -2);
-        return 1;
+        return eryx_metatable_index(L);
     }
 
     return 1;

@@ -587,16 +587,18 @@ static void write_pixel(LuaImage* i, int x, int y, Color c) {
 static void image_release(LuaImage* i) {
     if (!i || i->closed) return;
 
+    lua_State* L = i->L;
     if (i->bufferRef != LUA_NOREF) {
-        lua_unref(i->L, i->bufferRef);
+        if (L) lua_unref(L, i->bufferRef);
         i->bufferRef = LUA_NOREF;
     }
     if (i->metadataRef != LUA_NOREF) {
-        lua_unref(i->L, i->metadataRef);
+        if (L) lua_unref(L, i->metadataRef);
         i->metadataRef = LUA_NOREF;
     }
 
     i->pixels = nullptr;
+    i->L = nullptr;
     i->closed = true;
 }
 
@@ -934,7 +936,7 @@ static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t heigh
     i->format = format;
     i->stride = stride;
     i->pixels = nullptr;
-    i->L = L;
+    i->L = lua_mainthread(L);
     i->bufferRef = LUA_NOREF;
     i->metadataRef = metadataRef;
     i->closed = false;

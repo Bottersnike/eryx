@@ -622,7 +622,7 @@ static int eryx_pcall_cont(lua_State* L, int status) {
     return 2;
 }
 
-static int eryx_pcall(lua_State* L) {
+static int eryx_lua_pcall(lua_State* L) {
     luaL_checkany(L, 1);
 
     StkId func = L->base;
@@ -759,7 +759,7 @@ void exception_lib_register(lua_State* L) {
     lua_setglobal(L, "error");
 
     // Replace pcall and xpcall with yieldable variants that rethrow uncatchable exceptions
-    lua_pushcclosurek(L, eryx_pcall, "pcall", 0, eryx_pcall_cont);
+    lua_pushcclosurek(L, eryx_lua_pcall, "pcall", 0, eryx_pcall_cont);
     lua_setglobal(L, "pcall");
     lua_pushcclosurek(L, eryx_xpcall, "xpcall", 0, eryx_xpcall_cont);
     lua_setglobal(L, "xpcall");

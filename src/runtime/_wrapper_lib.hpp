@@ -71,6 +71,7 @@ ERYX_API void eryx_register_interrupt_callback(EryxRuntime* rt, EryxInterruptCal
                                                void* ctx);
 ERYX_API void eryx_unregister_interrupt_callback(EryxRuntime* rt, EryxInterruptCallback cb,
                                                  void* ctx);
+ERYX_API int eryx_pcall(lua_State* L, int nargs, int nresults, int errfunc);
 
 // Luau Analysis wrappers (lua_CFunction implementations living in LuauShared)
 ERYX_API int eryx_luau_check(lua_State* L);

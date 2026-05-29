@@ -892,7 +892,7 @@ static bool dbg_execute_in_frame(lua_State* L, int frameLevel, const std::string
         lua_setfenv(L, -2);
 
         int top = lua_gettop(L);
-        int status = lua_pcall(L, 0, LUA_MULTRET, 0);
+        int status = eryx_pcall(L, 0, LUA_MULTRET, 0);
         if (status == LUA_OK) {
             resultCount = lua_gettop(L) - top + 1;
             return true;

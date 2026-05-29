@@ -49,3 +49,6 @@
 [submodule "vendor/wxWidgets"]
 	path = vendor/wxWidgets
 	url = https://github.com/wxWidgets/wxWidgets
+[submodule "vendor/harfbuzz"]
+	path = vendor/harfbuzz
+	url = https://github.com/harfbuzz/harfbuzz

@@ -2,6 +2,7 @@
 
 #include "../runtime/lexception.hpp"
 #include "module_api.h"
+#include "module_helpers.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -39,28 +40,8 @@ int exception_format(lua_State* L) {
 }
 
 int exception_isInterrupt(lua_State* L) {
-    void* p = lua_touserdata(L, 1);
-    if (!p) {
-        lua_pushboolean(L, false);
-        return 1;
-    }
-    if (lua_getmetatable(L, 1)) {
-        lua_getfield(L, LUA_REGISTRYINDEX, EXCEPTION_METATABLE);
-        if (lua_rawequal(L, -1, -2)) {
-            lua_pop(L, 2);
-
-            if (strcmp(((LuaException*)p)->type, "interrupt") == 0) {
-                lua_pushboolean(L, true);
-            } else {
-                lua_pushboolean(L, false);
-            }
-
-            return 1;
-        }
-        lua_pop(L, 2);
-    }
-
-    lua_pushboolean(L, false);
+    LuaException* exception = eryx_testudata<LuaException>(L, 1, EXCEPTION_METATABLE);
+    lua_pushboolean(L, exception && strcmp(exception->type, "interrupt") == 0);
     return 1;
 }
 

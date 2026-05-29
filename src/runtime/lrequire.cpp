@@ -1045,7 +1045,7 @@ ERYX_API int eryx_lua_require(lua_State* L) {
     lua_pushstring(L, resolved->path.c_str());
     lua_pushstring(L, cacheKey.c_str());
 
-    if (lua_pcall(L, 3, LUA_MULTRET, 0) != LUA_OK) {
+    if (eryx_pcall(L, 3, LUA_MULTRET, 0) != LUA_OK) {
         eryx_require_reset_load_state(L, cacheKey.c_str());
         lua_error(L);
         return 0;

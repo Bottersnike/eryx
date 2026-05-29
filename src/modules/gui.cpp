@@ -12,6 +12,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
+#include "module_helpers.hpp"
 #include "wx/aboutdlg.h"
 #include "wx/app.h"
 #include "wx/artprov.h"
@@ -350,24 +351,11 @@ static T* check_udata(lua_State* L, int idx, const char* mt) {
     return static_cast<T*>(luaL_checkudata(L, idx, mt));
 }
 
-static void* test_udata(lua_State* L, int idx, const char* mt) {
-    idx = lua_absindex(L, idx);
-    void* userdata = lua_touserdata(L, idx);
-    if (!userdata || !lua_getmetatable(L, idx)) {
-        return nullptr;
-    }
-
-    luaL_getmetatable(L, mt);
-    bool matches = lua_rawequal(L, -1, -2);
-    lua_pop(L, 2);
-    return matches ? userdata : nullptr;
-}
-
 static GuiBase* check_any(lua_State* L, int idx) {
-    if (auto* p = static_cast<GuiBase*>(test_udata(L, idx, MT_LAYOUT))) return p;
-    if (auto* p = static_cast<GuiBase*>(test_udata(L, idx, MT_SPACER))) return p;
-    if (auto* p = static_cast<GuiBase*>(test_udata(L, idx, MT_WIDGET))) return p;
-    if (auto* p = static_cast<GuiBase*>(test_udata(L, idx, MT_STATUS))) return p;
+    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_LAYOUT)) return p;
+    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_SPACER)) return p;
+    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_WIDGET)) return p;
+    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_STATUS)) return p;
     luaL_error(L, "gui widget, spacer, or layout expected");
     return nullptr;
 }
@@ -554,8 +542,8 @@ static GuiWindow* check_dialog(lua_State* L, int idx) {
     return check_udata<GuiWindow>(L, idx, MT_DIALOG);
 }
 static GuiWindow* check_top_level(lua_State* L, int idx) {
-    if (auto* window = static_cast<GuiWindow*>(test_udata(L, idx, MT_WINDOW))) return window;
-    if (auto* dialog = static_cast<GuiWindow*>(test_udata(L, idx, MT_DIALOG))) return dialog;
+    if (auto* window = eryx_testudata<GuiWindow>(L, idx, MT_WINDOW)) return window;
+    if (auto* dialog = eryx_testudata<GuiWindow>(L, idx, MT_DIALOG)) return dialog;
     luaL_error(L, "gui.Window or gui.Dialog expected");
     return nullptr;
 }
@@ -1379,7 +1367,7 @@ static void bind_menu_callbacks(lua_State* L, GuiWindow* window, GuiMenuBar* bar
         auto* menu = check_menu(L, -1);
         for (int itemRef : menu->itemRefs) {
             lua_getref(L, itemRef);
-            if (auto* action = static_cast<GuiBase*>(test_udata(L, -1, MT_ACTION))) {
+            if (auto* action = eryx_testudata<GuiBase>(L, -1, MT_ACTION)) {
                 auto* actual = reinterpret_cast<GuiAction*>(action);
                 if (actual->callbackRef != LUA_NOREF && actual->item) {
                     window->frame->Bind(
@@ -1440,7 +1428,7 @@ static void attach_menubar(lua_State* L, GuiWindow* window, GuiMenuBar* bar) {
 
         for (int itemRef : menu->itemRefs) {
             lua_getref(L, itemRef);
-            if (test_udata(L, -1, MT_ACTION)) {
+            if (eryx_testudata(L, -1, MT_ACTION)) {
                 auto* action = check_action(L, -1);
                 if (!action->item) {
                     action->item = new wxMenuItem(menu->menu, action->id, to_wx(action->label));
@@ -2951,7 +2939,7 @@ static int menu_add(lua_State* L) {
         return 0;
     }
 
-    if (!test_udata(L, 2, MT_ACTION)) {
+    if (!eryx_testudata(L, 2, MT_ACTION)) {
         luaL_error(L, "menu:add expects gui.Action or nil");
     }
     menu->itemRefs.push_back(store_value_ref(L, 2));

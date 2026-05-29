@@ -670,6 +670,14 @@ ERYX_API void eryx_unregister_interrupt_callback(EryxRuntime* rt, EryxInterruptC
     }
 }
 
+ERYX_API int eryx_pcall(lua_State* L, int nargs, int nresults, int errfunc) {
+    int status = lua_pcall(L, nargs, nresults, errfunc);
+    if (status != LUA_OK) {
+        eryx_coerce_to_exception(L);
+    }
+    return status;
+}
+
 ERYX_API EryxRuntime* eryx_setup_runtime(uv_loop_t* loop, lua_State* GL) {
     EryxRuntime* rt = new EryxRuntime;
     rt->GL = GL;
@@ -2160,7 +2168,7 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     }
 
     // Set _VERSION
-    std::string version = "erxy ";
+    std::string version = "eryx ";
     version += LUAU_APPROX_VERSION;
     version += "-";
     version += LUAU_GIT_HASH;
