@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <csignal>
 #include <cstdarg>
 #include <cstdlib>
 #include <filesystem>
@@ -72,14 +73,40 @@ static volatile bool g_main_interrupted = false;
 static BOOL WINAPI main_ctrl_handler(DWORD type) {
     if (type == CTRL_C_EVENT || type == CTRL_BREAK_EVENT) {
         g_main_interrupted = true;
+        eryx_request_process_interrupt();
         return TRUE;
     }
     return FALSE;
 }
-// TODO: Re-register this handler so it actually works again
+
+static void main_signal_handler(int) {
+    g_main_interrupted = true;
+    eryx_request_process_interrupt();
+}
 #else
-static void main_sigint_handler(int) { g_main_interrupted = true; }
+static void main_sigint_handler(int) {
+    g_main_interrupted = true;
+    eryx_request_process_interrupt();
+}
 #endif
+
+static void install_main_interrupt_handler() {
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
+    DWORD mode = 0;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &mode)) {
+        SetConsoleMode(h, mode | ENABLE_PROCESSED_INPUT);
+    }
+
+    SetConsoleCtrlHandler(main_ctrl_handler, TRUE);
+    std::signal(SIGINT, main_signal_handler);
+#ifdef SIGBREAK
+    std::signal(SIGBREAK, main_signal_handler);
+#endif
+#else
+    std::signal(SIGINT, main_sigint_handler);
+#endif
+}
 
 static bool should_use_ansi_for_fd(int fd) {
     if (std::getenv("NO_COLOR")) return false;
@@ -351,6 +378,12 @@ int main_script(const char* filename, const std::string luauCode,
         host.rt->hasCliArgs = true;
         host.rt->cliArgs = cliArgs;
         eryx_runtime_host_install_sigint(&host);
+#ifdef _WIN32
+        // libuv installs its own console handler for SIGINT. Re-register our
+        // handler after it so Ctrl+C can set the VM interrupt flag immediately
+        // even while Lua is running and the uv loop cannot tick.
+        install_main_interrupt_handler();
+#endif
 
         // Make thread for the root module
         lua_State* L = eryx_runtime_host_create_thread(&host);
@@ -1320,6 +1353,7 @@ int main(int argc, const char* argv[]) {
     // On windows, we're going to force ANSI escape sequences in CMD
     enable_ansi_colors();
 #endif
+    install_main_interrupt_handler();
 
     // VFS entrypoint execution
     if (vfs_open()) {

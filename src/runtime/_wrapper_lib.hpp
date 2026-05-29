@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <deque>
 #include <string>
@@ -36,6 +37,7 @@ typedef struct EryxRuntime {
     std::unordered_map<int, uv_timer_t*> pendingTimers;  // threadRef -> timer (for cancel)
     uv_signal_t* sigint;                                 // optional signal handle for interrupt
     std::vector<std::pair<EryxInterruptCallback, void*>> interruptCallbacks;
+    std::atomic_bool interruptRequested = false;
 
     bool hasCliArgs = false;
     std::vector<std::string> cliArgs;
@@ -58,6 +60,7 @@ static EryxRuntime* eryx_get_runtime(lua_State* L) {
 
 ERYX_API bool lua_codegen_isSupported();
 ERYX_API void lua_codegen_create(lua_State* L);
+ERYX_API void eryx_request_process_interrupt();
 
 ERYX_API Luau::CodeGen::CodeGenCompilationResult lua_codegen_compile(
     lua_State* L, int idx, unsigned int flags, Luau::CodeGen::CompilationStats* stats);

@@ -9,6 +9,7 @@
 // Analysis headers (available because LuauShared links Luau.Analysis)
 #include <algorithm>
 #include <cctype>
+#include <csignal>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -55,6 +56,45 @@ extern "C" {
 #endif
 
 // CLI args offset – default 1 (skip just the exe name)
+static volatile std::sig_atomic_t g_process_interrupt_requested = 0;
+
+ERYX_API void eryx_request_process_interrupt() { g_process_interrupt_requested = 1; }
+
+static bool eryx_consume_process_interrupt() {
+    if (!g_process_interrupt_requested) {
+        return false;
+    }
+
+    g_process_interrupt_requested = 0;
+    return true;
+}
+
+static bool eryx_consume_runtime_interrupt(lua_State* L) {
+    if (!L) {
+        return false;
+    }
+
+    if (eryx_consume_process_interrupt()) {
+        return true;
+    }
+
+    EryxRuntime* rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
+    return rt && rt->interruptRequested.exchange(false);
+}
+
+static void eryx_default_interrupt_callback(lua_State* L, int gc) {
+    if (gc >= 0) {
+        return;
+    }
+
+    if (!eryx_consume_runtime_interrupt(L)) {
+        return;
+    }
+
+    eryx_exception_push_keyboard_interrupt(L);
+    lua_error(L);
+}
+
 ERYX_API bool lua_codegen_isSupported() { return Luau::CodeGen::isSupported(); }
 ERYX_API void lua_codegen_create(lua_State* L) { Luau::CodeGen::create(L); }
 ERYX_API Luau::CodeGen::CodeGenCompilationResult lua_codegen_compile(
@@ -683,6 +723,8 @@ ERYX_API EryxRuntime* eryx_setup_runtime(uv_loop_t* loop, lua_State* GL) {
     rt->GL = GL;
     rt->loop = loop;
     rt->sigint = nullptr;
+    rt->interruptRequested.store(false);
+    lua_callbacks(GL)->interrupt = eryx_default_interrupt_callback;
     return rt;
 }
 ERYX_API void eryx_push_thread(EryxRuntime* rt, int ref, int nargs, bool inError) {
@@ -726,6 +768,8 @@ ERYX_API bool eryx_cancel_thread(EryxRuntime* rt, lua_State* GL, lua_State* targ
 
 ERYX_API void eryx_interrupt_runtime(EryxRuntime* rt) {
     if (!rt) return;
+
+    rt->interruptRequested.store(true);
 
     // Stop and close any pending timers, and queue their threads with an error
     for (auto it = rt->pendingTimers.begin(); it != rt->pendingTimers.end();) {

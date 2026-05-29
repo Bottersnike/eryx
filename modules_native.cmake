@@ -197,6 +197,22 @@ add_luau_module(image src/modules/image.cpp src/modules/image.luau
                    "${JPEGTURBO_DIR}/src"
 )
 
+if(TARGET freetype AND TARGET harfbuzz)
+    set(FONT_EXTRA_LIBS freetype harfbuzz)
+    if(APPLE)
+        list(APPEND FONT_EXTRA_LIBS
+            "-framework CoreText"
+            "-framework CoreFoundation"
+        )
+    endif()
+
+    add_luau_module(font src/modules/font.cpp src/modules/font.luau
+        EXTRA_LIBS ${FONT_EXTRA_LIBS}
+        EXTRA_INCLUDES "${FREETYPE_DIR}/include" "${VENDOR_DIR}/harfbuzz/src"
+                       "${PROJECT_SOURCE_DIR}/src/compat/msvc"
+    )
+endif()
+
 if(ERYX_USE_PCRE2)
     add_luau_module(_native/regex src/modules/regex.cpp src/modules/_native/stub.luau
         EXTRA_LIBS pcre2-8-static

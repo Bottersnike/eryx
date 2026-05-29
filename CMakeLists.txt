@@ -501,6 +501,12 @@ add_executable(eryx
     src/main.cpp
 )
 set_target_properties(eryx PROPERTIES CXX_STANDARD 23)
+if(UNIX AND NOT APPLE AND (NOT ERYX_EMBED OR ERYX_HYBRID))
+    set_target_properties(eryx PROPERTIES
+        BUILD_RPATH "$ORIGIN"
+        INSTALL_RPATH "$ORIGIN"
+    )
+endif()
 if(MSVC)  # The new solver needs a rediculous amount of stack
     target_link_options(eryx PRIVATE "/STACK:4194304")
 endif()
