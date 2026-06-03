@@ -2,7 +2,5 @@ children:
   - getting-started
   - cli
   - writing-code
-  - ip
   - libs
-  - http
-  - crypto
+  - misc
