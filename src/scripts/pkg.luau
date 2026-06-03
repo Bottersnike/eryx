@@ -8,7 +8,7 @@ local os = require("@eryx/os")
 local semver = require("@eryx/semver")
 local stdio = require("@eryx/stdio")
 
-local parser = argparse.Parser.new("pkg", "Erxy package manager")
+local parser = argparse.Parser.new("pkg", "Eryx package manager")
 local install = parser:addSubCommand("install", "Install all packages")
 install:addFlag("dev", nil, "Also include dev-dependencies")
 local update = parser:addSubCommand("update", "Re-resolve and update all packages, or selected dependencies")

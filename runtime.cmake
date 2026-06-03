@@ -41,6 +41,38 @@ if(NOT LUAU_APPROX_VERSION_RESULT EQUAL 0)
     set(LUAU_APPROX_VERSION "unknown")
 endif()
 
+if(LUAU_APPROX_VERSION MATCHES "^([0-9]+)\\.([0-9]+)")
+    set(LUAU_VERSION_MAJOR ${CMAKE_MATCH_1})
+    set(LUAU_VERSION_MINOR ${CMAKE_MATCH_2})
+else()
+    set(LUAU_VERSION_MAJOR 0)
+    set(LUAU_VERSION_MINOR 0)
+endif()
+
+# Inject eryx short git hash
+execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE ERYX_GIT_HASH_RESULT
+    OUTPUT_VARIABLE ERYX_GIT_HASH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT ERYX_GIT_HASH_RESULT EQUAL 0)
+    set(ERYX_GIT_HASH "unknown")
+endif()
+
+# Inject eryx git branch
+execute_process(
+    COMMAND ${GIT_EXECUTABLE} rev-parse --abbrev-ref HEAD
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE ERYX_GIT_BRANCH_RESULT
+    OUTPUT_VARIABLE ERYX_GIT_BRANCH
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NOT ERYX_GIT_BRANCH_RESULT EQUAL 0)
+    set(ERYX_GIT_BRANCH "unknown")
+endif()
+
 # In shared mode (normal or hybrid), Luau symbols must be dllexported so
 # EryxShared can re-export them.  In full-embed mode this is unnecessary.
 if(ERYX_EMBED AND NOT ERYX_HYBRID)
@@ -112,6 +144,10 @@ target_include_directories(EryxShared PRIVATE
 target_compile_definitions(EryxShared PRIVATE
     LUAU_GIT_HASH="${LUAU_GIT_HASH}"
     LUAU_APPROX_VERSION="${LUAU_APPROX_VERSION}"
+    LUAU_VERSION_MAJOR=${LUAU_VERSION_MAJOR}
+    LUAU_VERSION_MINOR=${LUAU_VERSION_MINOR}
+    ERYX_GIT_HASH="${ERYX_GIT_HASH}"
+    ERYX_GIT_BRANCH="${ERYX_GIT_BRANCH}"
 )
 
 if(NOT ERYX_EMBED OR ERYX_HYBRID)

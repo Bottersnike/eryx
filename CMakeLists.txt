@@ -513,6 +513,7 @@ endif()
 
 target_compile_definitions(eryx PRIVATE LUAU_GIT_HASH="${LUAU_GIT_HASH}")
 target_compile_definitions(eryx PRIVATE LUAU_APPROX_VERSION="${LUAU_APPROX_VERSION}")
+target_compile_definitions(eryx PRIVATE ERYX_GIT_HASH="${ERYX_GIT_HASH}")
 
 target_link_libraries(eryx PRIVATE
     EryxShared
@@ -529,6 +530,7 @@ if(WIN32)
         ntdll.lib
         ole32.lib
         oleaut32.lib
+        dbghelp.lib
     )
 endif()
 

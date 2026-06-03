@@ -18,10 +18,6 @@ Sequence-style transforms such as `filter`, `unique`, and `reverse` produce
 dense array-like results or dense iterator indices. `flatten`, by contrast,
 preserves the yielded numeric keys from the underlying iterable.
 
-The `iter.Iterable<T, any>` type can be used to describe any iterable
-sequence that results in items of type `T`. `iter.SimpleIterator<T>` on the
-other hand describes the iterator types returned by these functions.
-
 ```luau
 local iter = require("@eryx/iter")
 
@@ -185,6 +181,44 @@ function iter.flatten<T, I>(iterable: Iterable<T, I>): { T }
 	return array
 end
 
+--[=[
+Helper for writing `coroutine.yield`-based generators.
+
+For example:
+
+```luau
+local function foo()
+	return iter.generator(function()
+		coroutine.yield(1)
+		coroutine.yield(2)
+		coroutine.yield(3)
+	end)
+end
+for i in foo() do
+	print(i)  -- Prints `1` then `2` then `3`
+end
+```
+
+@param fn The yield-based generator
+@return A Luau-compatible iterator
+]=]
+function iter.generator<T>(fn: () -> ()): SimpleIterator<T>
+	local co = coroutine.create(fn)
+
+	return function()
+		local resume = table.pack(coroutine.resume(co))
+		local ok = resume[1]
+		if not ok then
+			error(resume[2])
+		end
+		if coroutine.status(co) == "dead" then
+			return nil, nil
+		end
+		table.remove(resume, 1)
+		return table.unpack(resume :: any)
+	end
+end
+
 --- Converts an array into a stateful iterator function.
 --- @param array Array to iterate over.
 --- @return Iterator that yields sequential array indices and values.
@@ -331,6 +365,257 @@ function iter.any<T, I>(iterable: Iterable<T, I>, match: (T) -> boolean): boolea
 		end
 	end
 	return false
+end
+
+--[=[
+Yields successive `n`-length permutations of elements from `items`.
+
+Order matters: `{ "a", "b" }` and `{ "b", "a" }` are distinct permutations.
+Each yielded value is a new array. When `n` equals `#items` (the default),
+every possible ordering of the whole sequence is produced.
+
+```luau
+for _, perm in iter.permutations({ "a", "b", "c" }) do
+    print(table.concat(perm, ""))
+    -- abc, acb, bac, bca, cab, cba
+end
+```
+
+```luau
+for _, perm in iter.permutations({ 1, 2, 3, 4 }, 2) do
+    print(table.concat(perm, ""))
+    -- 12, 13, 14, 21, 23, 24, 31, 32, 34, 41, 42, 43
+end
+```
+
+@param items Source array to draw elements from.
+@param n Length of each permutation. Defaults to `#items`. Must be non-negative and no greater than `#items`.
+@return Iterator that yields `(index, permutation)` pairs until all permutations are exhausted.
+]=]
+function iter.permutations<T>(items: { T }, n: number?): SimpleIterator<{ T }>
+	local len = #items
+	local n = n or len
+
+	if n < 0 then
+		error("n must be non-negative")
+	end
+
+	if n > len then
+		return function()
+			return nil, nil :: any
+		end
+	end
+
+	local indices = {}
+	for i = 1, len do
+		indices[i] = i
+	end
+
+	local cycles = {}
+	for i = 1, n do
+		cycles[i] = len - i + 1
+	end
+
+	local function makeResult(): { T }
+		local result = {}
+		for i = 1, n do
+			result[i] = items[indices[i]]
+		end
+		return result
+	end
+
+	return iter.generator<<{ T }>>(function()
+		local count = 1
+		coroutine.yield(count, makeResult())
+
+		while len > 0 do
+			local didYield = false
+
+			for i = n, 1, -1 do
+				cycles[i] -= 1
+
+				if cycles[i] == 0 then
+					local first = indices[i]
+					for j = i, len - 1 do
+						indices[j] = indices[j + 1]
+					end
+					indices[len] = first
+
+					cycles[i] = len - i + 1
+				else
+					local j = cycles[i]
+					local swapIndex = len - j + 1
+
+					indices[i], indices[swapIndex] = indices[swapIndex], indices[i]
+
+					count += 1
+					coroutine.yield(count, makeResult())
+					didYield = true
+					break
+				end
+			end
+
+			if not didYield then
+				return
+			end
+		end
+	end)
+end
+
+--[=[
+Yields successive `n`-length combinations of elements from `items`, without replacement.
+
+Order does not matter: `{ "a", "b" }` and `{ "b", "a" }` are the same combination and only
+the first is yielded. Combinations are emitted in lexicographic order relative to the
+position of each element in the source array. Each yielded value is a new array.
+
+```luau
+for _, combo in iter.combinations({ "a", "b", "c", "d" }, 2) do
+    print(table.concat(combo, ""))
+    -- ab, ac, ad, bc, bd, cd
+end
+```
+
+@param items Source array to draw elements from.
+@param n Length of each combination. Must be non-negative and no greater than `#items`.
+@return Iterator that yields `(index, combination)` pairs until all combinations are exhausted.
+]=]
+function iter.combinations<T>(items: { T }, n: number): SimpleIterator<{ T }>
+	local len = #items
+
+	if n < 0 then
+		error("n must be non-negative")
+	end
+
+	if n > len then
+		return function()
+			return nil, nil :: any
+		end
+	end
+
+	local indices = {}
+	for i = 1, n do
+		indices[i] = i
+	end
+
+	local function makeResult(): { T }
+		local result = {}
+		for i = 1, n do
+			result[i] = items[indices[i]]
+		end
+		return result
+	end
+
+	return iter.generator<<{ T }>>(function()
+		local count = 1
+		coroutine.yield(count, makeResult())
+
+		while true do
+			local i = n
+
+			while i >= 1 do
+				if indices[i] ~= i + len - n then
+					break
+				end
+				i -= 1
+			end
+
+			if i == 0 then
+				return
+			end
+
+			indices[i] += 1
+
+			for j = i + 1, n do
+				indices[j] = indices[j - 1] + 1
+			end
+
+			count += 1
+			coroutine.yield(count, makeResult())
+		end
+	end)
+end
+
+--[=[
+Yields the Cartesian product of one or more arrays.
+
+Each yielded tuple contains one element chosen from each input array, in the order the
+arrays were passed. The rightmost array advances fastest. If any input array is empty,
+no tuples are produced. Each yielded value is a new array.
+
+```luau
+for _, pair in iter.product({ "x", "y" }, { 1, 2, 3 }) do
+    print(pair[1], pair[2])
+    -- x 1, x 2, x 3, y 1, y 2, y 3
+end
+```
+
+```luau
+-- Repeating the same pool simulates combinations with replacement
+for _, pair in iter.product({ 1, 2, 3 }, { 1, 2, 3 }) do
+    print(pair[1], pair[2])
+    -- 1 1, 1 2, 1 3, 2 1, 2 2, 2 3, 3 1, 3 2, 3 3
+end
+```
+
+@param ... One or more source arrays. All elements must share the same type `T`.
+@return Iterator that yields `(index, tuple)` pairs covering every combination across all input arrays.
+]=]
+function iter.product<T>(...: { T }): SimpleIterator<{ T }>
+	local pools = { ... }
+
+	for _, pool in pools do
+		if #pool == 0 then
+			return function()
+				return nil, nil :: any
+			end
+		end
+	end
+
+	local poolCount = #pools
+	local indices = {}
+	for i = 1, poolCount do
+		indices[i] = 1
+	end
+
+	local function makeResult(): { T }
+		local result = {}
+		for i = 1, poolCount do
+			result[i] = pools[i][indices[i]]
+		end
+		return result
+	end
+
+	return iter.generator<<{ T }>>(function()
+		local count = 1
+
+		if poolCount == 0 then
+			coroutine.yield(count, {})
+			return
+		end
+
+		while true do
+			coroutine.yield(count, makeResult())
+
+			local i = poolCount
+			while i >= 1 do
+				indices[i] += 1
+
+				if indices[i] <= #pools[i] then
+					break
+				end
+
+				indices[i] = 1
+				i -= 1
+			end
+
+			if i == 0 then
+				return
+			end
+
+			count += 1
+		end
+	end)
 end
 
 return table.freeze(iter)

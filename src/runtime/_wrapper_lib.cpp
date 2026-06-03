@@ -42,6 +42,7 @@
 #include "lprint.hpp"
 #include "lrequire.hpp"
 #include "lresolve.hpp"
+#include "lua.h"
 #ifndef ERYX_EMBED
 extern "C" {
 #endif
@@ -1470,8 +1471,31 @@ struct EryxFileResolver : Luau::FileResolver {
         lua_State* CL = getHelperState();
         RequireContext requireContext = context ? requireContextForModuleName(context->name)
                                                 : requireContextForModuleName(mainModule);
-        auto resolved = eryx_resolve_module(CL, requireContext, requirePath);
 
+        // eryx_resolve_module may call luaL_error for invalid aliases. Wrap in
+        // lua_cpcall so a Lua error is caught rather than hitting abort() from
+        // luaD_throw finding no protected-call frame.
+        struct ResolveArgs {
+            RequireContext* ctx;
+            const std::string* path;
+            std::optional<LocatedModule> result;
+        } args{ &requireContext, &requirePath, std::nullopt };
+
+        int status = lua_cpcall(
+            CL,
+            [](lua_State* L) -> int {
+                auto* a = static_cast<ResolveArgs*>(lua_touserdata(L, 1));
+                a->result = eryx_resolve_module(L, *a->ctx, *a->path);
+                return 0;
+            },
+            &args);
+
+        if (status != 0) {
+            lua_pop(CL, 1);  // discard error message
+            return std::nullopt;
+        }
+
+        auto resolved = args.result;
         if (!resolved) return std::nullopt;
 
         switch (resolved->type) {
@@ -2212,12 +2236,64 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     }
 
     // Set _VERSION
-    std::string version = "eryx ";
-    version += LUAU_APPROX_VERSION;
+    std::string version = LUAU_APPROX_VERSION;
     version += "-";
-    version += LUAU_GIT_HASH;
-    lua_pushstring(L, version.c_str());
+    version += ERYX_GIT_HASH;
+    lua_pushstring(L, ("eryx " + version).c_str());
     lua_setglobal(L, "_VERSION");
+
+    // Build _RUNTIME table
+    lua_newtable(L);
+    lua_pushstring(L, "eryx");
+    lua_setfield(L, -2, "name");
+    lua_pushstring(L, "https://eryx.bsnk.me");
+    lua_setfield(L, -2, "url");
+    lua_newtable(L);  // version
+    lua_pushstring(L, version.c_str());
+    lua_setfield(L, -2, "display");
+    // We don't have proper semantic versions yet
+    // lua_newtable(L);
+    // lua_pushnumber(L, -1);
+    // lua_setfield(L, -2, "major");
+    // lua_pushnumber(L, -1);
+    // lua_setfield(L, -2, "minor");
+    // lua_pushnumber(L, -1);
+    // lua_setfield(L, -2, "patch");
+    // lua_pushstring(L, "");
+    // lua_setfield(L, -2, "prerelease");
+    // lua_pushstring(L, "");
+    // lua_setfield(L, -2, "build");
+    // lua_setreadonly(L, -1, true);
+    // lua_setfield(L, -2, "semantic");
+    lua_newtable(L);  // git
+    lua_pushstring(L, "https://github.com/Bottersnike/eryx");
+    lua_setfield(L, -2, "url");
+    lua_pushstring(L, ERYX_GIT_HASH);
+    lua_setfield(L, -2, "commit");
+    lua_pushstring(L, ERYX_GIT_BRANCH);
+    lua_setfield(L, -2, "branch");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "git");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "version");
+    lua_setreadonly(L, -1, true);
+    lua_setglobal(L, "_RUNTIME");
+
+    // Build _LUAU table
+    lua_newtable(L);
+    lua_pushstring(L, "https://github.com/luau-lang/luau");
+    lua_setfield(L, -2, "url");
+    lua_newtable(L);  // version
+    lua_pushstring(L, LUAU_APPROX_VERSION);
+    lua_setfield(L, -2, "display");
+    lua_pushnumber(L, LUAU_VERSION_MAJOR);
+    lua_setfield(L, -2, "major");
+    lua_pushnumber(L, LUAU_VERSION_MINOR);
+    lua_setfield(L, -2, "minor");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "version");
+    lua_setreadonly(L, -1, true);
+    lua_setglobal(L, "_LUAU");
 
     // Sandbox all libraries
     // ! REQUIRED FOR NATIVE CODE GEN

@@ -65,6 +65,150 @@ static void enable_ansi_colors() {
 #endif
 
 // ---------------------------------------------------------------------------
+// Crash handler (Windows only)
+// ---------------------------------------------------------------------------
+#ifdef _WIN32
+#include <dbghelp.h>
+
+// WriteFile directly — safe in crash context, guaranteed to flush, no heap.
+static void eryx_crash_write(const char* s, DWORD len) {
+    HANDLE h = GetStdHandle(STD_ERROR_HANDLE);
+    if (h && h != INVALID_HANDLE_VALUE) WriteFile(h, s, len, nullptr, nullptr);
+}
+
+static void eryx_crash_puts(const char* s) { eryx_crash_write(s, static_cast<DWORD>(strlen(s))); }
+
+static void eryx_crash_printf(const char* fmt, ...) {
+    char buf[512];
+    va_list ap;
+    va_start(ap, fmt);
+    int n = vsnprintf(buf, sizeof(buf), fmt, ap);
+    va_end(ap);
+    if (n > 0)
+        eryx_crash_write(buf, static_cast<DWORD>(n < (int)sizeof(buf) ? n : sizeof(buf) - 1));
+}
+
+static void eryx_print_stack_trace(CONTEXT* ctx) {
+    HANDLE process = GetCurrentProcess();
+    HANDLE thread = GetCurrentThread();
+
+    SymSetOptions(SYMOPT_LOAD_LINES | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+    SymInitialize(process, nullptr, TRUE);
+
+    STACKFRAME64 frame = {};
+#ifdef _M_AMD64
+    DWORD machine = IMAGE_FILE_MACHINE_AMD64;
+    frame.AddrPC.Offset = ctx->Rip;
+    frame.AddrFrame.Offset = ctx->Rbp;
+    frame.AddrStack.Offset = ctx->Rsp;
+#else
+    DWORD machine = IMAGE_FILE_MACHINE_I386;
+    frame.AddrPC.Offset = ctx->Eip;
+    frame.AddrFrame.Offset = ctx->Ebp;
+    frame.AddrStack.Offset = ctx->Esp;
+#endif
+    frame.AddrPC.Mode = frame.AddrFrame.Mode = frame.AddrStack.Mode = AddrModeFlat;
+
+    char symBuf[sizeof(SYMBOL_INFO) + MAX_SYM_NAME];
+    SYMBOL_INFO* sym = reinterpret_cast<SYMBOL_INFO*>(symBuf);
+    sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+    sym->MaxNameLen = MAX_SYM_NAME;
+
+    IMAGEHLP_LINE64 line;
+    line.SizeOfStruct = sizeof(IMAGEHLP_LINE64);
+
+    eryx_crash_puts("Stack trace:\n");
+    for (int i = 0; i < 48; ++i) {
+        if (!StackWalk64(machine, process, thread, &frame, ctx, nullptr, SymFunctionTableAccess64,
+                         SymGetModuleBase64, nullptr))
+            break;
+        if (!frame.AddrPC.Offset) break;
+
+        DWORD64 symOff = 0;
+        DWORD lineOff = 0;
+        if (SymFromAddr(process, frame.AddrPC.Offset, &symOff, sym)) {
+            if (SymGetLineFromAddr64(process, frame.AddrPC.Offset, &lineOff, &line))
+                eryx_crash_printf("  #%-2d  %s (%s:%lu)\n", i, sym->Name, line.FileName,
+                                  line.LineNumber);
+            else
+                eryx_crash_printf("  #%-2d  %s+0x%llx\n", i, sym->Name,
+                                  static_cast<unsigned long long>(symOff));
+        } else {
+            eryx_crash_printf("  #%-2d  0x%016llx\n", i,
+                              static_cast<unsigned long long>(frame.AddrPC.Offset));
+        }
+    }
+
+    SymCleanup(process);
+}
+
+static volatile LONG g_crash_entered = 0;
+
+static void eryx_do_crash(EXCEPTION_POINTERS* ep) {
+    // Re-entrancy guard: if the crash handler itself crashes, just die immediately.
+    if (InterlockedCompareExchange(&g_crash_entered, 1, 0) != 0)
+        TerminateProcess(GetCurrentProcess(), 3);
+
+    eryx_crash_printf("\n*** ERYX CRASH: exception 0x%08lX at 0x%p ***\n",
+                      ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord->ExceptionAddress);
+
+    // SymInitialize and StackWalk64 may themselves crash on heap corruption,
+    // so protect the entire trace with an SEH frame.
+    __try {
+        eryx_print_stack_trace(ep->ContextRecord);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        eryx_crash_puts("  (stack trace unavailable)\n");
+    }
+}
+
+// Fires for truly unhandled exceptions (after all frame-based handlers pass).
+static LONG WINAPI eryx_unhandled_exception_filter(EXCEPTION_POINTERS* ep) {
+    eryx_do_crash(ep);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
+// Vectored handler: fires before frame-based handlers, so DLLs overriding
+// SetUnhandledExceptionFilter can't suppress us. Only act on non-continuable
+// exceptions so we don't interfere with normal C++ try/catch.
+static LONG WINAPI eryx_vectored_exception_handler(EXCEPTION_POINTERS* ep) {
+    if (ep->ExceptionRecord->ExceptionFlags & EXCEPTION_NONCONTINUABLE) {
+        // Skip C++ exceptions (0xE06D7363) — those are always non-continuable
+        // but will be handled by catch blocks or the unhandled filter.
+        if (ep->ExceptionRecord->ExceptionCode != 0xE06D7363U) {
+            eryx_do_crash(ep);
+            TerminateProcess(GetCurrentProcess(), 1);
+        }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+static void eryx_abort_signal_handler(int) {
+    eryx_crash_puts("\n*** ERYX CRASH: abort() ***\n");
+    CONTEXT ctx = {};
+    ctx.ContextFlags = CONTEXT_FULL;
+    RtlCaptureContext(&ctx);
+    __try {
+        eryx_print_stack_trace(&ctx);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        eryx_crash_puts("  (stack trace unavailable)\n");
+    }
+    _exit(3);
+}
+
+static void install_crash_handler() {
+    // Suppress the Windows "Abort / Retry / Ignore" and WER crash popup.
+    SetErrorMode(SEM_NOGPFAULTERRORBOX | SEM_FAILCRITICALERRORS);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+
+    // Belt-and-suspenders: VEH fires before any frame handler and can't be
+    // overridden by DLLs; SetUnhandledExceptionFilter catches the rest.
+    AddVectoredExceptionHandler(1, eryx_vectored_exception_handler);
+    SetUnhandledExceptionFilter(eryx_unhandled_exception_filter);
+    std::signal(SIGABRT, eryx_abort_signal_handler);
+}
+#endif
+
+// ---------------------------------------------------------------------------
 // Ctrl+C / Ctrl+Break handler
 // ---------------------------------------------------------------------------
 static volatile bool g_main_interrupted = false;
@@ -1342,6 +1486,10 @@ int main(int argc, const char* argv[]) {
     // puts("Wait for debugger");
     // while (!IsDebuggerPresent());
     // puts("go");
+
+#ifdef _WIN32
+    install_crash_handler();
+#endif
 
     ProcessCliArgs processCliArgs = build_process_cli_args(argc, argv);
     argc = processCliArgs.argc();
