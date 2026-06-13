@@ -220,3 +220,16 @@ add_luau_script_module(caching src/modules/caching.luau)
 add_luau_script_module(uri src/modules/uri.luau)
 add_luau_script_module(archive/tar src/modules/archive/tar.luau)
 add_luau_script_module(glob src/modules/glob.luau)
+
+add_luau_script_module(ip/
+    src/modules/ip/address4.luau
+    src/modules/ip/address6.luau
+    src/modules/ip/interface4.luau
+    src/modules/ip/interface6.luau
+    src/modules/ip/network4.luau
+    src/modules/ip/network6.luau
+    src/modules/ip/range4.luau
+    src/modules/ip/range6.luau
+    src/modules/ip/utils.luau
+    src/modules/ip/init.luau
+)

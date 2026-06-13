@@ -50,6 +50,10 @@ export type CheckOptions = {
 	definitions: { DefinitionSource }?,
 	--- Absolute path of the source file. Enables `require()` resolution and `.luaurc` discovery.
 	filePath: string?,
+	--- Solver version. `"new"` enables the new constraint-based solver; `"old"` uses the legacy solver.
+	solver: ("new" | "old")?,
+	--- Luau fast-flag overrides applied after the default flag set. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type TypeErrorInfo = {
@@ -137,6 +141,10 @@ export type TypeAtOptions = {
 	filePath: string?,
 	--- If true, return a structured `TypeAtResult` instead of just a string.
 	detailed: boolean?,
+	--- Solver version. `"new"` enables the new constraint-based solver; `"old"` uses the legacy solver.
+	solver: ("new" | "old")?,
+	--- Luau fast-flag overrides applied after the default flag set. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type ModuleTypeOptions = {
@@ -148,6 +156,10 @@ export type ModuleTypeOptions = {
 	filePath: string?,
 	--- If true, return a structured `ModuleTypeResult` instead of just a string.
 	detailed: boolean?,
+	--- Solver version. `"new"` enables the new constraint-based solver; `"old"` uses the legacy solver.
+	solver: ("new" | "old")?,
+	--- Luau fast-flag overrides applied after the default flag set. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type AutocompleteOptions = {
@@ -159,6 +171,10 @@ export type AutocompleteOptions = {
 	filePath: string?,
 	--- If true, include a `typeDetail` field for each typed completion entry.
 	detailed: boolean?,
+	--- Solver version. `"new"` enables the new constraint-based solver; `"old"` uses the legacy solver.
+	solver: ("new" | "old")?,
+	--- Luau fast-flag overrides applied after the default flag set. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type AutocompleteEntry = {

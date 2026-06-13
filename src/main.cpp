@@ -272,11 +272,13 @@ static constexpr const char* ERYX_FORWARD_RUNTIME_ARGS_ENV = "ERYX_FORWARD_RUNTI
 struct RuntimeCliOverrides {
     std::optional<int> optimizationLevel;
     std::optional<EryxNativeCodegenMode> nativeCodegenMode;
+    std::vector<std::pair<std::string, std::string>> flagOverrides;
 };
 
 struct RuntimeExecutionConfig {
     int optimizationLevel = 2;
     EryxNativeCodegenMode nativeCodegenMode = EryxNativeCodegenMode::All;
+    std::vector<std::pair<std::string, std::string>> flagOverrides;
 };
 
 struct RuntimeCliParseResult {
@@ -408,6 +410,25 @@ static RuntimeCliParseResult parse_runtime_cli_overrides(int count, int startInd
             continue;
         }
 
+        if (arg == "--flag") {
+            if (result.nextIndex + 1 >= count) {
+                result.ok = false;
+                result.error = "--flag requires an argument (Name=value)";
+                return result;
+            }
+            std::string_view nameValue = getArg(result.nextIndex + 1);
+            auto eq = nameValue.find('=');
+            if (eq == std::string_view::npos) {
+                result.ok = false;
+                result.error = "--flag argument must be in the form Name=value";
+                return result;
+            }
+            result.overrides.flagOverrides.emplace_back(std::string(nameValue.substr(0, eq)),
+                                                        std::string(nameValue.substr(eq + 1)));
+            result.nextIndex += 2;
+            continue;
+        }
+
         if (arg.size() >= 2 && arg[0] == '-' && arg[1] == 'O') {
             result.ok = false;
             result.error = "Unsupported optimization level '" + std::string(arg) +
@@ -430,6 +451,9 @@ static RuntimeCliOverrides merge_runtime_cli_overrides(const RuntimeCliOverrides
     if (override.nativeCodegenMode.has_value()) {
         merged.nativeCodegenMode = override.nativeCodegenMode;
     }
+    for (const auto& kv : override.flagOverrides) {
+        merged.flagOverrides.push_back(kv);
+    }
     return merged;
 }
 
@@ -442,6 +466,7 @@ static RuntimeExecutionConfig resolve_runtime_execution_config(
     if (overrides.nativeCodegenMode.has_value()) {
         config.nativeCodegenMode = *overrides.nativeCodegenMode;
     }
+    config.flagOverrides = overrides.flagOverrides;
     return config;
 }
 
@@ -464,6 +489,10 @@ static std::vector<std::string> render_runtime_cli_flags(const RuntimeCliOverrid
                 break;
         }
     }
+    for (const auto& [name, value] : overrides.flagOverrides) {
+        flags.push_back("--flag");
+        flags.push_back(name + "=" + value);
+    }
     return flags;
 }
 
@@ -483,6 +512,8 @@ static void apply_runtime_execution_config(EryxRuntime* rt, const RuntimeExecuti
     rt->luauOptimizationLevel = config.optimizationLevel;
     rt->luauDebugLevel = 1;
     rt->luauTypeInfoLevel = 1;
+    for (const auto& [name, value] : config.flagOverrides)
+        eryx_apply_flag_string(name.c_str(), value.c_str());
 }
 
 RunState eryx_run_to_completion(EryxRuntimeHost* host) {
@@ -603,6 +634,8 @@ static void print_main_help(const char* programName) {
     std::cout << "  --no-native                  Disable native codegen\n";
     std::cout
         << "  --native-only-specified      Only native-compile chunks marked with --!native\n";
+    std::cout
+        << "  --flag Name=value            Set a Luau fast flag (e.g. --flag LuauSolverV2=true)\n";
     std::cout << "\n";
     std::cout << "Commands:\n";
     std::cout << "  run                          Resolve and run project/dependency scripts\n";

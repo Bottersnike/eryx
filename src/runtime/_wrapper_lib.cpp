@@ -1617,7 +1617,9 @@ ERYX_API int eryx_luau_check(lua_State* L) {
 
     const char* mainModule = filePath ? filePath : "=main";
 
+    eryx_enable_all_luau_flags();
     if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
+    eryx_apply_user_flags_opt(L, 2);
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -1750,7 +1752,9 @@ ERYX_API int eryx_luau_typeAt(lua_State* L) {
 
     const char* mainModule = filePath ? filePath : "=main";
 
+    eryx_enable_all_luau_flags();
     if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
+    eryx_apply_user_flags_opt(L, 4);
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -1889,7 +1893,9 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L) {
 
     const char* mainModule = filePath ? filePath : "=main";
 
+    eryx_enable_all_luau_flags();
     if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
+    eryx_apply_user_flags_opt(L, 4);
 
     // Configure type checker
     Luau::FrontendOptions frontendOptions;
@@ -2068,7 +2074,9 @@ ERYX_API int eryx_luau_typeofModule(lua_State* L) {
 
     const char* mainModule = filePath ? filePath : "=main";
 
+    eryx_enable_all_luau_flags();
     if (solverMode && *solverMode == Luau::SolverMode::New) analysis_apply_new_solver_flags();
+    eryx_apply_user_flags_opt(L, 2);
 
     Luau::FrontendOptions frontendOptions;
     frontendOptions.retainFullTypeGraphs = detailed;

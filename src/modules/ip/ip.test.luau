@@ -1,4 +1,4 @@
-local ip = require("@self/ip")
+local ip = require("@self")
 local test = require("@eryx/test")
 
 local suite = test.Suite.new("ip")
@@ -417,6 +417,150 @@ suite:test("error cases for invalid operators and bounds", function()
 		local _ = ip.IPv6Range.new("2001:db8::2", "2001:db8::1")
 	end)
 	test.expect(ok6):toBeFalse()
+end)
+
+suite:test("compressed string trailing-zero-run rendering", function()
+	-- n6() was masking a bug where any zero run extending to the last hextet
+	-- produced an extra trailing colon (e.g. "::" -> ":::", "2001:db8::" -> "2001:db8:::").
+	-- These tests assert exact output without n6() normalisation.
+	test.expect(tostring(ip.address("::") :: ip.IPv6Address)):toBe("::")
+	test.expect(tostring(ip.address("1::") :: ip.IPv6Address)):toBe("1::")
+	test.expect(tostring(ip.address("2001:db8::") :: ip.IPv6Address)):toBe("2001:db8::")
+	test.expect(tostring(ip.address("fe80::") :: ip.IPv6Address)):toBe("fe80::")
+	test.expect(tostring(ip.network("2001:db8::/32") :: ip.IPv6Network)):toBe("2001:db8::/32")
+	test.expect(tostring((ip.network("2001:db8::/32") :: ip.IPv6Network):networkAddress())):toBe("2001:db8::")
+	-- Addresses NOT ending in a zero run should be unaffected
+	test.expect(tostring(ip.address("::1") :: ip.IPv6Address)):toBe("::1")
+	test.expect(tostring(ip.address("::ffff:c0a8:1") :: ip.IPv6Address)):toBe("::ffff:c0a8:1")
+	test.expect(tostring(ip.address("2001:db8::1") :: ip.IPv6Address)):toBe("2001:db8::1")
+end)
+
+suite:test("IPv4 address isDocumentation and full category coverage", function()
+	-- isDocumentation covers three TEST-NET ranges
+	test.expect((ip.address("192.0.2.1") :: ip.IPv4Address):isDocumentation()):toBeTrue()
+	test.expect((ip.address("198.51.100.1") :: ip.IPv4Address):isDocumentation()):toBeTrue()
+	test.expect((ip.address("203.0.113.1") :: ip.IPv4Address):isDocumentation()):toBeTrue()
+	test.expect((ip.address("8.8.8.8") :: ip.IPv4Address):isDocumentation()):toBeFalse()
+
+	-- Every category() branch
+	test.expect((ip.address("0.0.0.0") :: ip.IPv4Address):category()):toBe("unspecified")
+	test.expect((ip.address("127.0.0.1") :: ip.IPv4Address):category()):toBe("loopback")
+	test.expect((ip.address("10.0.0.1") :: ip.IPv4Address):category()):toBe("private")
+	test.expect((ip.address("169.254.1.1") :: ip.IPv4Address):category()):toBe("link-local")
+	test.expect((ip.address("239.1.1.1") :: ip.IPv4Address):category()):toBe("multicast")
+	test.expect((ip.address("192.0.2.1") :: ip.IPv4Address):category()):toBe("documentation")
+	test.expect((ip.address("198.18.0.1") :: ip.IPv4Address):category()):toBe("benchmarking")
+	test.expect((ip.address("100.64.0.1") :: ip.IPv4Address):category()):toBe("shared")
+	test.expect((ip.address("240.0.0.1") :: ip.IPv4Address):category()):toBe("reserved")
+	test.expect((ip.address("255.255.255.255") :: ip.IPv4Address):category()):toBe("broadcast")
+	test.expect((ip.address("8.8.8.8") :: ip.IPv4Address):category()):toBe("global")
+end)
+
+suite:test("IPv6 address reverseUri", function()
+	test.expect((ip.address("2001:db8::1") :: ip.IPv6Address):reverseUri())
+		:toBe("1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.8.b.d.0.1.0.0.2.ip6.arpa")
+	test.expect((ip.address("::1") :: ip.IPv6Address):reverseUri())
+		:toBe("1.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.0.ip6.arpa")
+end)
+
+suite:test("IPv6 address scope and full category coverage", function()
+	-- scope: all three values
+	test.expect((ip.address("fe80::1") :: ip.IPv6Address):scope()):toBe("link-local")
+	test.expect((ip.address("::1") :: ip.IPv6Address):scope()):toBe("interface-local")
+	test.expect((ip.address("::") :: ip.IPv6Address):scope()):toBe("interface-local")
+	test.expect((ip.address("2001:4860:4860::8888") :: ip.IPv6Address):scope()):toBe("global")
+
+	-- Every category() branch
+	test.expect((ip.address("::") :: ip.IPv6Address):category()):toBe("unspecified")
+	test.expect((ip.address("::1") :: ip.IPv6Address):category()):toBe("loopback")
+	test.expect((ip.address("fd00::1") :: ip.IPv6Address):category()):toBe("private")
+	test.expect((ip.address("fe80::1") :: ip.IPv6Address):category()):toBe("link-local")
+	test.expect((ip.address("ff02::1") :: ip.IPv6Address):category()):toBe("multicast")
+	test.expect((ip.address("2001:db8::1") :: ip.IPv6Address):category()):toBe("documentation")
+	test.expect((ip.address("2001:2::1") :: ip.IPv6Address):category()):toBe("benchmarking")
+	test.expect((ip.address("2001:4860:4860::8888") :: ip.IPv6Address):category()):toBe("global")
+end)
+
+suite:test("IPv4 /31 and /32 network edge cases", function()
+	-- /31: no host-bit exclusion per RFC 3021
+	local n31 = ip.network("10.0.0.0/31") :: ip.IPv4Network
+	test.expect(tostring(n31:firstHost())):toBe("10.0.0.0")
+	test.expect(tostring(n31:lastHost())):toBe("10.0.0.1")
+	test.expect(n31:hostCount()):toBe(2)
+
+	-- /32: single host
+	local n32 = ip.network("10.0.0.1/32") :: ip.IPv4Network
+	test.expect(tostring(n32:firstHost())):toBe("10.0.0.1")
+	test.expect(tostring(n32:lastHost())):toBe("10.0.0.1")
+	test.expect(n32:hostCount()):toBe(1)
+end)
+
+suite:test("IPv6 strict network parsing", function()
+	-- strict rejects non-zero host bits
+	test.expect(ip.network("2001:db8::1/64", { strict = true })):toBeNil()
+	test.expect(ip.network("2001:db8::/64", { strict = true })):toNotBeNil()
+	test.expect(ip.IPv6Network.parse("2001:db8::ff/120", { strict = true })):toBeNil()
+	test.expect(ip.IPv6Network.parse("2001:db8::/120", { strict = true })):toNotBeNil()
+end)
+
+suite:test("IPv4 range typed-object paths", function()
+	local full = ip.IPv4Range.fromNetwork("192.168.1.0/24")
+
+	-- contains: IPv4Network object (not string)
+	test.expect(full:contains(ip.network("192.168.1.128/25") :: ip.IPv4Network)):toBeTrue()
+	test.expect(full:contains(ip.network("10.0.0.0/8") :: ip.IPv4Network)):toBeFalse()
+
+	-- contains: IPv4Range object
+	test.expect(full:contains(ip.IPv4Range.new("192.168.1.10", "192.168.1.20"))):toBeTrue()
+	test.expect(full:contains(ip.IPv4Range.new("192.168.0.1", "192.168.2.1"))):toBeFalse()
+
+	-- exclude: IPv4Address object
+	local r = ip.IPv4Range.new("10.0.0.1", "10.0.0.4")
+	local ex1 = r:exclude(ip.address("10.0.0.2") :: ip.IPv4Address)
+	test.expect(ex1:contains("10.0.0.1")):toBeTrue()
+	test.expect(ex1:contains("10.0.0.2")):toBeFalse()
+	test.expect(ex1:contains("10.0.0.3")):toBeTrue()
+
+	-- exclude: IPv4Network object
+	local ex2 = full:exclude(ip.network("192.168.1.0/25") :: ip.IPv4Network)
+	test.expect(ex2:contains("192.168.1.1")):toBeFalse()
+	test.expect(ex2:contains("192.168.1.200")):toBeTrue()
+
+	-- exclude: IPv4Range object
+	local ex3 = r:exclude(ip.IPv4Range.new("10.0.0.2", "10.0.0.3"))
+	test.expect(ex3:contains("10.0.0.1")):toBeTrue()
+	test.expect(ex3:contains("10.0.0.2")):toBeFalse()
+	test.expect(ex3:contains("10.0.0.4")):toBeTrue()
+end)
+
+suite:test("IPv6 range typed-object paths", function()
+	local full = ip.IPv6Range.fromNetwork("2001:db8::/120")
+
+	-- contains: IPv6Network object
+	test.expect(full:contains(ip.network("2001:db8::80/121") :: ip.IPv6Network)):toBeTrue()
+	test.expect(full:contains(ip.network("2001:db9::/120") :: ip.IPv6Network)):toBeFalse()
+
+	-- contains: IPv6Range object
+	test.expect(full:contains(ip.IPv6Range.new("2001:db8::1", "2001:db8::10"))):toBeTrue()
+	test.expect(full:contains(ip.IPv6Range.new("2001:db8::fe", "2001:db9::1"))):toBeFalse()
+
+	-- exclude: IPv6Address object
+	local r = ip.IPv6Range.new("2001:db8::1", "2001:db8::4")
+	local ex1 = r:exclude(ip.address("2001:db8::2") :: ip.IPv6Address)
+	test.expect(ex1:contains("2001:db8::1")):toBeTrue()
+	test.expect(ex1:contains("2001:db8::2")):toBeFalse()
+	test.expect(ex1:contains("2001:db8::3")):toBeTrue()
+
+	-- exclude: IPv6Network object
+	local ex2 = full:exclude(ip.network("2001:db8::/121") :: ip.IPv6Network)
+	test.expect(ex2:contains("2001:db8::1")):toBeFalse()
+	test.expect(ex2:contains("2001:db8::80")):toBeTrue()
+
+	-- exclude: IPv6Range object
+	local ex3 = r:exclude(ip.IPv6Range.new("2001:db8::2", "2001:db8::3"))
+	test.expect(ex3:contains("2001:db8::1")):toBeTrue()
+	test.expect(ex3:contains("2001:db8::2")):toBeFalse()
+	test.expect(ex3:contains("2001:db8::4")):toBeTrue()
 end)
 
 return suite

@@ -28,6 +28,13 @@ export type CompileOptions = {
 	coverageLevel: number?,
 	--- Type info annotation level (0–1). When 1, tags locals and upvalues with type info for native codegen. Default is 0.
 	typeInfoLevel: number?,
+	--- Luau fast-flag overrides applied before compilation. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
+}
+
+export type LoadOptions = {
+	--- Luau fast-flag overrides applied before loading/compiling. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type DisassembleOptions = {
@@ -41,6 +48,8 @@ export type DisassembleOptions = {
 	showRemarks: boolean?,
 	--- If true, include type annotation info for tagged locals in the listing.
 	showTypes: boolean?,
+	--- Luau fast-flag overrides applied before compilation. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 local vm = {}
@@ -73,17 +82,21 @@ end
 	or a bytecode blob previously returned by [[compile]].  This is the
 	equivalent of `loadstring` in standard Lua.
 
+	The optional `options` table may be passed as the second argument
+	(omitting `chunkname`) or as the third argument after `chunkname`.
+
 	```luau
 	local fn = vm.load("return 1 + 2", "=example")
 	print(fn()) -- 3
 	```
 
 	@param sourceOrBytecode Luau source code or compiled bytecode.
-	@param chunkname Optional name for the chunk (shown in errors/stack traces, defaults to `"=load"`).
+	@param chunkname Optional name for the chunk (shown in errors/stack traces, defaults to `"=load"`). May be omitted when passing options.
+	@param options Optional load options (e.g. fast-flag overrides).
 	@return (...any) -> ...any -- The loaded function.
 ]=]
-function vm.load(sourceOrBytecode: string, chunkname: string?): (...any) -> ...any
-	return native.load(sourceOrBytecode, chunkname)
+function vm.load(sourceOrBytecode: string, chunkname: string?, options: LoadOptions?): (...any) -> ...any
+	return native.load(sourceOrBytecode, chunkname, options)
 end
 
 --[=[

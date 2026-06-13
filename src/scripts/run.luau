@@ -6,11 +6,12 @@ local project = require("@eryx/project")
 local stdio = require("@eryx/stdio")
 
 local FORWARDED_RUNTIME_ARGS_ENV = "ERYX_FORWARD_RUNTIME_ARGS"
-local RUNTIME_USAGE = "[-O0|-O1|-O2] [--native|--no-native|--native-only-specified]"
+local RUNTIME_USAGE = "[-O0|-O1|-O2] [--native|--no-native|--native-only-specified] [--flag Name=value ...]"
 
 type RuntimeCliOptions = {
 	optimizationLevel: number?,
-	nativeMode: "all" | "disabled" | "only-specified"?,
+	nativeMode: ("all" | "disabled" | "only-specified")?,
+	flags: { [string]: string }?,
 }
 
 type ParsedRuntimeCli = {
@@ -92,6 +93,24 @@ local function parseRuntimeCli(arguments: { string }, startIndex: number): Parse
 			continue
 		end
 
+		if arg == "--flag" then
+			i += 1
+			if i > #arguments then
+				fail("--flag requires an argument (Name=value)")
+			end
+			local nameValue = arguments[i]
+			local eq = nameValue:find("=", 1, true)
+			if not eq then
+				fail(`--flag argument must be in the form Name=value, got: {nameValue}`)
+			end
+			if not options.flags then
+				options.flags = {}
+			end
+			options.flags[nameValue:sub(1, eq - 1)] = nameValue:sub(eq + 1)
+			i += 1
+			continue
+		end
+
 		if arg:sub(1, 2) == "-O" then
 			fail(`Unsupported optimization level '{arg}' (expected -O0, -O1, or -O2)`)
 		end
@@ -151,11 +170,22 @@ local function splitForwardedRuntimeArgs(value: string?): { string }
 end
 
 local function mergeRuntimeCliOptions(base: RuntimeCliOptions, override: RuntimeCliOptions): RuntimeCliOptions
+	local flags: { [string]: string }? = nil
+	if base.flags or override.flags then
+		flags = {}
+		for k, v in base.flags or {} do
+			(flags :: { [string]: string })[k] = v
+		end
+		for k, v in override.flags or {} do
+			(flags :: { [string]: string })[k] = v
+		end
+	end
 	return {
 		optimizationLevel = if override.optimizationLevel ~= nil
 			then override.optimizationLevel
 			else base.optimizationLevel,
 		nativeMode = if override.nativeMode ~= nil then override.nativeMode else base.nativeMode,
+		flags = flags,
 	}
 end
 
@@ -171,6 +201,11 @@ local function renderRuntimeCliArgs(options: RuntimeCliOptions): { string }
 		table.insert(out, "--native-only-specified")
 	elseif options.nativeMode == "all" then
 		table.insert(out, "--native")
+	end
+
+	for name, value in options.flags or {} do
+		table.insert(out, "--flag")
+		table.insert(out, `{name}={value}`)
 	end
 
 	return out
@@ -331,6 +366,7 @@ local function printRunHelp()
 		"  --native                     Enable native codegen for all eligible chunks",
 		"  --no-native                  Disable native codegen",
 		"  --native-only-specified      Only native-compile chunks marked with --!native",
+		"  --flag Name=value            Set a Luau fast flag (e.g. --flag LuauSolverV2=true)",
 		"",
 		"Use -- before the script name if it begins with -.",
 	}

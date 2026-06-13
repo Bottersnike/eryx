@@ -1500,6 +1500,7 @@ static int l_parse(lua_State* L) {
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
     eryx_enable_all_luau_flags();
+    eryx_apply_user_flags_opt(L, 2);
 
     // Optional options table
     bool captureComments = false;
@@ -1572,6 +1573,9 @@ static int l_compile(lua_State* L) {
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
+    eryx_enable_all_luau_flags();
+    eryx_apply_user_flags_opt(L, 2);
+
     Luau::CompileOptions opts;
     if (lua_istable(L, 2)) {
         lua_getfield(L, 2, "optimizationLevel");
@@ -1607,9 +1611,12 @@ static int l_compile(lua_State* L) {
 static int l_load(lua_State* L) {
     size_t dataLen = 0;
     const char* data = luaL_checklstring(L, 1, &dataLen);
-    const char* chunkname = luaL_optstring(L, 2, "=load");
+    // Accepts (source, chunkname?, options?) or (source, options?) if arg 2 is a table.
+    int optIdx = lua_istable(L, 2) ? 2 : 3;
+    const char* chunkname = lua_istable(L, 2) ? "=load" : luaL_optstring(L, 2, "=load");
 
     eryx_enable_all_luau_flags();
+    eryx_apply_user_flags_opt(L, optIdx);
 
     std::string bytecode;
     bool isBytecode = (dataLen > 0 && (unsigned char)data[0] <= LBC_VERSION_MAX);
@@ -1694,6 +1701,9 @@ static int l_load(lua_State* L) {
 static int l_disassemble(lua_State* L) {
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
+
+    eryx_enable_all_luau_flags();
+    eryx_apply_user_flags_opt(L, 2);
 
     uint32_t dumpFlags = Luau::BytecodeBuilder::Dump_Code | Luau::BytecodeBuilder::Dump_Source |
                          Luau::BytecodeBuilder::Dump_Lines;

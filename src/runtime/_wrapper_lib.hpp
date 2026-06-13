@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdlib>
 #include <deque>
 #include <string>
 #include <unordered_map>
@@ -111,5 +112,62 @@ static void eryx_enable_all_luau_flags() {
     for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next) {
         if (strncmp(flag->name, "Luau", 4) == 0 && !Luau::isAnalysisFlagExperimental(flag->name))
             flag->value = true;
+        else if (strcmp(flag->name, "DebugLuauUserDefinedClasses") == 0 ||
+                 strcmp(flag->name, "DebugLuauUserDefinedClassesRuntime") == 0)
+            flag->value = true;
     }
+}
+
+static bool eryx_set_luau_flag(const char* name, bool value) {
+    for (Luau::FValue<bool>* flag = Luau::FValue<bool>::list; flag; flag = flag->next) {
+        if (strcmp(flag->name, name) == 0) {
+            flag->value = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool eryx_set_luau_flag(const char* name, int value) {
+    for (Luau::FValue<int>* flag = Luau::FValue<int>::list; flag; flag = flag->next) {
+        if (strcmp(flag->name, name) == 0) {
+            flag->value = value;
+            return true;
+        }
+    }
+    return false;
+}
+
+// Parses a string value as bool ("true"/"false") or integer and sets the named flag.
+static bool eryx_apply_flag_string(const char* name, const char* value) {
+    if (strcmp(value, "true") == 0) return eryx_set_luau_flag(name, true);
+    if (strcmp(value, "false") == 0) return eryx_set_luau_flag(name, false);
+    char* end;
+    long n = strtol(value, &end, 10);
+    if (end != value && *end == '\0') return eryx_set_luau_flag(name, (int)n);
+    return false;
+}
+
+// Reads options.flags = { Name = bool|number|string } and applies each flag.
+// optIdx is the stack index of the options table; silently does nothing if absent.
+static void eryx_apply_user_flags_opt(lua_State* L, int optIdx) {
+    if (!lua_istable(L, optIdx)) return;
+    lua_getfield(L, optIdx, "flags");
+    if (lua_istable(L, -1)) {
+        int tableIdx = lua_gettop(L);
+        lua_pushnil(L);
+        while (lua_next(L, tableIdx) != 0) {
+            if (lua_isstring(L, -2)) {
+                const char* name = lua_tostring(L, -2);
+                if (lua_isboolean(L, -1))
+                    eryx_set_luau_flag(name, lua_toboolean(L, -1) != 0);
+                else if (lua_isnumber(L, -1))
+                    eryx_set_luau_flag(name, (int)lua_tointeger(L, -1));
+                else if (lua_isstring(L, -1))
+                    eryx_apply_flag_string(name, lua_tostring(L, -1));
+            }
+            lua_pop(L, 1);
+        }
+    }
+    lua_pop(L, 1);
 }

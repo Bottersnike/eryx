@@ -47,6 +47,8 @@ export type SurroundingText = {
 export type ParseOptions = {
 	captureComments: boolean?,
 	collectSurroundingText: boolean?,
+	--- Luau fast-flag overrides applied before parsing. Values may be booleans, numbers, or their string representations.
+	flags: { [string]: boolean | number | string }?,
 }
 
 export type TableAccess = "Read" | "Write" | "ReadWrite"

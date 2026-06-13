@@ -877,7 +877,7 @@ static bool dbg_execute_in_frame(lua_State* L, int frameLevel, const std::string
     }
 
     std::vector<std::string> candidates;
-    candidates.push_back("return " + expression);
+    candidates.push_back("return (" + expression + ")");
     if (allowStatements) {
         candidates.push_back(expression);
     }
