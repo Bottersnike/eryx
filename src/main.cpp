@@ -232,6 +232,12 @@ static void main_sigint_handler(int) {
     g_main_interrupted = true;
     eryx_request_process_interrupt();
 }
+
+static void main_sighup_handler(int) {
+    // REPL-only hangup handling: close the process immediately so terminal
+    // disconnects don't leave us sitting in readline.
+    _Exit(128 + SIGHUP);
+}
 #endif
 
 static void install_main_interrupt_handler() {
@@ -251,6 +257,10 @@ static void install_main_interrupt_handler() {
     std::signal(SIGINT, main_sigint_handler);
 #endif
 }
+
+#ifndef _WIN32
+static void install_repl_hangup_handler() { std::signal(SIGHUP, main_sighup_handler); }
+#endif
 
 static bool should_use_ansi_for_fd(int fd) {
     if (std::getenv("NO_COLOR")) return false;
@@ -904,6 +914,10 @@ static ReplRunResult repl_run_snippet(lua_State* L, const std::string& source,
 }
 
 int main_repl(const RuntimeExecutionConfig& runtimeConfig) {
+#ifndef _WIN32
+    install_repl_hangup_handler();
+#endif
+
     fprintf(stdout, "Eryx (Luau %s, %.8s)\n", LUAU_APPROX_VERSION, LUAU_GIT_HASH);
     std::cout << "Type \"help\" for help" << std::endl;
 
