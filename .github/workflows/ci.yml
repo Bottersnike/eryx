@@ -85,6 +85,7 @@ jobs:
             build/eryx${{ matrix.os.exe_ext }}
             build/${{ matrix.os.shared_lib }}
             build/modules/
+            build/modules/.luaurc
             build/scripts/
           if-no-files-found: ignore
 
