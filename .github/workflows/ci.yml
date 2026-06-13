@@ -81,11 +81,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eryx-${{ matrix.mode }}-${{ matrix.os.name }}
+          include-hidden-files: true
           path: |
             build/eryx${{ matrix.os.exe_ext }}
             build/${{ matrix.os.shared_lib }}
             build/modules/
-            build/modules/.luaurc
             build/scripts/
           if-no-files-found: ignore
 
