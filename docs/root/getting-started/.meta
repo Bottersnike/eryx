@@ -2,8 +2,10 @@ title: Getting Started
 children:
   - welcome
   - editor-setup
+  - globals
   - console-io
   - testing
+  - unicode
   - filesystem
   - tasks
   - package-management
