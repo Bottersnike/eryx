@@ -5,6 +5,7 @@
 #include "embedded_modules.h"
 #include "lconfig.hpp"
 #include "lexception.hpp"
+#include "lunicode.hpp"
 
 // Analysis headers (available because LuauShared links Luau.Analysis)
 #include <algorithm>
@@ -2211,6 +2212,7 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
 
     // Exceptions are going to overwrite pcall and xpcall
     exception_lib_register(L);
+    unicode_string_lib_register(L);
 
     // Register our custom print
     // TODO: Bring this back once it's not bugged to all hell

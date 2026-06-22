@@ -104,6 +104,10 @@ add_library(EryxShared ${_ERYX_LIB_TYPE}
     src/runtime/_wrapper_lib.cpp
     src/runtime/runtime_host.cpp
     src/runtime/lexception.cpp
+    src/runtime/lunicode.cpp
+    src/runtime/generated/unicode_data.cpp
+    src/runtime/generated/unicode_name.cpp
+    src/runtime/generated/unicode_type.cpp
     src/runtime/lconfig.cpp
     src/runtime/lrequire.cpp
     src/runtime/lresolve.cpp
