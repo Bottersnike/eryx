@@ -186,7 +186,7 @@ if(ERYX_EMBED_MODULES)
     )
 endif()
 add_luau_module(_fs_watch src/modules/_fs_watch.cpp src/modules/_fs_watch.luau
-    EXTRA_LIBS uv_a
+    EXTRA_LIBS uv_a efsw-static
 )
 add_luau_module(image src/modules/image.cpp src/modules/image.luau
     EXTRA_LIBS png_static webp turbojpeg_external

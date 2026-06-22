@@ -52,3 +52,6 @@
 [submodule "vendor/harfbuzz"]
 	path = vendor/harfbuzz
 	url = https://github.com/harfbuzz/harfbuzz
+[submodule "vendor/efsw"]
+	path = vendor/efsw
+	url = https://github.com/SpartanJ/efsw

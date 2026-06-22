@@ -3,6 +3,20 @@ local path = require("@eryx/path")
 
 type PathLike = path.PathLike
 
+export type WatchEventKind = "create" | "remove" | "modify" | "rename" | "overflow" | "unknown"
+
+export type WatchEvent = {
+	kind: WatchEventKind,
+	path: string,
+	oldPath: string?,
+	filename: string?,
+	oldFilename: string?,
+	relativePath: string?,
+	oldRelativePath: string?,
+	isDirectory: boolean?,
+	rawKind: string?,
+}
+
 export type WatchHandle = setmetatable<
 	{},
 	{
@@ -18,16 +32,9 @@ export type WatchHandle = setmetatable<
 >
 
 --- Creates a low-level filesystem watcher.
---- The callback is invoked with (eventType, filename?) each time the watched
---- path changes.  `eventType` is `"change"` or `"rename"`.
---- `filename` is the name of the changed file (may be nil on some platforms).
---- Set `recursive` to `true` to watch subdirectories (supported on Windows
---- and macOS; on Linux each subdirectory needs its own watcher).
-function _fs_watch.create(
-	path: PathLike,
-	recursive: boolean,
-	callback: (eventType: string, filename: string?) -> ()
-): WatchHandle
+--- The callback is invoked with a normalized event table each time the watched
+--- path changes. Set `recursive` to `true` to watch subdirectories.
+function _fs_watch.create(path: PathLike, recursive: boolean, callback: (event: WatchEvent) -> ()): WatchHandle
 	return nil :: any
 end
 

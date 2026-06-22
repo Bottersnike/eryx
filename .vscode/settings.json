@@ -1,6 +1,6 @@
 {
     "luau-lsp.platform.type": "standard",
-    "luau-lsp.types.definitionFiles": { "@standard": "./sample/types.d.luau" },
+    "luau-lsp.types.definitionFiles": ["./src/globals.d.luau"],
     "luau-lsp.fflags.enableNewSolver": true,
     "luau-lsp.fflags.enableByDefault": true,
     "C_Cpp.default.compileCommands": "${workspaceFolder}/build/compile_commands.json",

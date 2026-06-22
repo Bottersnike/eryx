@@ -374,6 +374,7 @@ if(ERYX_USE_PCRE2)
 endif()
 
 set(LIBUV_DIR "${VENDOR_DIR}/libuv")
+set(EFSW_DIR "${VENDOR_DIR}/efsw")
 set(MINIZIP_NG_DIR "${VENDOR_DIR}/minizip-ng")
 
 # Set up miniaudio
@@ -381,6 +382,9 @@ set(MINIAUDIO_INCLUDE_DIR "${VENDOR_DIR}/miniaudio")
 
 # Lib UV
 add_subdirectory("${LIBUV_DIR}" EXCLUDE_FROM_ALL)
+
+# efsw
+add_subdirectory("${EFSW_DIR}" EXCLUDE_FROM_ALL)
 
 include(runtime.cmake)
 

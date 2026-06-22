@@ -7,7 +7,7 @@
 
 	local watcher = fsWatch.watchFile("config.json")
 	watcher.changed:connect(function(eventType)
-		print("config.json:", eventType) -- "change" or "rename"
+		print("config.json:", eventType) -- "modify", "rename", "remove", etc.
 	end)
 
 	-- later:
@@ -31,6 +31,8 @@ local path = require("@eryx/path")
 
 type Signal<T...> = Signal.Signal<T...>
 type PathLike = path.PathLike
+type WatchEvent = _fs_watch.WatchEvent
+type WatchEventKind = _fs_watch.WatchEventKind
 
 local fs_watch = {}
 
@@ -49,8 +51,8 @@ export type FileWatcher = setmetatable<
 	{
 		__index: {
 			--- Fires when the watched file changes.
-			--- Receives `(eventType)` where eventType is `"change"` or `"rename"`.
-			changed: Signal<string>,
+			--- Receives `(eventType)`.
+			changed: Signal<WatchEventKind>,
 			--- Stops the watcher and disconnects all signal handlers.
 			stop: (self: FileWatcher) -> (),
 			--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
@@ -68,7 +70,7 @@ export type DirWatcher = setmetatable<
 			--- Fires when any file in the watched directory changes.
 			--- Receives `(filename, eventType)`.  `filename` is the path of the
 			--- changed file relative to the watched directory.
-			changed: Signal<string, string>,
+			changed: Signal<string, WatchEventKind>,
 			--- Stops the watcher and disconnects all signal handlers.
 			stop: (self: DirWatcher) -> (),
 			--- Makes this watcher keep the event loop alive (watchers are unref'd by default).
@@ -82,14 +84,14 @@ export type DirWatcher = setmetatable<
 --- Watches a single file for changes.
 --- Returns a `FileWatcher` whose `changed` signal fires with `(eventType)`.
 function fs_watch.watchFile(path: PathLike, options: WatchOptions?): FileWatcher
-	local changed: Signal<string> = Signal.new() :: Signal<string>
+	local changed: Signal<WatchEventKind> = Signal.new() :: Signal<WatchEventKind>
 	local debounce = if options then options.debounce else nil
 	local pendingTimer: thread? = nil
-	local pendingEvent: string? = nil
+	local pendingEvent: WatchEventKind? = nil
 
-	local handle = _fs_watch.create(path, false, function(eventType: string, _filename: string?)
+	local handle = _fs_watch.create(path, false, function(event: WatchEvent)
 		if debounce and debounce > 0 then
-			pendingEvent = eventType
+			pendingEvent = event.kind
 			if pendingTimer then
 				task.cancel(pendingTimer)
 			end
@@ -101,7 +103,7 @@ function fs_watch.watchFile(path: PathLike, options: WatchOptions?): FileWatcher
 				end
 			end)
 		else
-			changed:fire(eventType)
+			changed:fire(event.kind)
 		end
 	end)
 
@@ -128,22 +130,23 @@ end
 --- Watches a directory for changes.
 --- Returns a `DirWatcher` whose `changed` signal fires with `(filename, eventType)`.
 function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
-	local changed: Signal<string, string> = Signal.new() :: Signal<string, string>
+	local changed: Signal<string, WatchEventKind> = Signal.new() :: Signal<string, WatchEventKind>
 	local recursive = if options then options.recursive else false
 	local debounce = if options then options.debounce else nil
 
 	-- Per-file debounce timers: filename -> pending thread
 	local pendingTimers: { [string]: thread } = {}
 	-- Per-file last event type
-	local pendingEvents: { [string]: string } = {}
+	local pendingEvents: { [string]: WatchEventKind } = {}
 
-	local handle = _fs_watch.create(path, recursive or false, function(eventType: string, filename: string?)
+	local handle = _fs_watch.create(path, recursive or false, function(event: WatchEvent)
+		local filename = event.relativePath or event.filename
 		if not filename then
 			return
 		end
 
 		if debounce and debounce > 0 then
-			pendingEvents[filename] = eventType
+			pendingEvents[filename] = event.kind
 			local existing = pendingTimers[filename]
 			if existing then
 				task.cancel(existing)
@@ -157,7 +160,7 @@ function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
 				end
 			end)
 		else
-			changed:fire(filename, eventType)
+			changed:fire(filename, event.kind)
 		end
 	end)
 

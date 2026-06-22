@@ -1,15 +1,35 @@
-// _fs_watch.cpp -- Low-level filesystem watcher backed by libuv's uv_fs_event.
+// _fs_watch.cpp -- Low-level filesystem watcher with normalized event delivery.
 //
 //   _fs_watch.create(path, recursive, callback) -> WatchHandle
 //   WatchHandle:stop()
 //
-// The callback receives (eventType: "change"|"rename", filename: string?).
-// This module is wrapped by the pure-Luau `fs_watch` module which provides
-// a Signal-based API.
+// The callback receives a single event table:
+//   {
+//       kind = "create" | "remove" | "modify" | "rename" | "overflow" | "unknown",
+//       path = string,
+//       oldPath = string?,
+//       filename = string?,
+//       oldFilename = string?,
+//       relativePath = string?,
+//       oldRelativePath = string?,
+//       isDirectory = boolean?,
+//       rawKind = string?,
+//   }
+//
+// Native watcher callbacks are bridged through uv_async_t before touching Luau.
 // ---------------------------------------------------------------------------
 
+#include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <efsw/efsw.hpp>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <new>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "../LuaUtil.hpp"
 #include "lua.h"
@@ -28,57 +48,326 @@ static const LuauModuleInfo INFO = {
 LUAU_MODULE_INFO()
 
 // ---------------------------------------------------------------------------
-// WatchHandle -- userdata wrapping a uv_fs_event_t
+// WatchHandle
 // ---------------------------------------------------------------------------
 static const char* WATCH_HANDLE_MT = "FsWatchHandle";
 
-struct WatchHandle {
-    uv_fs_event_t fsEvent;
-    EryxRuntime* rt;
-    int callbackRef;  // ref to the Lua callback function
-    int selfRef;      // ref to the userdata itself (prevent GC while active)
-    bool active;
+struct NormalizedEvent {
+    std::string kind;
+    std::string path;
+    std::string oldPath;
+    std::string filename;
+    std::string oldFilename;
+    std::string relativePath;
+    std::string oldRelativePath;
+    std::string rawKind;
+    bool hasOldPath = false;
+    bool hasFilename = false;
+    bool hasOldFilename = false;
+    bool hasRelativePath = false;
+    bool hasOldRelativePath = false;
+    bool hasIsDirectory = false;
+    bool isDirectory = false;
 };
 
-// Called by libuv when a filesystem event occurs.
-static void fs_event_cb(uv_fs_event_t* handle, const char* filename, int events, int status) {
+class WatchBackend {
+   public:
+    virtual ~WatchBackend() = default;
+    virtual bool start(std::string& error) = 0;
+    virtual void stop() = 0;
+};
+
+struct WatchHandle {
+    uv_async_t async;
+    EryxRuntime* rt = nullptr;
+    int callbackRef = LUA_NOREF;  // ref to the Lua callback function
+    int selfRef = LUA_NOREF;      // ref to the userdata itself (prevent GC while active)
+    std::atomic<bool> active{ false };
+    bool asyncInitialized = false;
+    bool asyncClosed = false;
+    bool refed = false;
+    std::unique_ptr<WatchBackend> backend;
+    std::mutex eventMutex;
+    std::vector<NormalizedEvent> pendingEvents;
+
+    WatchHandle() = default;
+
+    WatchHandle(const WatchHandle&) = delete;
+    WatchHandle& operator=(const WatchHandle&) = delete;
+
+    ~WatchHandle() {
+        if (backend) {
+            backend->stop();
+            backend.reset();
+        }
+    }
+};
+
+static std::string path_to_utf8(const std::filesystem::path& path) {
+    return path.lexically_normal().generic_string();
+}
+
+static bool path_is_directory(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::is_directory(path, ec);
+}
+
+static std::filesystem::path absolute_path(const std::filesystem::path& path) {
+    std::error_code ec;
+    std::filesystem::path absolute = std::filesystem::absolute(path, ec);
+    if (ec) {
+        return path;
+    }
+    return absolute.lexically_normal();
+}
+
+static std::string relative_path_to_utf8(const std::filesystem::path& path,
+                                         const std::filesystem::path& root) {
+    std::filesystem::path relative = path.lexically_relative(root);
+    if (relative.empty()) {
+        return path_to_utf8(path);
+    }
+    return relative.generic_string();
+}
+
+static std::string efsw_action_kind(efsw::Action action) {
+    switch (action) {
+        case efsw::Actions::Add:
+            return "create";
+        case efsw::Actions::Delete:
+            return "remove";
+        case efsw::Actions::Modified:
+            return "modify";
+        case efsw::Actions::Moved:
+            return "rename";
+        default:
+            return "unknown";
+    }
+}
+
+static std::string efsw_action_raw_kind(efsw::Action action) {
+    switch (action) {
+        case efsw::Actions::Add:
+            return "add";
+        case efsw::Actions::Delete:
+            return "delete";
+        case efsw::Actions::Modified:
+            return "modified";
+        case efsw::Actions::Moved:
+            return "moved";
+        default:
+            return "unknown";
+    }
+}
+
+static void push_event_table(lua_State* L, const NormalizedEvent& event) {
+    lua_createtable(L, 0, 9);
+
+    lua_pushstring(L, event.kind.c_str());
+    lua_setfield(L, -2, "kind");
+
+    lua_pushstring(L, event.path.c_str());
+    lua_setfield(L, -2, "path");
+
+    if (event.hasOldPath) {
+        lua_pushstring(L, event.oldPath.c_str());
+        lua_setfield(L, -2, "oldPath");
+    }
+
+    if (event.hasFilename) {
+        lua_pushstring(L, event.filename.c_str());
+        lua_setfield(L, -2, "filename");
+    }
+
+    if (event.hasOldFilename) {
+        lua_pushstring(L, event.oldFilename.c_str());
+        lua_setfield(L, -2, "oldFilename");
+    }
+
+    if (event.hasRelativePath) {
+        lua_pushstring(L, event.relativePath.c_str());
+        lua_setfield(L, -2, "relativePath");
+    }
+
+    if (event.hasOldRelativePath) {
+        lua_pushstring(L, event.oldRelativePath.c_str());
+        lua_setfield(L, -2, "oldRelativePath");
+    }
+
+    if (event.hasIsDirectory) {
+        lua_pushboolean(L, event.isDirectory);
+        lua_setfield(L, -2, "isDirectory");
+    }
+
+    if (!event.rawKind.empty()) {
+        lua_pushstring(L, event.rawKind.c_str());
+        lua_setfield(L, -2, "rawKind");
+    }
+}
+
+static void queue_event(WatchHandle* wh, NormalizedEvent event) {
+    if (!wh->active.load()) return;
+
+    {
+        std::lock_guard<std::mutex> lock(wh->eventMutex);
+        if (!wh->active.load()) return;
+        wh->pendingEvents.push_back(std::move(event));
+    }
+
+    uv_async_send(&wh->async);
+}
+
+static void drain_events(uv_async_t* handle) {
     auto* wh = (WatchHandle*)handle->data;
-    if (!wh->active) return;
-    if (status < 0) return;  // silently ignore errors
+    if (!wh) return;
+
+    if (!wh->active.load()) {
+        std::lock_guard<std::mutex> lock(wh->eventMutex);
+        wh->pendingEvents.clear();
+        return;
+    }
+
+    std::vector<NormalizedEvent> events;
+    {
+        std::lock_guard<std::mutex> lock(wh->eventMutex);
+        events.swap(wh->pendingEvents);
+    }
 
     lua_State* GL = wh->rt->GL;
 
-    // Create a new thread for this callback invocation
-    lua_State* TL = lua_newthread(GL);
+    for (const NormalizedEvent& event : events) {
+        if (!wh->active.load()) break;
 
-    // Push the callback function onto the thread's stack
-    lua_getref(GL, wh->callbackRef);
-    lua_xmove(GL, TL, 1);
+        lua_State* TL = lua_newthread(GL);
 
-    // Arg 1: event type
-    if (events & UV_RENAME) {
-        lua_pushstring(TL, "rename");
-    } else {
-        lua_pushstring(TL, "change");
+        lua_getref(GL, wh->callbackRef);
+        lua_xmove(GL, TL, 1);
+
+        push_event_table(TL, event);
+
+        int threadRef = lua_ref(GL, -1);
+        lua_pop(GL, 1);
+
+        eryx_push_thread(wh->rt, threadRef, 1, false);
     }
-
-    // Arg 2: filename (may be nil on some platforms)
-    if (filename && filename[0] != '\0') {
-        lua_pushstring(TL, filename);
-    } else {
-        lua_pushnil(TL);
-    }
-
-    // Ref the thread to keep it alive, then schedule it
-    int threadRef = lua_ref(GL, -1);
-    lua_pop(GL, 1);
-
-    eryx_push_thread(wh->rt, threadRef, 2, false);
 }
 
+class EfswBackend final : public WatchBackend, public efsw::FileWatchListener {
+   public:
+    EfswBackend(WatchHandle* handle, std::filesystem::path requestedPath, bool recursive)
+        : handle(handle), requestedPath(absolute_path(requestedPath)), recursive(recursive) {
+        std::error_code ec;
+        targetIsDirectory = std::filesystem::is_directory(this->requestedPath, ec);
+
+        if (targetIsDirectory) {
+            watchedDirectory = this->requestedPath;
+        } else {
+            watchedDirectory = this->requestedPath.parent_path();
+            targetFilename = this->requestedPath.filename().generic_string();
+        }
+
+        if (watchedDirectory.empty()) {
+            watchedDirectory = std::filesystem::current_path(ec);
+        }
+    }
+
+    ~EfswBackend() override { stop(); }
+
+    bool start(std::string& error) override {
+        if (watching) return true;
+
+        watcher = std::make_unique<efsw::FileWatcher>();
+        watchId = watcher->addWatch(path_to_utf8(watchedDirectory), this, recursive);
+        if (watchId <= 0) {
+            error = efsw::Errors::Log::getLastErrorLog();
+            if (error.empty()) {
+                error = "efsw failed to add watch";
+            }
+            watcher.reset();
+            return false;
+        }
+
+        watcher->watch();
+        watching = true;
+        return true;
+    }
+
+    void stop() override {
+        if (!watcher) return;
+
+        if (watching && watchId > 0) {
+            watcher->removeWatch(watchId);
+        }
+
+        watching = false;
+        watchId = 0;
+        watcher.reset();
+    }
+
+    void handleFileAction(efsw::WatchID watchid, const std::string& dir,
+                          const std::string& filename, efsw::Action action,
+                          const std::string& oldFilename = "") override {
+        if (watchid != watchId || !handle->active.load()) return;
+        if (!targetIsDirectory && filename != targetFilename &&
+            (oldFilename.empty() || oldFilename != targetFilename)) {
+            return;
+        }
+
+        std::filesystem::path dirPath = absolute_path(std::filesystem::path(dir));
+        std::filesystem::path eventPath = absolute_path(dirPath / filename);
+
+        NormalizedEvent event;
+        event.kind = efsw_action_kind(action);
+        event.path = path_to_utf8(eventPath);
+        event.rawKind = efsw_action_raw_kind(action);
+        event.filename = filename;
+        event.hasFilename = !filename.empty();
+        event.relativePath = relative_path_to_utf8(eventPath, watchedDirectory);
+        event.hasRelativePath = !event.relativePath.empty();
+        event.hasIsDirectory = true;
+        event.isDirectory = path_is_directory(eventPath);
+
+        if (!oldFilename.empty()) {
+            std::filesystem::path oldEventPath = absolute_path(dirPath / oldFilename);
+            event.oldPath = path_to_utf8(oldEventPath);
+            event.hasOldPath = true;
+            event.oldFilename = oldFilename;
+            event.hasOldFilename = true;
+            event.oldRelativePath = relative_path_to_utf8(oldEventPath, watchedDirectory);
+            event.hasOldRelativePath = !event.oldRelativePath.empty();
+        }
+
+        queue_event(handle, std::move(event));
+    }
+
+    void handleMissedFileActions(efsw::WatchID watchid, const std::string& dir) override {
+        if (watchid != watchId || !handle->active.load()) return;
+
+        NormalizedEvent event;
+        event.kind = "overflow";
+        event.path = path_to_utf8(absolute_path(std::filesystem::path(dir)));
+        event.rawKind = "missed";
+
+        queue_event(handle, std::move(event));
+    }
+
+   private:
+    WatchHandle* handle;
+    std::filesystem::path requestedPath;
+    std::filesystem::path watchedDirectory;
+    std::string targetFilename;
+    bool recursive = false;
+    bool targetIsDirectory = false;
+    bool watching = false;
+    efsw::WatchID watchId = 0;
+    std::unique_ptr<efsw::FileWatcher> watcher;
+};
+
 // Close callback -- invoked after uv_close finishes. Safe to release refs now.
-static void on_close(uv_handle_t* handle) {
+static void on_async_close(uv_handle_t* handle) {
     auto* wh = (WatchHandle*)handle->data;
+    wh->asyncClosed = true;
+
     if (wh->callbackRef != LUA_NOREF) {
         lua_unref(wh->rt->GL, wh->callbackRef);
         wh->callbackRef = LUA_NOREF;
@@ -89,11 +378,36 @@ static void on_close(uv_handle_t* handle) {
     }
 }
 
+static void release_lua_refs_now(WatchHandle* wh) {
+    lua_State* GL = wh->rt->GL;
+    if (wh->callbackRef != LUA_NOREF) {
+        lua_unref(GL, wh->callbackRef);
+        wh->callbackRef = LUA_NOREF;
+    }
+    if (wh->selfRef != LUA_NOREF) {
+        lua_unref(GL, wh->selfRef);
+        wh->selfRef = LUA_NOREF;
+    }
+}
+
 static void stop_watcher(WatchHandle* wh) {
-    if (!wh->active) return;
-    wh->active = false;
-    uv_fs_event_stop(&wh->fsEvent);
-    uv_close((uv_handle_t*)&wh->fsEvent, on_close);
+    if (!wh->active.exchange(false)) return;
+
+    if (wh->backend) {
+        wh->backend->stop();
+        wh->backend.reset();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(wh->eventMutex);
+        wh->pendingEvents.clear();
+    }
+
+    if (wh->asyncInitialized && !wh->asyncClosed && !uv_is_closing((uv_handle_t*)&wh->async)) {
+        uv_close((uv_handle_t*)&wh->async, on_async_close);
+    } else {
+        release_lua_refs_now(wh);
+    }
 }
 
 // WatchHandle:stop()
@@ -106,8 +420,9 @@ static int watchhandle_stop(lua_State* L) {
 // WatchHandle:ref() - make this handle keep the event loop alive.
 static int watchhandle_ref(lua_State* L) {
     auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
-    if (wh->active) {
-        uv_ref((uv_handle_t*)&wh->fsEvent);
+    if (wh->active.load() && wh->asyncInitialized && !wh->refed) {
+        uv_ref((uv_handle_t*)&wh->async);
+        wh->refed = true;
     }
     return 0;
 }
@@ -115,38 +430,29 @@ static int watchhandle_ref(lua_State* L) {
 // WatchHandle:unref() - allow the event loop to exit even if this handle is active.
 static int watchhandle_unref(lua_State* L) {
     auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
-    if (wh->active) {
-        uv_unref((uv_handle_t*)&wh->fsEvent);
+    if (wh->active.load() && wh->asyncInitialized && wh->refed) {
+        uv_unref((uv_handle_t*)&wh->async);
+        wh->refed = false;
     }
-    return 0;
-}
-
-// WatchHandle.__gc (kept for explicit :stop() paths)
-static int watchhandle_gc(lua_State* L) {
-    auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
-    stop_watcher(wh);
     return 0;
 }
 
 // Destructor called by Luau GC (lua_newuserdatadtor).
-// rt->GL is used for lua_unref so refs are released during normal GC,
-// not just lua_close.  uv_close is async and may not be safe here
-// (the loop might be dead), so we just stop the watcher synchronously.
 static void watchhandle_dtor(void* ud) {
     auto* wh = (WatchHandle*)ud;
-    if (wh->active) {
-        wh->active = false;
-        uv_fs_event_stop(&wh->fsEvent);
+
+    if (wh->active.exchange(false)) {
+        if (wh->backend) {
+            wh->backend->stop();
+            wh->backend.reset();
+        }
+
+        std::lock_guard<std::mutex> lock(wh->eventMutex);
+        wh->pendingEvents.clear();
     }
-    lua_State* GL = wh->rt->GL;
-    if (wh->callbackRef != LUA_NOREF) {
-        lua_unref(GL, wh->callbackRef);
-        wh->callbackRef = LUA_NOREF;
-    }
-    if (wh->selfRef != LUA_NOREF) {
-        lua_unref(GL, wh->selfRef);
-        wh->selfRef = LUA_NOREF;
-    }
+
+    release_lua_refs_now(wh);
+    wh->~WatchHandle();
 }
 
 // ---------------------------------------------------------------------------
@@ -159,61 +465,45 @@ static int fswatch_create(lua_State* L) {
 
     auto* rt = eryx_get_runtime(L);
 
-    // Create the WatchHandle as a full userdata with GC destructor
-    auto* wh = (WatchHandle*)lua_newuserdatadtor(L, sizeof(WatchHandle), watchhandle_dtor);
-    memset(wh, 0, sizeof(WatchHandle));
+    void* storage = lua_newuserdatadtor(L, sizeof(WatchHandle), watchhandle_dtor);
+    auto* wh = new (storage) WatchHandle();
 
-    // Set up the metatable
     luaL_getmetatable(L, WATCH_HANDLE_MT);
     lua_setmetatable(L, -2);
 
-    // Initialise fields
     wh->rt = rt;
-    wh->active = false;
-    wh->callbackRef = LUA_NOREF;
-    wh->selfRef = LUA_NOREF;
 
-    // Init the uv handle
-    int r = uv_fs_event_init(rt->loop, &wh->fsEvent);
+    int r = uv_async_init(rt->loop, &wh->async, drain_events);
     if (r < 0) {
-        luaL_error(L, "Failed to init fs watcher: %s", uv_strerror(r));
+        luaL_error(L, "Failed to init fs watcher async bridge: %s", uv_strerror(r));
         return 0;
     }
-    wh->fsEvent.data = wh;
+    wh->asyncInitialized = true;
+    wh->async.data = wh;
 
-    // Ref the callback (at stack index 3)
     lua_pushvalue(L, 3);
     wh->callbackRef = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    // Ref the userdata itself to prevent GC while the watcher is active.
-    // The userdata is currently at the top of the stack.
     lua_pushvalue(L, -1);
     wh->selfRef = lua_ref(L, -1);
     lua_pop(L, 1);
 
-    // Start watching
-    unsigned int flags = recursive ? UV_FS_EVENT_RECURSIVE : 0;
-    r = uv_fs_event_start(&wh->fsEvent, fs_event_cb, path.c_str(), flags);
-    if (r < 0) {
-        // Clean up refs on failure
-        lua_unref(L, wh->callbackRef);
-        wh->callbackRef = LUA_NOREF;
-        lua_unref(L, wh->selfRef);
-        wh->selfRef = LUA_NOREF;
-        uv_close((uv_handle_t*)&wh->fsEvent, nullptr);
-        luaL_error(L, "Failed to watch '%s': %s", path, uv_strerror(r));
+    wh->backend = std::make_unique<EfswBackend>(wh, std::filesystem::path(path), recursive);
+    wh->active = true;
+
+    std::string error;
+    if (!wh->backend->start(error)) {
+        wh->active = false;
+        wh->backend.reset();
+        uv_close((uv_handle_t*)&wh->async, on_async_close);
+        luaL_error(L, "Failed to watch '%s': %s", path.c_str(), error.c_str());
         return 0;
     }
 
-    wh->active = true;
+    uv_unref((uv_handle_t*)&wh->async);
+    wh->refed = false;
 
-    // Unref by default so the watcher doesn't keep the event loop alive
-    // on its own. The server (or other ref'd handles) keeps the loop running;
-    // when they close, the loop exits and the watcher is cleaned up by GC.
-    uv_unref((uv_handle_t*)&wh->fsEvent);
-
-    // Return the userdata
     return 1;
 }
 
@@ -221,7 +511,6 @@ static int fswatch_create(lua_State* L) {
 // Module entry
 // ---------------------------------------------------------------------------
 LUAU_MODULE_EXPORT int luauopen__fs_watch(lua_State* L) {
-    // Register the WatchHandle metatable
     luaL_newmetatable(L, WATCH_HANDLE_MT);
 
     lua_pushcfunction(L, watchhandle_stop, "stop");
@@ -233,15 +522,13 @@ LUAU_MODULE_EXPORT int luauopen__fs_watch(lua_State* L) {
     lua_pushcfunction(L, watchhandle_unref, "unref");
     lua_setfield(L, -2, "unref");
 
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
+    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor.
 
-    // __index = metatable itself (so :stop() works)
     lua_pushvalue(L, -1);
     lua_setfield(L, -2, "__index");
 
-    lua_pop(L, 1);  // pop metatable
+    lua_pop(L, 1);
 
-    // Build the module table
     lua_newtable(L);
 
     lua_pushcfunction(L, fswatch_create, "create");
