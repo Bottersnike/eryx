@@ -4,11 +4,11 @@
 	This is the unified `@eryx/luau` facade. It re-exports all sub-libraries
 	under a single table:
 
-	- `luau.parse`    — Parse source into an AST, extract comments, and pretty-print.
-	- `luau.analysis` — Type checking, type inference, autocompletion, and config resolution.
-	- `luau.vm`       — Bytecode compilation, loading, and disassembly.
-	- `luau.query`    — Walk and query AST nodes with a chainable `Query` API.
-	- `luau.ast`      — Shared AST type definitions (mostly for type imports).
+	- `luau.parse`    - Parse source into an AST, extract comments, and pretty-print.
+	- `luau.analysis` - Type checking, type inference, autocompletion, and config resolution.
+	- `luau.vm`       - Bytecode compilation, loading, and disassembly.
+	- `luau.query`    - Walk and query AST nodes with a chainable `Query` API.
+	- `luau.ast`      - Shared AST type definitions (mostly for type imports).
 
 	Sub-libraries can also be required individually as `@eryx/luau/parse`,
 	`@eryx/luau/analysis`, etc.
@@ -17,7 +17,7 @@
 	local luau = require("@eryx/luau")
 
 	-- Parse source into an AST
-	local result = luau.parse.parse(source, { captureComments = true })
+	local result = luau.parse.parse(source, { collectComments = true })
 	for _, stat in result.root.body do
 	    print(stat.type, stat.location.beginline)
 	end
@@ -34,6 +34,7 @@
 local analysis = require("@self/analysis")
 local ast = require("@self/ast")
 local parse = require("@self/parse")
+local printer = require("@self/printer")
 local query = require("@self/query")
 local vm = require("@self/vm")
 
@@ -42,6 +43,7 @@ local luau = {}
 luau.analysis = analysis
 luau.ast = ast
 luau.parse = parse
+luau.printer = printer
 luau.query = query
 luau.vm = vm
 

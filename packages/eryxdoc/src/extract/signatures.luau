@@ -42,6 +42,9 @@ local function normalizeTypeList(listLike: any): ({ any }, any)
 	if type(listLike) ~= "table" then
 		return {}, nil
 	end
+	if type(listLike.typeList) == "table" then
+		listLike = listLike.typeList
+	end
 	if type(listLike.types) == "table" then
 		return listLike.types, listLike.tail
 	end
@@ -56,7 +59,7 @@ local function unwrapTypeOrPack(value: any): any
 end
 
 -- Extract raw signature data from an ExprFunction AST node.
-local function extractFuncSig(funcNode: luau.ExprFunction, keepSelf: boolean?): RawFuncSig
+local function extractFuncSig(funcNode: luau.AstExprFunction, keepSelf: boolean?): RawFuncSig
 	local params: { string } = {}
 	local paramNames: { string? } = {}
 	local paramTypeParts: { { SignaturePart }? } = {}
@@ -101,8 +104,8 @@ local function extractFuncSig(funcNode: luau.ExprFunction, keepSelf: boolean?): 
 
 	if funcNode.vararg then
 		local va = funcNode.varargAnnotation
-		if va and va.type == "TypePackVariadic" then
-			local vaTyped = va :: luau.TypePackVariadic
+		if va and va.type == "variadic" then
+			local vaTyped = va :: luau.AstTypePackVariadic
 			table.insert(params, "...: " .. td.describeType(vaTyped.variadicType))
 			table.insert(paramNames, "...")
 			table.insert(paramTypeParts, td.describeTypeParts(vaTyped.variadicType))
@@ -157,7 +160,7 @@ local function extractFuncSig(funcNode: luau.ExprFunction, keepSelf: boolean?): 
 	}
 end
 
-local function extractTypeFuncSig(funcNode: luau.TypeFunction, keepSelf: boolean?): RawFuncSig
+local function extractTypeFuncSig(funcNode: luau.AstTypeFunction, keepSelf: boolean?): RawFuncSig
 	local params: { string } = {}
 	local paramNames: { string? } = {}
 	local paramTypeParts: { { SignaturePart }? } = {}
@@ -198,8 +201,8 @@ local function extractTypeFuncSig(funcNode: luau.TypeFunction, keepSelf: boolean
 
 	if argTail then
 		local tailNode = unwrapTypeOrPack(argTail)
-		if tailNode and tailNode.type == "TypePackVariadic" then
-			local variadic = tailNode :: luau.TypePackVariadic
+		if tailNode and tailNode.type == "variadic" then
+			local variadic = tailNode :: luau.AstTypePackVariadic
 			table.insert(params, "...: " .. td.describeType(variadic.variadicType))
 			table.insert(paramNames, "...")
 			table.insert(paramTypeParts, td.describeTypeParts(variadic.variadicType))
@@ -496,9 +499,10 @@ local function buildMeta(
 	local returnsMeta: { ReturnMeta }? = nil
 	if retNode then
 		local rets: { ReturnMeta } = {}
-		if retNode.type == "TypePackExplicit" and (retNode :: luau.TypePackExplicit).types then
-			local pack = retNode :: luau.TypePackExplicit
-			for idx, t in pack.types do
+		if retNode.type == "explicit" then
+			local pack = retNode :: luau.AstTypePackExplicit
+			local packTypes = normalizeTypeList(pack.typeList)
+			for idx, t in packTypes do
 				local desc: string? = if parsedDoc and parsedDoc.returns[idx]
 					then parsedDoc.returns[idx].description
 					else nil

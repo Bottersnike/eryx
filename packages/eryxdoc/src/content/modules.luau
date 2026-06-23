@@ -91,15 +91,15 @@ local function resolveRequireSpecifier(moduleDir: string, specifier: string): st
 end
 
 local function exprToPath(expr: luau.AstExpr): string?
-	if expr.type == "ExprGlobal" then
-		return (expr :: luau.ExprGlobal).name
+	if expr.type == "global" then
+		return (expr :: luau.AstExprGlobal).name
 	end
-	if expr.type == "ExprLocal" then
-		local loc = expr :: luau.ExprLocal
+	if expr.type == "local" then
+		local loc = expr :: luau.AstExprLocal
 		return if loc["local"] then loc["local"].name else nil
 	end
-	if expr.type == "ExprIndexName" then
-		local idx = expr :: luau.ExprIndexName
+	if expr.type == "indexName" then
+		local idx = expr :: luau.AstExprIndexName
 		local parent = exprToPath(idx.expr)
 		if parent then
 			return parent .. "." .. idx.index
@@ -109,15 +109,15 @@ local function exprToPath(expr: luau.AstExpr): string?
 end
 
 local function parseRequireCall(expr: luau.AstExpr): string?
-	if expr.type ~= "ExprCall" then
+	if expr.type ~= "call" then
 		return nil
 	end
 
-	local call = expr :: luau.ExprCall
-	if not call.func or call.func.type ~= "ExprGlobal" then
+	local call = expr :: luau.AstExprCall
+	if not call.func or call.func.type ~= "global" then
 		return nil
 	end
-	local callee = call.func :: luau.ExprGlobal
+	local callee = call.func :: luau.AstExprGlobal
 	if callee.name ~= "require" then
 		return nil
 	end
@@ -126,11 +126,11 @@ local function parseRequireCall(expr: luau.AstExpr): string?
 		return nil
 	end
 	local first = call.args[1]
-	if first.type ~= "ExprConstantString" then
+	if first.type ~= "constantString" then
 		return nil
 	end
 
-	return (first :: luau.ExprConstantString).value
+	return (first :: luau.AstExprConstantString).value
 end
 
 local function shouldRenderAsClass(typeDoc: extract.TypeDoc): boolean
@@ -402,7 +402,7 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 	log:info(string.format("Processing %s ...", qualifiedName))
 
 	local source = fs.openSync(path):readSync()
-	local result = luauParse.parse(source, { captureComments = true })
+	local result = luauParse.parse(source, { collectComments = true })
 
 	if #result.errors > 0 then
 		log:error(string.format("  %s: %d parse errors", path, #result.errors))
@@ -460,10 +460,10 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 	local localRequires: { [string]: string } = {}
 	local selfRequireBase = if baseName == "init" then qualifiedName else moduleDirFromQualified(qualifiedName)
 	for _, stat in result.root.body do
-		if stat.type ~= "StatLocal" then
+		if stat.type ~= "local" then
 			continue
 		end
-		local localStat = stat :: luau.StatLocal
+		local localStat = stat :: luau.AstStatLocal
 		if not localStat.vars or not localStat.values then
 			continue
 		end
@@ -487,20 +487,20 @@ local function parseModuleDetailed(path: string, prefix: string, relPath: string
 	local moduleRoot = moduleInfo.moduleRoot
 	if moduleRoot then
 		for _, stat in result.root.body do
-			if stat.type ~= "StatAssign" then
+			if stat.type ~= "assign" then
 				continue
 			end
-			local assignStat = stat :: luau.StatAssign
+			local assignStat = stat :: luau.AstStatAssign
 			if not assignStat.vars or not assignStat.values then
 				continue
 			end
 
 			for i, var in assignStat.vars do
-				if var.type ~= "ExprIndexName" then
+				if var.type ~= "indexName" then
 					continue
 				end
 
-				local idx = var :: luau.ExprIndexName
+				local idx = var :: luau.AstExprIndexName
 				local exportedOwner = exprToPath(idx.expr)
 				if not exportedOwner then
 					continue

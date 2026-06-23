@@ -4,10 +4,10 @@
 ---
 --- ```luau
 --- local extract = require("eryxdoc/extract")
---- local luau = require("@eryx/luau/ast")
+--- local luauParse = require("@eryx/luau/parse")
 ---
 --- local source = fs.openSync("mymodule.luau"):readSync()
---- local result = luau.parse(source, { captureComments = true })
+--- local result = luauParse.parse(source, { collectComments = true })
 --- local docs = extract.extract(result, string.split(source, "\n"))
 --- -- docs.functions, docs.types, docs.constants, docs.moduleDescription
 --- ```
@@ -75,10 +75,35 @@ local function normalizeTypeList(typeList: any): ({ any }, any)
 	if type(typeList) ~= "table" then
 		return {}, nil
 	end
+	if type(typeList.typeList) == "table" then
+		typeList = typeList.typeList
+	end
 	if type(typeList.types) == "table" then
 		return typeList.types, typeList.tail
 	end
 	return typeList, nil
+end
+
+local function isTypeAliasStat(stat: any): boolean
+	return type(stat) == "table"
+		and stat.category == "stat"
+		and stat.name ~= nil
+		and stat.typeKeywordToken ~= nil
+		and stat.equalsToken ~= nil
+		and (stat.type == "typeAlias" or type(stat.aliasedType) == "table" or type(stat.type) == "table")
+end
+
+local function typeAliasBody(stat: any): luau.AstType?
+	if type(stat) ~= "table" then
+		return nil
+	end
+	if type(stat.aliasedType) == "table" then
+		return stat.aliasedType :: luau.AstType
+	end
+	if type(stat.type) == "table" then
+		return stat.type :: luau.AstType
+	end
+	return nil
 end
 
 local function stripInlineComments(signature: string?): string?
@@ -146,7 +171,7 @@ local function clampHoverText(signature: string?): string?
 	return joined
 end
 
-function extract.extract(result: luau.ParseResult, sourceLines: { string }): ExtractedDocs
+function extract.extract(result: luauParse.ParseResult<luau.AstStatBlock>, sourceLines: { string }): ExtractedDocs
 	local commentBlocks, inlineComments = comments.collectComments(result, sourceLines)
 
 	-- ── Module description detection ─────────────────────────────────────
@@ -167,15 +192,13 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			moduleBlockIdx = 1
 		elseif firstStatLine == first.endLine + 1 then
 			local statType = if firstStat then firstStat.type else nil
-			local isDocumentable = statType == "StatFunction"
-				or statType == "StatLocalFunction"
-				or statType == "StatTypeAlias"
+			local isDocumentable = statType == "function" or statType == "localFunction" or isTypeAliasStat(firstStat)
 
-			if not isDocumentable and statType == "StatLocal" then
-				local localStat = firstStat :: luau.StatLocal
+			if not isDocumentable and statType == "local" then
+				local localStat = firstStat :: luau.AstStatLocal
 				if localStat.values then
 					for _, val in localStat.values do
-						if val.type == "ExprTable" then
+						if val.type == "table" then
 							isDocumentable = true
 							break
 						end
@@ -219,13 +242,13 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	local function exprToPath(expr: luau.AstExpr): string?
-		if expr.type == "ExprGlobal" then
-			return (expr :: luau.ExprGlobal).name
-		elseif expr.type == "ExprLocal" then
-			local loc = expr :: luau.ExprLocal
+		if expr.type == "global" then
+			return (expr :: luau.AstExprGlobal).name
+		elseif expr.type == "local" then
+			local loc = expr :: luau.AstExprLocal
 			return loc["local"] and loc["local"].name
-		elseif expr.type == "ExprIndexName" then
-			local idx = expr :: luau.ExprIndexName
+		elseif expr.type == "indexName" then
+			local idx = expr :: luau.AstExprIndexName
 			local parent = exprToPath(idx.expr)
 			if parent then
 				return parent .. "." .. idx.index
@@ -238,20 +261,20 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		if not annotation then
 			return nil
 		end
-		if annotation.type == "TypeTypeof" then
-			return exprToPath((annotation :: luau.TypeTypeof).expr)
+		if annotation.type == "typeof" then
+			return exprToPath((annotation :: luau.AstTypeTypeof).expr)
 		end
 		return nil
 	end
 
 	local function returnedRootName(expr: luau.AstExpr): string?
-		if expr.type == "ExprGlobal" then
-			return (expr :: luau.ExprGlobal).name
-		elseif expr.type == "ExprLocal" then
-			local loc = expr :: luau.ExprLocal
+		if expr.type == "global" then
+			return (expr :: luau.AstExprGlobal).name
+		elseif expr.type == "local" then
+			local loc = expr :: luau.AstExprLocal
 			return loc["local"] and loc["local"].name
-		elseif expr.type == "ExprTypeAssertion" then
-			local assertion = expr :: luau.ExprTypeAssertion
+		elseif expr.type == "typeAssertion" then
+			local assertion = expr :: luau.AstExprTypeAssertion
 			local annotatedRoot = typeRootName(assertion.annotation)
 			if annotatedRoot then
 				return annotatedRoot
@@ -260,14 +283,14 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			if inner then
 				return returnedRootName(inner)
 			end
-		elseif expr.type == "ExprCall" then
-			local call = expr :: luau.ExprCall
-			if call.func and call.func.type == "ExprIndexName" then
-				local idx = call.func :: luau.ExprIndexName
+		elseif expr.type == "call" then
+			local call = expr :: luau.AstExprCall
+			if call.func and call.func.type == "indexName" then
+				local idx = call.func :: luau.AstExprIndexName
 				if
 					idx.index == "freeze"
-					and idx.expr.type == "ExprGlobal"
-					and (idx.expr :: luau.ExprGlobal).name == "table"
+					and idx.expr.type == "global"
+					and (idx.expr :: luau.AstExprGlobal).name == "table"
 					and call.args
 					and #call.args >= 1
 				then
@@ -281,8 +304,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	-- ── Collect returned names for export detection ──────────────────────
 	local returnedRoots: { [string]: boolean } = {}
 	for _, stat in result.root.body do
-		if stat.type == "StatReturn" then
-			local retStat = stat :: luau.StatReturn
+		if stat.type == "return" then
+			local retStat = stat :: luau.AstStatReturn
 			local list = retStat.list
 			if list then
 				for _, expr in list do
@@ -297,16 +320,16 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 	-- ── AST helpers ─────────────────────────────────────────────────────
 	local function exprRootIsExported(expr: luau.AstExpr): boolean
-		if expr.type == "ExprGlobal" then
+		if expr.type == "global" then
 			return true
 		end
-		if expr.type == "ExprLocal" then
-			local loc = expr :: luau.ExprLocal
+		if expr.type == "local" then
+			local loc = expr :: luau.AstExprLocal
 			local name = loc["local"] and loc["local"].name
 			return name ~= nil and returnedRoots[name] == true
 		end
-		if expr.type == "ExprIndexName" then
-			return exprRootIsExported((expr :: luau.ExprIndexName).expr)
+		if expr.type == "indexName" then
+			return exprRootIsExported((expr :: luau.AstExprIndexName).expr)
 		end
 		return false
 	end
@@ -323,10 +346,11 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	local typeMemberMixins: { [string]: { string } } = {}
 
 	for _, stat in result.root.body do
-		if stat.type == "StatTypeAlias" then
-			local aliasStat = stat :: luau.StatTypeAlias
-			if aliasStat.aliasedType then
-				typeAliasNodes[aliasStat.name] = aliasStat.aliasedType
+		if isTypeAliasStat(stat) then
+			local aliasStat = stat :: any
+			local aliasedType = typeAliasBody(aliasStat)
+			if aliasedType then
+				typeAliasNodes[aliasStat.name] = aliasedType
 			end
 		end
 	end
@@ -524,29 +548,29 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	local function collectTypeFunctionOverloads(
 		typeNode: luau.AstType?,
 		seenAliases: { [string]: boolean }?
-	): { luau.TypeFunction }
-		local overloads: { luau.TypeFunction } = {}
+	): { luau.AstTypeFunction }
+		local overloads: { luau.AstTypeFunction } = {}
 
 		local function visit(node: luau.AstType?)
 			if not node then
 				return
 			end
-			if node.type == "TypeFunction" then
-				table.insert(overloads, node :: luau.TypeFunction)
+			if node.type == "function" then
+				table.insert(overloads, node :: luau.AstTypeFunction)
 				return
 			end
-			if node.type == "TypeGroup" then
-				visit((node :: luau.TypeGroup).inner)
+			if node.type == "group" then
+				visit((node :: luau.AstTypeGroup).innerType)
 				return
 			end
-			if node.type == "TypeIntersection" then
-				for _, part in (node :: luau.TypeIntersection).types do
+			if node.type == "intersection" then
+				for _, part in (node :: luau.AstTypeIntersection).types do
 					visit(part)
 				end
 				return
 			end
-			if node.type == "TypeReference" then
-				local ref = node :: luau.TypeReference
+			if node.type == "reference" then
+				local ref = node :: luau.AstTypeReference
 				if not ref.prefix and typeAliasNodes[ref.name] then
 					local seen = seenAliases or {}
 					if seen[ref.name] then
@@ -565,8 +589,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 	local function extractAssertionAnnotation(expr: luau.AstExpr?): luau.AstType?
 		local current = expr
-		while current and current.type == "ExprTypeAssertion" do
-			local assertion = current :: luau.ExprTypeAssertion
+		while current and current.type == "typeAssertion" do
+			local assertion = current :: luau.AstExprTypeAssertion
 			if assertion.annotation then
 				return assertion.annotation
 			end
@@ -608,7 +632,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		local overloadDocs: { OverloadDoc } = {}
 		for _, entry in rawOverloads do
-			local overloadNode = entry.node :: luau.TypeFunction
+			local overloadNode = entry.node :: luau.AstTypeFunction
 			local rawSig = entry.rawSig :: types.RawFuncSig
 			local knownParams = buildKnownParams(rawSig)
 			local overloadDocText = findDocComment(overloadNode.location.beginline)
@@ -660,7 +684,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	local function processFunction(
 		name: string,
 		owner: string?,
-		funcNode: luau.ExprFunction,
+		funcNode: luau.AstExprFunction,
 		location: luau.Location,
 		doc: string?
 	)
@@ -696,7 +720,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 	-- ── Extract a literal value string from an expression ────────────────
 	local function extractLiteralValue(val: luau.AstExpr): string?
-		if val.type == "ExprTable" then
+		if val.type == "table" then
 			local chunks: { string } = {}
 			for _, i in val.items do
 				local v = extractLiteralValue(i.value)
@@ -718,15 +742,17 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			end
 			return "{" .. table.concat(chunks, " ") .. "}"
 
-			-- return tostring((val :: luau.ExprConstantNumber).value)
-		elseif val.type == "ExprConstantNumber" then
-			return tostring((val :: luau.ExprConstantNumber).value)
-		elseif val.type == "ExprConstantString" then
-			return '"' .. (val :: luau.ExprConstantString).value .. '"'
-		elseif val.type == "ExprConstantBool" then
-			return tostring((val :: luau.ExprConstantBool).value)
-		elseif val.type == "ExprTypeAssertion" then
-			local inner = (val :: luau.ExprTypeAssertion).expr
+			-- return tostring((val :: luau.AstExprConstantNumber).value)
+		elseif val.type == "constantNumber" then
+			return tostring((val :: luau.AstExprConstantNumber).value)
+		elseif val.type == "constantInteger" then
+			return tostring((val :: luau.AstExprConstantInteger).value)
+		elseif val.type == "constantString" then
+			return '"' .. (val :: luau.AstExprConstantString).value .. '"'
+		elseif val.type == "constantBool" then
+			return tostring((val :: luau.AstExprConstantBool).value)
+		elseif val.type == "typeAssertion" then
+			local inner = (val :: luau.AstExprTypeAssertion).expr
 			if inner then
 				return extractLiteralValue(inner)
 			end
@@ -735,15 +761,15 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	-- ── Process a type alias ─────────────────────────────────────────────
-	local function extractFunctionExpr(val: luau.AstExpr?): luau.ExprFunction?
+	local function extractFunctionExpr(val: luau.AstExpr?): luau.AstExprFunction?
 		if not val then
 			return nil
 		end
-		if val.type == "ExprFunction" then
-			return val :: luau.ExprFunction
+		if val.type == "function" then
+			return val :: luau.AstExprFunction
 		end
-		if val.type == "ExprTypeAssertion" then
-			local inner = (val :: luau.ExprTypeAssertion).expr
+		if val.type == "typeAssertion" then
+			local inner = (val :: luau.AstExprTypeAssertion).expr
 			if inner then
 				return extractFunctionExpr(inner)
 			end
@@ -751,21 +777,21 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		return nil
 	end
 
-	local function extractTableExpr(val: luau.AstExpr): luau.ExprTable?
-		if val.type == "ExprTable" then
-			return val :: luau.ExprTable
+	local function extractTableExpr(val: luau.AstExpr): luau.AstExprTable?
+		if val.type == "table" then
+			return val :: luau.AstExprTable
 		end
-		if val.type == "ExprCall" then
-			local call = val :: luau.ExprCall
-			if call.func and call.func.type == "ExprIndexName" then
-				local idx = call.func :: luau.ExprIndexName
+		if val.type == "call" then
+			local call = val :: luau.AstExprCall
+			if call.func and call.func.type == "indexName" then
+				local idx = call.func :: luau.AstExprIndexName
 				if
 					idx.index == "freeze"
-					and idx.expr.type == "ExprGlobal"
-					and (idx.expr :: luau.ExprGlobal).name == "table"
+					and idx.expr.type == "global"
+					and (idx.expr :: luau.AstExprGlobal).name == "table"
 				then
-					if call.args and #call.args >= 1 and call.args[1].type == "ExprTable" then
-						return call.args[1] :: luau.ExprTable
+					if call.args and #call.args >= 1 and call.args[1].type == "table" then
+						return call.args[1] :: luau.AstExprTable
 					end
 				end
 			end
@@ -780,17 +806,17 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		for _, item in tbl.items do
-			if item.kind ~= "Record" or not item.key then
+			if item.kind ~= "record" or not item.key then
 				continue
 			end
 
 			local keyName: string? = nil
-			if item.key.type == "ExprConstantString" then
-				keyName = (item.key :: luau.ExprConstantString).value
-			elseif item.key.type == "ExprGlobal" then
-				keyName = (item.key :: luau.ExprGlobal).name
-			elseif item.key.type == "ExprLocal" then
-				local loc = item.key :: luau.ExprLocal
+			if item.key.type == "constantString" then
+				keyName = (item.key :: luau.AstExprConstantString).value
+			elseif item.key.type == "global" then
+				keyName = (item.key :: luau.AstExprGlobal).name
+			elseif item.key.type == "local" then
+				local loc = item.key :: luau.AstExprLocal
 				keyName = loc["local"] and loc["local"].name
 			end
 
@@ -803,7 +829,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	local function buildTypeMembersFromTable(
-		tbl: luau.TypeTable,
+		tbl: luau.AstTypeTable,
 		findMemberDoc: (number) -> string?,
 		ownerName: string
 	): { FuncDoc }?
@@ -829,7 +855,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			into = {}
 		end
 		for _, member in extra do
-			table.insert(into, member)
+			table.insert(into :: { FuncDoc }, member)
 		end
 		return into
 	end
@@ -843,13 +869,13 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		local seen: { [string]: boolean } = {}
-		for _, value in into do
+		for _, value in into :: { string } do
 			seen[value] = true
 		end
 		for _, value in extra do
 			if not seen[value] then
 				seen[value] = true
-				table.insert(into, value)
+				table.insert(into :: { string }, value)
 			end
 		end
 		return into
@@ -875,19 +901,19 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				return
 			end
 
-			if node.type == "TypeTable" then
+			if node.type == "table" then
 				collectedMembers = appendMemberList(
 					collectedMembers,
-					buildTypeMembersFromTable(node :: luau.TypeTable, findMemberDoc, ownerName)
+					buildTypeMembersFromTable(node :: luau.AstTypeTable, findMemberDoc, ownerName)
 				)
-			elseif node.type == "TypeIntersection" then
-				for _, part in (node :: luau.TypeIntersection).types do
+			elseif node.type == "intersection" then
+				for _, part in (node :: luau.AstTypeIntersection).types do
 					visit(part)
 				end
-			elseif node.type == "TypeGroup" then
-				visit((node :: luau.TypeGroup).inner)
-			elseif node.type == "TypeReference" then
-				local ref = node :: luau.TypeReference
+			elseif node.type == "group" then
+				visit((node :: luau.AstTypeGroup).innerType)
+			elseif node.type == "reference" then
+				local ref = node :: luau.AstTypeReference
 				if ref.name == "setmetatable" and ref.parameters and #ref.parameters >= 1 then
 					visit(unwrapTypeOrPack(ref.parameters[1]))
 				elseif ref.name ~= "typeof" then
@@ -912,7 +938,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	end
 
 	local function extractInlineMetatableMembers(
-		tbl: luau.TypeTable,
+		tbl: luau.AstTypeTable,
 		findMemberDoc: (number) -> string?,
 		ownerName: string
 	): ({ FuncDoc }?, { FuncDoc }?)
@@ -952,19 +978,19 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		local visitedAliases = seenAliases or {}
-		if typeNode.type == "TypeGroup" then
-			return typeResolvesToClass((typeNode :: luau.TypeGroup).inner, visitedAliases)
+		if typeNode.type == "group" then
+			return typeResolvesToClass((typeNode :: luau.AstTypeGroup).innerType, visitedAliases)
 		end
-		if typeNode.type == "TypeIntersection" then
-			for _, part in (typeNode :: luau.TypeIntersection).types do
+		if typeNode.type == "intersection" then
+			for _, part in (typeNode :: luau.AstTypeIntersection).types do
 				if typeResolvesToClass(part, visitedAliases) then
 					return true
 				end
 			end
 			return false
 		end
-		if typeNode.type == "TypeReference" then
-			local ref = typeNode :: luau.TypeReference
+		if typeNode.type == "reference" then
+			local ref = typeNode :: luau.AstTypeReference
 			if not ref.prefix and typeAliasNodes[ref.name] and not visitedAliases[ref.name] then
 				visitedAliases[ref.name] = true
 				local resolved = typeResolvesToClass(typeAliasNodes[ref.name], visitedAliases)
@@ -1116,16 +1142,16 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 	local classImplDocs: { [string]: string } = {}
 	local classImplIndexTables: { [string]: string } = {}
 	for _, stat in result.root.body do
-		if stat.type ~= "StatLocal" then
-			if stat.type == "StatAssign" then
-				local assignStat = stat :: luau.StatAssign
+		if stat.type ~= "local" then
+			if stat.type == "assign" then
+				local assignStat = stat :: luau.AstStatAssign
 				if assignStat.vars and assignStat.values then
 					for i, var in assignStat.vars do
-						if var.type ~= "ExprIndexName" then
+						if var.type ~= "indexName" then
 							continue
 						end
 
-						local idx = var :: luau.ExprIndexName
+						local idx = var :: luau.AstExprIndexName
 						if idx.index ~= "__index" then
 							continue
 						end
@@ -1142,7 +1168,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 
 		local doc = findDocComment(stat.location.beginline)
-		local localStat = stat :: luau.StatLocal
+		local localStat = stat :: luau.AstStatLocal
 		if not localStat.vars or not localStat.values then
 			continue
 		end
@@ -1164,12 +1190,15 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		end
 	end
 
-	local function processTypeAlias(stat: luau.StatTypeAlias, doc: string?)
+	local function processTypeAlias(stat: any, doc: string?)
 		local line = stat.location.beginline
 		local typeMembers: { FuncDoc }? = nil
 		local metamethods: { FuncDoc }? = nil
-		local aliasedType = stat.aliasedType
+		local aliasedType = typeAliasBody(stat)
 		local mixinTypes: { string }? = nil
+		if not aliasedType then
+			return
+		end
 
 		local function findMemberDoc(nodeLine: number): string?
 			if nodeLine == line then
@@ -1187,6 +1216,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		if hasGenerics or hasGenericPacks then
 			generics = {}
 			if hasGenerics then
+				assert(stat.generics)
 				for _, g in stat.generics do
 					table.insert(generics :: { string }, genericName(g))
 				end
@@ -1205,12 +1235,12 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 		-- Pattern 3: inline setmetatable<{fields}, {meta}>
 		if isInlineClass then
-			local ref = aliasedType :: luau.TypeReference
+			local ref = aliasedType :: luau.AstTypeReference
 			local params = ref.parameters
 			if (not typeMembers) and params and #params >= 1 then
 				local p1 = unwrapTypeOrPack(params[1])
-				if p1 and p1.type == "TypeTable" then
-					local tbl = p1 :: luau.TypeTable
+				if p1 and p1.type == "table" then
+					local tbl = p1 :: luau.AstTypeTable
 					if tbl.props then
 						typeMembers = {}
 						for _, prop in tbl.props do
@@ -1224,8 +1254,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			end
 			if params and #params >= 2 then
 				local p2 = unwrapTypeOrPack(params[2])
-				if p2 and p2.type == "TypeTable" then
-					local tbl = p2 :: luau.TypeTable
+				if p2 and p2.type == "table" then
+					local tbl = p2 :: luau.AstTypeTable
 					local classMembers, operatorMembers = extractInlineMetatableMembers(tbl, findMemberDoc, stat.name)
 					typeMembers = appendMemberList(typeMembers, classMembers)
 					metamethods = appendMemberList(metamethods, operatorMembers)
@@ -1321,30 +1351,30 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 		local line = stat.location.beginline
 		local doc = findDocComment(line)
 
-		if stat.type == "StatTypeAlias" then
-			processTypeAlias(stat :: luau.StatTypeAlias, doc)
-		elseif stat.type == "StatFunction" then
-			local funcStat = stat :: luau.StatFunction
+		if isTypeAliasStat(stat) then
+			processTypeAlias(stat, doc)
+		elseif stat.type == "function" then
+			local funcStat = stat :: luau.AstStatFunction
 			local fname: string? = nil
 			local owner: string? = nil
 			if funcStat.name then
-				if funcStat.name.type == "ExprIndexName" then
-					local idx = funcStat.name :: luau.ExprIndexName
+				if funcStat.name.type == "indexName" then
+					local idx = funcStat.name :: luau.AstExprIndexName
 					fname = idx.index
 					owner = exprToPath(idx.expr)
-				elseif funcStat.name.type == "ExprGlobal" then
-					fname = (funcStat.name :: luau.ExprGlobal).name
+				elseif funcStat.name.type == "global" then
+					fname = (funcStat.name :: luau.AstExprGlobal).name
 				end
 			end
 			processFunction(fname or "<anonymous>", owner, funcStat.func, stat.location, doc)
-		elseif stat.type == "StatLocalFunction" then
-			local localFunc = stat :: luau.StatLocalFunction
+		elseif stat.type == "localFunction" then
+			local localFunc = stat :: luau.AstStatLocalFunction
 			local fname = localFunc.name and localFunc.name.name or "<anonymous>"
 			if returnedRoots[fname] then
 				processFunction(fname, nil, localFunc.func, stat.location, doc)
 			end
-		elseif stat.type == "StatLocal" then
-			local localStat = stat :: luau.StatLocal
+		elseif stat.type == "local" then
+			local localStat = stat :: luau.AstStatLocal
 			if localStat.vars and localStat.values then
 				for i, varNode in localStat.vars do
 					local varName = varNode.name
@@ -1385,20 +1415,20 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 					end
 				end
 			end
-		elseif stat.type == "StatAssign" then
-			local assignStat = stat :: luau.StatAssign
+		elseif stat.type == "assign" then
+			local assignStat = stat :: luau.AstStatAssign
 			if assignStat.vars and assignStat.values then
 				for i, var in assignStat.vars do
 					local cname: string? = nil
 					local cowner: string? = nil
 					local isExported = false
-					if var.type == "ExprIndexName" then
-						local idx = var :: luau.ExprIndexName
+					if var.type == "indexName" then
+						local idx = var :: luau.AstExprIndexName
 						cname = idx.index
 						cowner = exprToPath(idx.expr)
 						isExported = exprRootIsExported(idx.expr)
-					elseif var.type == "ExprGlobal" then
-						cname = (var :: luau.ExprGlobal).name
+					elseif var.type == "global" then
+						cname = (var :: luau.AstExprGlobal).name
 						isExported = true
 					end
 					if not isExported or not cname then
@@ -1412,8 +1442,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 					local fnExpr = extractFunctionExpr(val)
 					if fnExpr then
-						local ownerPath = if var.type == "ExprIndexName"
-							then exprToPath((var :: luau.ExprIndexName).expr)
+						local ownerPath = if var.type == "indexName"
+							then exprToPath((var :: luau.AstExprIndexName).expr)
 							else nil
 						processFunction(name, ownerPath, fnExpr, stat.location, if i == 1 then doc else nil)
 						continue
@@ -1421,8 +1451,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 
 					local annotation = extractAssertionAnnotation(val)
 					if annotation then
-						local ownerPath = if var.type == "ExprIndexName"
-							then exprToPath((var :: luau.ExprIndexName).expr)
+						local ownerPath = if var.type == "indexName"
+							then exprToPath((var :: luau.AstExprIndexName).expr)
 							else nil
 						if
 							processTypedOverloads(
@@ -1447,12 +1477,12 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 						if tableExpr then
 							local ownerPath = exprToPath(var)
 							for _, item in tableExpr.items do
-								if item.kind ~= "Record" or not item.key then
+								if item.kind ~= "record" or not item.key then
 									continue
 								end
 								local keyName: string? = nil
-								if item.key.type == "ExprConstantString" then
-									keyName = (item.key :: luau.ExprConstantString).value
+								if item.key.type == "constantString" then
+									keyName = (item.key :: luau.AstExprConstantString).value
 								end
 								if not keyName then
 									continue
@@ -1569,7 +1599,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				if not t.members then
 					t.members = {}
 				end
-				mergeMembersUnique(t.members, fieldsType.members)
+				mergeMembersUnique(t.members :: { FuncDoc }, fieldsType.members)
 			end
 		end
 
@@ -1581,7 +1611,7 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			for _, mixinName in mixins do
 				local mixinType = typeByName[mixinName]
 				if mixinType and mixinType.members and #mixinType.members > 0 then
-					mergeMembersUnique(t.members, mixinType.members)
+					mergeMembersUnique(t.members :: { FuncDoc }, mixinType.members)
 				end
 			end
 		end
@@ -1601,8 +1631,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 			return
 		end
 
-		if node.type == "TypeReference" then
-			local ref = node :: luau.TypeReference
+		if node.type == "reference" then
+			local ref = node :: luau.AstTypeReference
 			if ref.name == "setmetatable" or ref.name == "typeof" then
 				if ref.parameters then
 					for _, parameter in ref.parameters do
@@ -1624,8 +1654,8 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 					collectReferencedTypeDocs(unwrapTypeOrPack(parameter), seenRefs, out)
 				end
 			end
-		elseif node.type == "TypeTable" then
-			local tbl = node :: luau.TypeTable
+		elseif node.type == "table" then
+			local tbl = node :: luau.AstTypeTable
 			if tbl.props then
 				for _, prop in tbl.props do
 					collectReferencedTypeDocs(prop.type, seenRefs, out)
@@ -1635,36 +1665,35 @@ function extract.extract(result: luau.ParseResult, sourceLines: { string }): Ext
 				collectReferencedTypeDocs(tbl.indexer.indexType, seenRefs, out)
 				collectReferencedTypeDocs(tbl.indexer.resultType, seenRefs, out)
 			end
-		elseif node.type == "TypeFunction" then
-			local fn = node :: luau.TypeFunction
+		elseif node.type == "function" then
+			local fn = node :: luau.AstTypeFunction
 			local argTypes, argTail = normalizeTypeList(fn.argTypes)
 			for _, argType in argTypes do
 				collectReferencedTypeDocs(argType, seenRefs, out)
 			end
 			collectReferencedTypeDocs(argTail, seenRefs, out)
 			collectReferencedTypeDocs(fn.returnTypes, seenRefs, out)
-		elseif node.type == "TypeUnion" then
-			for _, part in (node :: luau.TypeUnion).types do
+		elseif node.type == "union" then
+			for _, part in (node :: luau.AstTypeUnion).types do
 				collectReferencedTypeDocs(part, seenRefs, out)
 			end
-		elseif node.type == "TypeIntersection" then
-			for _, part in (node :: luau.TypeIntersection).types do
+		elseif node.type == "intersection" then
+			for _, part in (node :: luau.AstTypeIntersection).types do
 				collectReferencedTypeDocs(part, seenRefs, out)
 			end
-		elseif node.type == "TypeGroup" then
-			collectReferencedTypeDocs((node :: luau.TypeGroup).inner, seenRefs, out)
-		elseif node.type == "TypePackExplicit" then
-			local pack = node :: luau.TypePackExplicit
-			if pack.types then
-				for _, part in pack.types do
-					collectReferencedTypeDocs(part, seenRefs, out)
-				end
+		elseif node.type == "group" then
+			collectReferencedTypeDocs((node :: luau.AstTypeGroup).innerType, seenRefs, out)
+		elseif node.type == "explicit" then
+			local pack = node :: luau.AstTypePackExplicit
+			local packTypes, packTail = normalizeTypeList(pack.typeList)
+			for _, part in packTypes do
+				collectReferencedTypeDocs(part, seenRefs, out)
 			end
-			collectReferencedTypeDocs(pack.tail, seenRefs, out)
-		elseif node.type == "TypePackVariadic" then
-			collectReferencedTypeDocs((node :: luau.TypePackVariadic).variadicType, seenRefs, out)
-		elseif node.type == "TypeError" then
-			for _, part in (node :: luau.TypeError).types do
+			collectReferencedTypeDocs(packTail, seenRefs, out)
+		elseif node.type == "variadic" then
+			collectReferencedTypeDocs((node :: luau.AstTypePackVariadic).variadicType, seenRefs, out)
+		elseif node.type == "error" then
+			for _, part in (node :: luau.AstTypeError).types do
 				collectReferencedTypeDocs(part, seenRefs, out)
 			end
 		end

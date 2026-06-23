@@ -97,10 +97,16 @@ end
 
 formatTable = function(val: { [any]: any }, depth: number, seen: { [any]: boolean }): string
 	seen[val] = true
-	local str = "{\n"
+	local newline = false
+	local str = "{"
 
 	-- Print array part
 	for i = 1, #val do
+		if not newline then
+			str ..= "\n"
+			newline = true
+		end
+
 		str ..= string.rep(" ", (depth + 2) :: number)
 		str ..= formatValue(val[i], depth + 2, seen)
 		str ..= ",\n"
@@ -113,6 +119,11 @@ formatTable = function(val: { [any]: any }, depth: number, seen: { [any]: boolea
 			continue
 		end
 
+		if not newline then
+			str ..= "\n"
+			newline = true
+		end
+
 		str ..= string.rep(" ", (depth + 2) :: number)
 		str ..= formatKey(k, depth + 2, seen)
 		str ..= " = "
@@ -121,7 +132,10 @@ formatTable = function(val: { [any]: any }, depth: number, seen: { [any]: boolea
 	end
 
 	-- TODO: This
-	str ..= string.rep(" ", depth :: number) .. "}"
+	if newline then
+		str ..= string.rep(" ", depth :: number)
+	end
+	str ..= "}"
 	seen[val] = nil
 	return str
 end

@@ -19,11 +19,14 @@ local tp = td.tp
 local tpExtend = td.tpExtend
 local partsToString = td.partsToString
 
-local function normalizeArgTypes(argTypes: luau.AstTypeList | { luau.AstType }?): { luau.AstType }
+local function normalizeArgTypes(argTypes: luau.TypeList | { luau.AstType }?): { luau.AstType }
 	if not argTypes then
 		return {}
 	end
 	local anyArgTypes = argTypes :: any
+	if anyArgTypes.typeList then
+		anyArgTypes = anyArgTypes.typeList
+	end
 	if anyArgTypes.types then
 		return anyArgTypes.types :: { luau.AstType }
 	end
@@ -40,21 +43,21 @@ local function argNameValue(value: any): string?
 	return value
 end
 
-local function collectFunctionTypeOverloads(ty: luau.AstType?): { luau.TypeFunction }
-	local overloads: { luau.TypeFunction } = {}
+local function collectFunctionTypeOverloads(ty: luau.AstType?): { luau.AstTypeFunction }
+	local overloads: { luau.AstTypeFunction } = {}
 
 	local function visit(node: luau.AstType?)
 		if not node then
 			return
 		end
-		if node.type == "TypeFunction" then
-			table.insert(overloads, node :: luau.TypeFunction)
-		elseif node.type == "TypeIntersection" then
-			for _, part in (node :: luau.TypeIntersection).types do
+		if node.type == "function" then
+			table.insert(overloads, node :: luau.AstTypeFunction)
+		elseif node.type == "intersection" then
+			for _, part in (node :: luau.AstTypeIntersection).types do
 				visit(part)
 			end
-		elseif node.type == "TypeGroup" then
-			visit((node :: luau.TypeGroup).inner)
+		elseif node.type == "group" then
+			visit((node :: luau.AstTypeGroup).innerType)
 		end
 	end
 
@@ -117,7 +120,11 @@ end
 -- Build a FuncDoc from a type table property.
 -- For function-typed props, builds full signature data.
 -- For non-function props, builds a property record (params=nil).
-local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) -> string?, ownerName: string?): FuncDoc?
+local function buildMember(
+	prop: luau.AstTypeTableProp,
+	findDocComment: (number) -> string?,
+	ownerName: string?
+): FuncDoc?
 	local rawDoc: string? = if prop.location then findDocComment(prop.location.beginline) else nil
 	local parsed: ParsedDoc? = nil
 	local memberDoc: string? = rawDoc
@@ -143,7 +150,7 @@ local function buildMember(prop: luau.TypeTableProp, findDocComment: (number) ->
 		memberDoc = if parsed then parsed.body else rawDoc
 		local overloads: { OverloadDoc } = {}
 		for _, entry in rawOverloads do
-			local overloadNode = entry.node :: luau.TypeFunction
+			local overloadNode = entry.node :: luau.AstTypeFunction
 			local overloadSig = entry.sig :: types.RawFuncSig
 			local overloadKnownParams = buildKnownParams(overloadSig)
 			local overloadDoc = if overloadNode.location then findDocComment(overloadNode.location.beginline) else nil

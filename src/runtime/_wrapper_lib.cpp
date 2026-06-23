@@ -1283,6 +1283,26 @@ static void analysis_push_type_error(lua_State* L, const Luau::Frontend& fe,
     std::string msg;
     if (const auto* syntax = Luau::get_if<Luau::SyntaxError>(&err.data)) {
         msg = syntax->message;
+    } else if (const auto* gbm = Luau::get_if<Luau::GenericBoundsMismatch>(&err.data)) {
+        // Luau's stringifier for this error dereferences GenericBoundsMismatch::genericName,
+        // a std::string_view that dangles by the time errors are reported (it points at a
+        // generic's name captured during subtyping). Reconstruct the message ourselves from
+        // the still-valid bound TypeIds and omit the unsafe name to avoid the crash.
+        std::string lowerBounds;
+        for (size_t i = 0; i < gbm->lowerBounds.size(); ++i) {
+            if (i > 0) lowerBounds += " | ";
+            lowerBounds += Luau::toString(gbm->lowerBounds[i]);
+        }
+        std::string upperBounds;
+        for (size_t i = 0; i < gbm->upperBounds.size(); ++i) {
+            if (i > 0) upperBounds += " & ";
+            upperBounds += Luau::toString(gbm->upperBounds[i]);
+        }
+        msg =
+            "No valid instantiation could be inferred for a generic type parameter."
+            " It was expected to be at least:\n\t" +
+            lowerBounds + "\nand at most:\n\t" + upperBounds +
+            "\nbut these types are not compatible with one another.";
     } else {
         msg = Luau::toString(err, Luau::TypeErrorToStringOptions{ fe.fileResolver });
     }

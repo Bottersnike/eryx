@@ -1,23 +1,27 @@
 --[=[
 	Luau source code parser and comment utilities.
 
-	Wraps the native Luau parser to produce a fully typed AST. Also
-	provides helpers for extracting comment text from surrounding-text
-	annotations and for round-trip pretty-printing.
+	Wraps the native Luau parser to produce a serialized AST. Nodes are
+	discriminated by `category` and lowercase `type`, and concrete syntax
+	tokens preserve their exact source text plus leading/trailing trivia.
+	The module also provides helpers for extracting comment text from token
+	trivia and for round-trip pretty-printing.
 
 	```luau
 	local parse = require("@eryx/luau/parse")
 
-	local result = parse.parse(source, { captureComments = true })
+	local result = parse.parse(source, { collectComments = true })
 	print("Lines:", result.lines)
 	for _, stat in result.root.body do
 	    print(stat.type, stat.location.beginline)
 	end
 
-	-- Extract attached comments from surrounding text
-	local text = result.surroundingText and result.surroundingText[result.root.body[1]]
-	if text then
-	    local comments = parse.extractComments(text.leading, { stripLineLeadingWhitespace = true })
+	-- Extract comment payloads from token trivia text.
+	local stat = result.root.body[1]
+	if stat.type == "return" then
+	    local comments = parse.extractComments(stat.returnKeywordToken.leadingText, {
+	        stripLineLeadingWhitespace = true,
+	    })
 	    print(comments[1])
 	end
 	```
@@ -27,12 +31,17 @@ local native = require("@eryx/luau/_parse_native")
 
 export type Position = ast.Position
 export type Location = ast.Location
-export type ParseErrorInfo = ast.ParseErrorInfo
-export type CommentInfo = ast.CommentInfo
-export type SurroundingText = ast.SurroundingText
-export type ParseOptions = ast.ParseOptions
-export type AstNode = ast.AstNode
-export type ParseResult = ast.ParseResult
+export type ParseResult<Root> = {
+	root: Root,
+	errors: { { message: string, location: Location } },
+	source: string,
+	lines: { string },
+	comments: { { type: "line" | "block" | "broken" | "unknown", location: Location } }?,
+}
+
+export type ParseOptions = {
+	collectComments: boolean?,
+}
 
 export type ExtractCommentsOptions = {
 	--- If true, strip the common leading indentation from block comment content.
@@ -212,16 +221,16 @@ end
 --[=[
 	Parses Luau source code and returns a structured AST.
 
-	The returned `root` is a [[Block]] node whose `body` contains an array
-	of statement nodes. Every node carries a `type` string discriminator
-	and a `location` with 1-based line/column positions.
+	The returned `root` is an [[AstStatBlock]] node whose `body` contains
+	an array of statement nodes. Serialized AST nodes carry a `category`,
+	a lowercase `type` discriminator, and a 1-based source `location`.
 
-	Pass `{ captureComments = true }` to include a `comments` array in
-	the result. Pass `{ collectSurroundingText = true }` to include a
-	sparse `surroundingText` side table keyed by AST node.
+	Pass `{ collectComments = true }` to include a `comments` array in the
+	result. Concrete syntax tokens are included directly on the AST and carry
+	`text`, `location`, `leadingText`, and `trailingText`.
 
 	```luau
-	local result = parse.parse(source, { captureComments = true })
+	local result = parse.parse(source, { collectComments = true })
 	print("Lines:", result.lines)
 	print("Errors:", #result.errors)
 	print("Top-level statements:", #result.root.body)
@@ -231,8 +240,23 @@ end
 	@param options Parse options (e.g. comment capture).
 	@return ParseResult -- The parse result containing the AST root, errors, and optional comments.
 ]=]
-function parse.parse(source: string, options: ParseOptions?): ParseResult
+function parse.parse(source: string, options: ParseOptions?): ParseResult<ast.AstStatBlock>
 	return native.parse(source, options)
+end
+
+--[=[
+	Parses a single Luau expression and returns that expression as `root`.
+
+	The result has the same shape as [[parse]], but `root` is an [[AstExpr]]
+	instead of a top-level statement block. Syntax errors are reported through
+	`errors` and may produce `error` placeholder nodes.
+
+	@param source The Luau expression source string to parse.
+	@param options Parse options (e.g. comment capture).
+	@return ParseResult -- The parse result containing the expression root, errors, and optional comments.
+]=]
+function parse.parseExpr(source: string, options: ParseOptions?): ParseResult<ast.AstExpr>
+	return native.parseExpr(source, options)
 end
 
 --[=[
@@ -246,12 +270,11 @@ function parse.prettyPrint(source: string): string
 end
 
 --[=[
-	Extracts comment content from raw surrounding text.
+	Extracts comment content from raw leading or trailing text.
 
-	This is intended for use with strings from
-	`result.surroundingText[node].leading` and `.trailing`. The parse
-	result keeps those strings lossless; this helper turns them into
-	comment payloads on demand.
+	This is intended for use with strings from token `leadingText` and
+	`trailingText` fields. Those strings preserve all trivia; this helper
+	turns comments inside them into payload strings on demand.
 
 	When `stripLineLeadingWhitespace` is true, line comments like
 	`-- hello` are returned as `"hello"` instead of `" hello"`.

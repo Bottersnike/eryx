@@ -30,6 +30,7 @@
 
 #include "native.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdio>
@@ -37,7 +38,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "../../LuaLocation.hpp"
@@ -50,6 +53,7 @@
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Compiler.h"
 #include "Luau/Config.h"  // We just want the luaurc parsing side of things, so it's safe to use this in a shared module
+#include "Luau/Cst.h"
 #include "Luau/Lexer.h"
 #include "Luau/Location.h"
 #include "Luau/ParseOptions.h"
@@ -60,12 +64,15 @@
 #include "lualib.h"
 #include "module_api.h"
 
-using namespace Luau;
+// using namespace Luau;
 
 // ---------------------------------------------------------------------------
 // Helpers – push a Location / Position onto the Lua stack
 // ---------------------------------------------------------------------------
-static void push_position(lua_State* L, const Position& pos) {
+static void push_position(lua_State* L, const Luau::Position& pos) {
+    if (!lua_checkstack(L, 4))
+        luaL_error(L, "luau.parse: stack overflow while serialising AST position");
+
     lua_createtable(L, 0, 2);
     lua_pushinteger(L, pos.line + 1);  // 1-based for Luau users
     lua_setfield(L, -2, "line");
@@ -73,1428 +80,2082 @@ static void push_position(lua_State* L, const Position& pos) {
     lua_setfield(L, -2, "column");
 }
 
-static void push_location(lua_State* L, const Location& loc) { eryx_lua_push_location(L, loc); }
+static void push_location(lua_State* L, const Luau::Location& loc) {
+    if (!lua_checkstack(L, 8))
+        luaL_error(L, "luau.parse: stack overflow while serialising AST location");
 
-// Start a new node table with `type` and `location` pre-filled.
-static void begin_node(lua_State* L, const char* type, const Location& loc) {
-    lua_createtable(L, 0, 8);
-    lua_pushstring(L, type);
-    lua_setfield(L, -2, "type");
-    push_location(L, loc);
-    lua_setfield(L, -2, "location");
+    eryx_lua_push_location(L, loc);
 }
 
-// ---------------------------------------------------------------------------
-// Forward declarations
-// ---------------------------------------------------------------------------
-static void push_node(lua_State* L, AstNode* node);
-static void push_expr(lua_State* L, AstExpr* expr);
-static void push_stat(lua_State* L, AstStat* stat);
-static void push_type(lua_State* L, AstType* type);
-static void push_typepack(lua_State* L, AstTypePack* tp);
-static void push_local(lua_State* L, AstLocal* local);
-
-struct SurroundingTextInfo {
-    std::string leading;
-    std::string trailing;
-};
-
-struct ParseSerializeCtx {
-    const ParseResult* result;
-    std::string_view source;
-    bool captureComments;
-    bool collectSurroundingText;
-};
-
-struct CommentSpan {
-    size_t startOffset;
-    size_t endOffset;
-    Lexeme::Type type;
-};
-
-// Stack safety: ensure room for at least `n` extra Lua-stack slots.
-// Raises a clean Lua error if the stack cannot grow (tree too deep).
-static void ensure_stack(lua_State* L, int n) {
-    if (!lua_checkstack(L, n))
-        luaL_error(L, "luau.parse: stack overflow during AST serialization (tree too deep)");
-}
-
-// Push an AstArray of pointers as a Lua array.
-template <typename T>
-static void push_array(lua_State* L, const AstArray<T*>& arr, void (*push_fn)(lua_State*, T*)) {
-    lua_createtable(L, (int)arr.size, 0);
-    for (size_t i = 0; i < arr.size; i++) {
-        push_fn(L, arr.data[i]);
-        lua_rawseti(L, -2, (int)(i + 1));
-    }
-}
-
-// Push an AstName (nullable).
-static void push_name(lua_State* L, const AstName& name) {
-    if (name.value)
-        lua_pushstring(L, name.value);
-    else
-        lua_pushnil(L);
-}
-
-static void push_optional_name(lua_State* L, const std::optional<AstName>& name) {
-    if (name)
-        push_name(L, *name);
-    else
-        lua_pushnil(L);
-}
-
-static void push_optional_location(lua_State* L, const std::optional<Location>& loc) {
-    if (loc)
-        push_location(L, *loc);
-    else
-        lua_pushnil(L);
-}
-
-static const char* table_access_to_string(AstTableAccess access) {
-    switch (access) {
-        case AstTableAccess::Read:
-            return "Read";
-        case AstTableAccess::Write:
-            return "Write";
-        case AstTableAccess::ReadWrite:
-        default:
-            return "ReadWrite";
-    }
-}
-
-static const char* attr_type_to_string(AstAttr::Type type) {
-    switch (type) {
-        case AstAttr::Checked:
-            return "Checked";
-        case AstAttr::Native:
-            return "Native";
-        case AstAttr::Deprecated:
-            return "Deprecated";
-        case AstAttr::Unknown:
-        default:
-            return "Unknown";
-    }
-}
-
-static const char* number_parse_result_to_string(ConstantNumberParseResult result) {
-    switch (result) {
-        case ConstantNumberParseResult::Ok:
-            return "Ok";
-        case ConstantNumberParseResult::Imprecise:
-            return "Imprecise";
-        case ConstantNumberParseResult::Malformed:
-            return "Malformed";
-        case ConstantNumberParseResult::BinOverflow:
-            return "BinOverflow";
-        case ConstantNumberParseResult::HexOverflow:
-            return "HexOverflow";
-        default:
-            return "Unknown";
-    }
-}
-
-static const char* quote_style_to_string(AstExprConstantString::QuoteStyle quoteStyle) {
+static const char* quote_style_to_string(Luau::AstExprConstantString::QuoteStyle quoteStyle) {
     switch (quoteStyle) {
-        case AstExprConstantString::QuotedSimple:
-            return "QuotedSimple";
-        case AstExprConstantString::QuotedSingle:
-            return "QuotedSingle";
-        case AstExprConstantString::QuotedRaw:
-            return "QuotedRaw";
-        case AstExprConstantString::Unquoted:
-            return "Unquoted";
+        case Luau::AstExprConstantString::QuotedSimple:
+            return "simple";
+        case Luau::AstExprConstantString::QuotedSingle:
+            return "single";
+        case Luau::AstExprConstantString::QuotedRaw:
+            return "raw";
+        case Luau::AstExprConstantString::Unquoted:
+            return "unquoted";
         default:
-            return "Unknown";
+            return "unknown";
     }
 }
 
-static void push_type_or_pack(lua_State* L, const AstTypeOrPack& v) {
-    lua_createtable(L, 0, 2);
-    if (v.type) {
-        lua_pushstring(L, "Type");
-        lua_setfield(L, -2, "kind");
-        push_type(L, v.type);
-        lua_setfield(L, -2, "value");
-    } else if (v.typePack) {
-        lua_pushstring(L, "TypePack");
-        lua_setfield(L, -2, "kind");
-        push_typepack(L, v.typePack);
-        lua_setfield(L, -2, "value");
-    } else {
-        lua_pushstring(L, "Unknown");
-        lua_setfield(L, -2, "kind");
-        lua_pushnil(L);
-        lua_setfield(L, -2, "value");
+static const char* comment_type_to_string(Luau::Lexeme::Type type) {
+    switch (type) {
+        case Luau::Lexeme::Comment:
+            return "line";
+        case Luau::Lexeme::BlockComment:
+            return "block";
+        case Luau::Lexeme::BrokenComment:
+            return "broken";
+        default:
+            return "unknown";
     }
 }
 
-static void push_ast_attr(lua_State* L, AstAttr* attr) {
-    if (!attr) {
-        lua_pushnil(L);
-        return;
-    }
-    lua_createtable(L, 0, 6);
-    lua_pushstring(L, attr_type_to_string(attr->type));
-    lua_setfield(L, -2, "type");
-    push_location(L, attr->location);
-    lua_setfield(L, -2, "location");
-    push_name(L, attr->name);
-    lua_setfield(L, -2, "name");
-    push_array<AstExpr>(L, attr->args, push_expr);
-    lua_setfield(L, -2, "args");
+static const char* getNodeTypeName(Luau::AstNode* node) {
+    if (node->is<Luau::AstAttr>()) return "AstAttr";
+    if (node->is<Luau::AstGenericType>()) return "AstGenericType";
+    if (node->is<Luau::AstGenericTypePack>()) return "AstGenericTypePack";
+    if (node->is<Luau::AstExprGroup>()) return "AstExprGroup";
+    if (node->is<Luau::AstExprConstantNil>()) return "AstExprConstantNil";
+    if (node->is<Luau::AstExprConstantBool>()) return "AstExprConstantBool";
+    if (node->is<Luau::AstExprConstantNumber>()) return "AstExprConstantNumber";
+    if (node->is<Luau::AstExprConstantInteger>()) return "AstExprConstantInteger";
+    if (node->is<Luau::AstExprConstantString>()) return "AstExprConstantString";
+    if (node->is<Luau::AstExprLocal>()) return "AstExprLocal";
+    if (node->is<Luau::AstExprGlobal>()) return "AstExprGlobal";
+    if (node->is<Luau::AstExprVarargs>()) return "AstExprVarargs";
+    if (node->is<Luau::AstExprCall>()) return "AstExprCall";
+    if (node->is<Luau::AstExprIndexName>()) return "AstExprIndexName";
+    if (node->is<Luau::AstExprIndexExpr>()) return "AstExprIndexExpr";
+    if (node->is<Luau::AstExprFunction>()) return "AstExprFunction";
+    if (node->is<Luau::AstExprTable>()) return "AstExprTable";
+    if (node->is<Luau::AstExprUnary>()) return "AstExprUnary";
+    if (node->is<Luau::AstExprBinary>()) return "AstExprBinary";
+    if (node->is<Luau::AstExprTypeAssertion>()) return "AstExprTypeAssertion";
+    if (node->is<Luau::AstExprIfElse>()) return "AstExprIfElse";
+    if (node->is<Luau::AstExprInterpString>()) return "AstExprInterpString";
+    if (node->is<Luau::AstExprInstantiate>()) return "AstExprInstantiate";
+    if (node->is<Luau::AstExprError>()) return "AstExprError";
+    if (node->is<Luau::AstStatBlock>()) return "AstStatBlock";
+    if (node->is<Luau::AstStatIf>()) return "AstStatIf";
+    if (node->is<Luau::AstStatWhile>()) return "AstStatWhile";
+    if (node->is<Luau::AstStatRepeat>()) return "AstStatRepeat";
+    if (node->is<Luau::AstStatBreak>()) return "AstStatBreak";
+    if (node->is<Luau::AstStatContinue>()) return "AstStatContinue";
+    if (node->is<Luau::AstStatReturn>()) return "AstStatReturn";
+    if (node->is<Luau::AstStatExpr>()) return "AstStatExpr";
+    if (node->is<Luau::AstStatLocal>()) return "AstStatLocal";
+    if (node->is<Luau::AstStatFor>()) return "AstStatFor";
+    if (node->is<Luau::AstStatForIn>()) return "AstStatForIn";
+    if (node->is<Luau::AstStatAssign>()) return "AstStatAssign";
+    if (node->is<Luau::AstStatCompoundAssign>()) return "AstStatCompoundAssign";
+    if (node->is<Luau::AstStatFunction>()) return "AstStatFunction";
+    if (node->is<Luau::AstStatLocalFunction>()) return "AstStatLocalFunction";
+    if (node->is<Luau::AstStatTypeAlias>()) return "AstStatTypeAlias";
+    if (node->is<Luau::AstStatTypeFunction>()) return "AstStatTypeFunction";
+    if (node->is<Luau::AstStatDeclareFunction>()) return "AstStatDeclareFunction";
+    if (node->is<Luau::AstStatDeclareGlobal>()) return "AstStatDeclareGlobal";
+    if (node->is<Luau::AstStatClass>()) return "AstStatClass";
+    if (node->is<Luau::AstStatDeclareExternType>()) return "AstStatDeclareExternType";
+    if (node->is<Luau::AstStatError>()) return "AstStatError";
+    if (node->is<Luau::AstTypeReference>()) return "AstTypeReference";
+    if (node->is<Luau::AstTypeTable>()) return "AstTypeTable";
+    if (node->is<Luau::AstTypeFunction>()) return "AstTypeFunction";
+    if (node->is<Luau::AstTypeTypeof>()) return "AstTypeTypeof";
+    if (node->is<Luau::AstTypeOptional>()) return "AstTypeOptional";
+    if (node->is<Luau::AstTypeUnion>()) return "AstTypeUnion";
+    if (node->is<Luau::AstTypeIntersection>()) return "AstTypeIntersection";
+    if (node->is<Luau::AstTypeSingletonBool>()) return "AstTypeSingletonBool";
+    if (node->is<Luau::AstTypeSingletonString>()) return "AstTypeSingletonString";
+    if (node->is<Luau::AstTypeGroup>()) return "AstTypeGroup";
+    if (node->is<Luau::AstTypeError>()) return "AstTypeError";
+    if (node->is<Luau::AstTypePackExplicit>()) return "AstTypePackExplicit";
+    if (node->is<Luau::AstTypePackVariadic>()) return "AstTypePackVariadic";
+    if (node->is<Luau::AstTypePackGeneric>()) return "AstTypePackGeneric";
+    return "Unknown node";
+}
 
-    if (attr->type == AstAttr::Deprecated) {
-        AstAttr::DeprecatedInfo info = attr->deprecatedInfo();
-        lua_createtable(L, 0, 3);
-        lua_pushboolean(L, info.deprecated);
-        lua_setfield(L, -2, "deprecated");
-        if (info.use.has_value()) {
-            lua_pushlstring(L, info.use->data(), info.use->size());
-            lua_setfield(L, -2, "use");
+static std::vector<size_t> computeLineOffsets(const char* content) {
+    std::vector<size_t> result;
+    result.push_back(0);
+
+    size_t i = 0;
+    char ch;
+    while ((ch = content[i])) {
+        if (ch == '\r') {
+            if (content[i + 1] == '\n')
+                i += 2;
+            else
+                i += 1;
+
+            result.push_back(i);
+        } else if (ch == '\n') {
+            i += 1;
+            result.push_back(i);
+        } else {
+            i += 1;
         }
-        if (info.reason.has_value()) {
-            lua_pushlstring(L, info.reason->data(), info.reason->size());
-            lua_setfield(L, -2, "reason");
+    }
+
+    return result;
+}
+
+struct AstSerialiser : public Luau::AstVisitor {
+    lua_State* L;
+    const char* source;
+    size_t sourceSize;
+    Luau::CstNodeMap cstNodeMap;
+    std::vector<size_t> lineOffsets;
+
+    Luau::Position cursor{ 0, 0 };
+    struct TriviaOwner {
+        int tokenId = 0;
+    };
+    TriviaOwner previousOwner;
+    int nodeTableIndex = 0;
+    int localTableIndex = 0;
+    int tokenTableIndex = 0;
+    int nextNodeId = 0;
+    int nextLocalId = 0;
+    int nextTokenId = 0;
+    std::unordered_map<Luau::AstLocal*, int> localIds;
+    std::unordered_set<Luau::AstExprFunction*> claimedFunctionKeywords;
+    std::unordered_set<Luau::AstExprIfElse*> claimedElseifExprKeywords;
+    std::unordered_set<Luau::AstStatIf*> claimedElseifKeywords;
+
+    AstSerialiser(lua_State* L, const char* source, size_t sourceSize, Luau::CstNodeMap cstNodeMap)
+        : L(L),
+          source(source),
+          sourceSize(sourceSize),
+          cstNodeMap(std::move(cstNodeMap)),
+          lineOffsets(computeLineOffsets(source)) {
+        lua_createtable(L, 0, 0);
+        nodeTableIndex = lua_absindex(L, -1);
+
+        lua_createtable(L, 0, 0);
+        localTableIndex = lua_absindex(L, -1);
+
+        lua_createtable(L, 0, 0);
+        tokenTableIndex = lua_absindex(L, -1);
+    }
+
+    ~AstSerialiser() {
+        lua_remove(L, tokenTableIndex);
+        lua_remove(L, localTableIndex);
+        lua_remove(L, nodeTableIndex);
+    }
+
+   private:
+    template <typename T>
+    T locateCst(Luau::AstNode* astNode) {
+        const auto cstNode = cstNodeMap.find(astNode);
+        if (!cstNode)
+            luaL_error(L, "Parsing failed: missing CST data for %s", getNodeTypeName(astNode));
+
+        T result = (*cstNode)->as<typename std::remove_pointer<T>::type>();
+        if (!result)
+            luaL_error(L, "Parsing failed: CST data had unexpected shape for %s",
+                       getNodeTypeName(astNode));
+
+        return result;
+    }
+
+    template <typename T>
+    T maybeCst(Luau::AstNode* astNode) {
+        const auto cstNode = cstNodeMap.find(astNode);
+        if (!cstNode) return nullptr;
+
+        return (*cstNode)->as<typename std::remove_pointer<T>::type>();
+    }
+
+    size_t offsetFromPosition(Luau::Position position) const {
+        if (!position.hasValue()) return sourceSize;
+        if (position.line >= lineOffsets.size()) return sourceSize;
+        return std::min(lineOffsets[position.line] + position.column, sourceSize);
+    }
+
+    Luau::Position positionFromOffset(size_t offset) const {
+        offset = std::min(offset, sourceSize);
+        auto it = std::upper_bound(lineOffsets.begin(), lineOffsets.end(), offset);
+        size_t line = it == lineOffsets.begin() ? 0 : size_t((it - lineOffsets.begin()) - 1);
+        return Luau::Position{ unsigned(line), unsigned(offset - lineOffsets[line]) };
+    }
+
+    static std::string tokenFieldName(const char* key) {
+        if (std::strcmp(key, "token") == 0) return "token";
+
+        return std::string(key) + "Token";
+    }
+
+    void appendTokenText(int tokenId, const char* field, std::string_view text) {
+        if (tokenId == 0 || text.empty()) return;
+
+        lua_rawgeti(L, tokenTableIndex, tokenId);
+        int tokenIndex = lua_absindex(L, -1);
+        lua_getfield(L, tokenIndex, field);
+        size_t oldSize = 0;
+        const char* oldText = lua_isstring(L, -1) ? lua_tolstring(L, -1, &oldSize) : nullptr;
+
+        if (oldText && oldSize > 0) {
+            std::string combined(oldText, oldSize);
+            combined.append(text.data(), text.size());
+            lua_pop(L, 1);
+            lua_pushlstring(L, combined.data(), combined.size());
+        } else {
+            lua_pop(L, 1);
+            lua_pushlstring(L, text.data(), text.size());
         }
-        lua_setfield(L, -2, "deprecatedInfo");
-    }
-}
 
-static void push_generic_type(lua_State* L, AstGenericType* generic) {
-    if (!generic) {
-        lua_pushnil(L);
-        return;
+        lua_setfield(L, tokenIndex, field);
+        lua_pop(L, 1);
     }
-    lua_createtable(L, 0, 3);
-    push_name(L, generic->name);
-    lua_setfield(L, -2, "name");
-    push_location(L, generic->location);
-    lua_setfield(L, -2, "location");
-    if (generic->defaultValue) {
-        push_type(L, generic->defaultValue);
-        lua_setfield(L, -2, "default");
-    }
-}
 
-static void push_generic_typepack(lua_State* L, AstGenericTypePack* generic) {
-    if (!generic) {
-        lua_pushnil(L);
-        return;
-    }
-    lua_createtable(L, 0, 3);
-    push_name(L, generic->name);
-    lua_setfield(L, -2, "name");
-    push_location(L, generic->location);
-    lua_setfield(L, -2, "location");
-    if (generic->defaultValue) {
-        push_typepack(L, generic->defaultValue);
-        lua_setfield(L, -2, "default");
-    }
-}
+    int createToken(int ownerRef, const char* key, Luau::Position position, size_t width) {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising CST token");
 
-static void push_type_list(lua_State* L, const AstTypeList& list) {
-    lua_createtable(L, 0, 2);
-    lua_createtable(L, (int)list.types.size, 0);
-    for (size_t i = 0; i < list.types.size; i++) {
-        push_type(L, list.types.data[i]);
-        lua_rawseti(L, -2, (int)(i + 1));
-    }
-    lua_setfield(L, -2, "types");
-    if (list.tailType) {
-        push_typepack(L, list.tailType);
-        lua_setfield(L, -2, "tail");
-    }
-}
+        lua_rawgeti(L, nodeTableIndex, ownerRef);
+        int ownerIndex = lua_absindex(L, -1);
 
-static void set_stat_common(lua_State* L, AstStat* stat) {
-    lua_pushboolean(L, stat->hasSemicolon);
-    lua_setfield(L, -2, "hasSemicolon");
-}
+        size_t startOffset = offsetFromPosition(position);
+        size_t endOffset = std::min(startOffset + width, sourceSize);
+        std::string_view text = sourceSlice(startOffset, endOffset);
 
-// ---------------------------------------------------------------------------
-// Type serialisation
-// ---------------------------------------------------------------------------
-static void push_type(lua_State* L, AstType* type) {
-    if (!type) {
-        lua_pushnil(L);
-        return;
+        lua_createtable(L, 0, 5);
+        int tokenIndex = lua_absindex(L, -1);
+
+        lua_pushstring(L, "token");
+        lua_setfield(L, tokenIndex, "type");
+        lua_pushlstring(L, text.data(), text.size());
+        lua_setfield(L, tokenIndex, "text");
+        push_location(L, Luau::Location{ position, positionFromOffset(endOffset) });
+        lua_setfield(L, tokenIndex, "location");
+        lua_pushliteral(L, "");
+        lua_setfield(L, tokenIndex, "leadingText");
+        lua_pushliteral(L, "");
+        lua_setfield(L, tokenIndex, "trailingText");
+
+        int tokenId = ++nextTokenId;
+        lua_pushvalue(L, tokenIndex);
+        lua_rawseti(L, tokenTableIndex, tokenId);
+
+        std::string fieldName = tokenFieldName(key);
+        lua_setfield(L, ownerIndex, fieldName.c_str());
+        lua_pop(L, 1);
+        return tokenId;
     }
-    ensure_stack(L, 20);
 
-    if (auto* t = type->as<AstTypeReference>()) {
-        begin_node(L, "TypeReference", t->location);
-        lua_pushboolean(L, t->hasParameterList);
-        lua_setfield(L, -2, "hasParameterList");
-        push_name(L, t->name);
-        lua_setfield(L, -2, "name");
-        push_location(L, t->nameLocation);
-        lua_setfield(L, -2, "nameLocation");
-        if (t->prefix) {
-            push_name(L, *t->prefix);
-            lua_setfield(L, -2, "prefix");
+    int refCurrentNode() {
+        int nodeId = ++nextNodeId;
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, nodeTableIndex, nodeId);
+        return nodeId;
+    }
+
+    void setField(int tableIndex, const char* name) { lua_setfield(L, tableIndex, name); }
+
+    void rawSetI(int tableIndex, int index) { lua_rawseti(L, tableIndex, index); }
+
+    static std::string numberedKey(const char* prefix, size_t index) {
+        return std::string(prefix) + std::to_string(index + 1);
+    }
+
+    static const char* tableAccessToString(Luau::AstTableAccess access) {
+        switch (access) {
+            case Luau::AstTableAccess::Read:
+                return "Read";
+            case Luau::AstTableAccess::Write:
+                return "Write";
+            case Luau::AstTableAccess::ReadWrite:
+            default:
+                return "ReadWrite";
         }
-        if (t->prefixLocation) {
-            push_location(L, *t->prefixLocation);
-            lua_setfield(L, -2, "prefixLocation");
+    }
+
+    static const char* attrTypeToString(Luau::AstAttr::Type type) {
+        switch (type) {
+            case Luau::AstAttr::Checked:
+                return "Checked";
+            case Luau::AstAttr::Native:
+                return "Native";
+            case Luau::AstAttr::Deprecated:
+                return "Deprecated";
+            case Luau::AstAttr::DebugNoinline:
+                return "DebugNoinline";
+            case Luau::AstAttr::Unknown:
+            default:
+                return "Unknown";
         }
-        if (t->parameters.size > 0) {
-            lua_createtable(L, (int)t->parameters.size, 0);
-            for (size_t i = 0; i < t->parameters.size; i++) {
-                push_type_or_pack(L, t->parameters.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
+    }
+
+    void attachGap(int currentTokenId, std::string_view gap) {
+        if (gap.empty()) return;
+
+        size_t newline = gap.find('\n');
+        if (previousOwner.tokenId == 0) {
+            appendTokenText(currentTokenId, "leadingText", gap);
+        } else if (newline == std::string_view::npos) {
+            appendTokenText(previousOwner.tokenId, "trailingText", gap);
+        } else {
+            appendTokenText(previousOwner.tokenId, "trailingText", gap.substr(0, newline + 1));
+            appendTokenText(currentTokenId, "leadingText", gap.substr(newline + 1));
+        }
+    }
+
+    std::string_view sourceSlice(size_t start, size_t end) const {
+        start = std::min(start, sourceSize);
+        end = std::min(end, sourceSize);
+        if (end < start) end = start;
+        return std::string_view(source + start, end - start);
+    }
+
+    void consumeSyntax(int ownerRef, const char* key, Luau::Position position, size_t width) {
+        if (!position.hasValue()) return;
+
+        size_t cursorOffset = offsetFromPosition(cursor);
+        size_t syntaxOffset = offsetFromPosition(position);
+        if (syntaxOffset < cursorOffset)
+            luaL_error(L, "Parsing failed: syntax cursor moved backwards at %s (%d:%d -> %d:%d)",
+                       key, cursor.line + 1, cursor.column + 1, position.line + 1,
+                       position.column + 1);
+
+        int tokenId = createToken(ownerRef, key, position, width);
+        attachGap(tokenId, sourceSlice(cursorOffset, syntaxOffset));
+
+        size_t endOffset = std::min(syntaxOffset + width, sourceSize);
+        cursor = positionFromOffset(endOffset);
+        previousOwner = TriviaOwner{ tokenId };
+    }
+
+    void consumeSyntax(int ownerRef, const char* key, Luau::Position position, const char* text) {
+        consumeSyntax(ownerRef, key, position, std::strlen(text));
+    }
+
+    void consumeSyntax(int ownerRef, const char* key, Luau::Location location) {
+        consumeSyntax(ownerRef, key, location.begin,
+                      offsetFromPosition(location.end) - offsetFromPosition(location.begin));
+    }
+
+    void consumeIdentifier(int ownerRef, const char* key, Luau::Location location) {
+        consumeSyntax(ownerRef, key, location);
+    }
+
+    void consumeSemicolonIfPresent(int ownerRef, Luau::AstStat* node) {
+        if (!node->hasSemicolon) return;
+
+        size_t start = offsetFromPosition(cursor);
+        size_t end = offsetFromPosition(node->location.end);
+        for (size_t i = start; i < end; ++i) {
+            if (source[i] == ';') {
+                consumeSyntax(ownerRef, "semicolon", positionFromOffset(i), 1);
+                return;
             }
-            lua_setfield(L, -2, "parameters");
         }
-    } else if (auto* t = type->as<AstTypeTable>()) {
-        begin_node(L, "TypeTable", t->location);
-        lua_createtable(L, (int)t->props.size, 0);
-        for (size_t i = 0; i < t->props.size; i++) {
-            lua_createtable(L, 0, 5);
-            push_name(L, t->props.data[i].name);
-            lua_setfield(L, -2, "name");
-            push_type(L, t->props.data[i].type);
-            lua_setfield(L, -2, "type");
-            push_location(L, t->props.data[i].location);
-            lua_setfield(L, -2, "location");
-            lua_pushstring(L, table_access_to_string(t->props.data[i].access));
-            lua_setfield(L, -2, "access");
-            if (t->props.data[i].accessLocation) {
-                push_location(L, *t->props.data[i].accessLocation);
-                lua_setfield(L, -2, "accessLocation");
-            }
-            lua_rawseti(L, -2, (int)(i + 1));
+    }
+
+    void consumeEof(int ownerRef) {
+        int tokenId = createToken(ownerRef, "eof", positionFromOffset(sourceSize), 0);
+        attachGap(tokenId, sourceSlice(offsetFromPosition(cursor), sourceSize));
+        cursor = positionFromOffset(sourceSize);
+    }
+
+    // Consumes a synthetic "span" token for an error node. Unlike consumeSyntax,
+    // the span may overlap source already consumed by the error node's children
+    // (which are visited first and have advanced the cursor past the error's
+    // begin). Clamp the token's start to the current cursor so it covers only
+    // the remaining unconsumed range instead of moving the cursor backwards.
+    void consumeSpan(int ownerRef, const char* key, Luau::Location location) {
+        size_t cursorOffset = offsetFromPosition(cursor);
+        size_t beginOffset = offsetFromPosition(location.begin);
+        size_t endOffset = offsetFromPosition(location.end);
+        size_t startOffset = std::max(cursorOffset, beginOffset);
+        if (endOffset < startOffset) endOffset = startOffset;
+
+        int tokenId =
+            createToken(ownerRef, key, positionFromOffset(startOffset), endOffset - startOffset);
+        attachGap(tokenId, sourceSlice(cursorOffset, startOffset));
+        cursor = positionFromOffset(endOffset);
+        previousOwner = TriviaOwner{ tokenId };
+    }
+
+    std::optional<Luau::Position> findCharPosition(size_t startOffset, size_t endOffset,
+                                                   char ch) const {
+        startOffset = std::min(startOffset, sourceSize);
+        endOffset = std::min(endOffset, sourceSize);
+        for (size_t i = startOffset; i < endOffset; ++i) {
+            if (source[i] == ch) return positionFromOffset(i);
         }
-        lua_setfield(L, -2, "props");
-        if (t->indexer) {
-            lua_createtable(L, 0, 5);
-            push_type(L, t->indexer->indexType);
-            lua_setfield(L, -2, "indexType");
-            push_type(L, t->indexer->resultType);
-            lua_setfield(L, -2, "resultType");
-            push_location(L, t->indexer->location);
-            lua_setfield(L, -2, "location");
-            lua_pushstring(L, table_access_to_string(t->indexer->access));
-            lua_setfield(L, -2, "access");
-            if (t->indexer->accessLocation) {
-                push_location(L, *t->indexer->accessLocation);
-                lua_setfield(L, -2, "accessLocation");
-            }
-            lua_setfield(L, -2, "indexer");
+        return std::nullopt;
+    }
+
+    void serialiseTypeOrPack(const Luau::AstTypeOrPack& value) {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising AST type argument");
+
+        lua_createtable(L, 0, 2);
+        if (value.type) {
+            lua_pushstring(L, "Type");
+            lua_setfield(L, -2, "kind");
+            value.type->visit(this);
+            lua_setfield(L, -2, "value");
+        } else if (value.typePack) {
+            lua_pushstring(L, "TypePack");
+            lua_setfield(L, -2, "kind");
+            value.typePack->visit(this);
+            lua_setfield(L, -2, "value");
+        } else {
+            lua_pushstring(L, "None");
+            lua_setfield(L, -2, "kind");
         }
-    } else if (auto* t = type->as<AstTypeFunction>()) {
-        begin_node(L, "TypeFunction", t->location);
-        if (t->attributes.size > 0) {
-            lua_createtable(L, (int)t->attributes.size, 0);
-            for (size_t i = 0; i < t->attributes.size; i++) {
-                push_ast_attr(L, t->attributes.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "attributes");
+    }
+
+    void serialiseTypeList(const Luau::AstTypeList& list, int commaOwnerRef = 0,
+                           const Luau::AstArray<Luau::Position>* commaPositions = nullptr,
+                           const char* commaPrefix = "comma") {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising AST type list");
+
+        lua_createtable(L, 0, 2);
+        int listIndex = lua_absindex(L, -1);
+        lua_createtable(L, list.types.size, 0);
+        int typesIndex = lua_absindex(L, -1);
+        for (size_t i = 0; i < list.types.size; ++i) {
+            list.types.data[i]->visit(this);
+            lua_rawseti(L, typesIndex, int(i + 1));
+            if (commaOwnerRef != 0 && commaPositions && i < commaPositions->size)
+                consumeSyntax(commaOwnerRef, numberedKey(commaPrefix, i).c_str(),
+                              commaPositions->data[i], ",");
         }
-        if (t->generics.size > 0) {
-            lua_createtable(L, (int)t->generics.size, 0);
-            for (size_t i = 0; i < t->generics.size; i++) {
-                push_generic_type(L, t->generics.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "generics");
+        lua_setfield(L, listIndex, "types");
+
+        if (list.tailType) {
+            list.tailType->visit(this);
+            lua_setfield(L, listIndex, "tail");
         }
-        if (t->genericPacks.size > 0) {
-            lua_createtable(L, (int)t->genericPacks.size, 0);
-            for (size_t i = 0; i < t->genericPacks.size; i++) {
-                push_generic_typepack(L, t->genericPacks.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "genericPacks");
-        }
-        push_type_list(L, t->argTypes);
-        lua_setfield(L, -2, "argTypes");
-        // arg names (optional per-arg)
-        lua_createtable(L, (int)t->argNames.size, 0);
-        for (size_t i = 0; i < t->argNames.size; i++) {
-            if (t->argNames.data[i].has_value()) {
+    }
+
+    void serialiseTypeFunctionArgs(const Luau::AstTypeList& types,
+                                   Luau::AstArray<std::optional<Luau::AstArgumentName>> names,
+                                   const Luau::AstArray<Luau::Position>* nameColonPositions,
+                                   const Luau::AstArray<Luau::Position>* commaPositions,
+                                   int ownerRef) {
+        if (!lua_checkstack(L, 24))
+            luaL_error(L, "luau.parse: stack overflow while serialising function type args");
+
+        int parentIndex = lua_absindex(L, -1);
+        lua_createtable(L, 0, 2);
+        int typeListIndex = lua_absindex(L, -1);
+        lua_createtable(L, types.types.size, 0);
+        int typeArrayIndex = lua_absindex(L, -1);
+
+        lua_createtable(L, names.size, 0);
+        int nameArrayIndex = lua_absindex(L, -1);
+
+        for (size_t i = 0; i < types.types.size; ++i) {
+            if (i < names.size && names.data[i].has_value()) {
+                const auto& name = *names.data[i];
                 lua_createtable(L, 0, 2);
-                push_name(L, t->argNames.data[i]->first);
+                lua_pushstring(L, name.first.value);
                 lua_setfield(L, -2, "name");
-                push_location(L, t->argNames.data[i]->second);
+                consumeSyntax(ownerRef, numberedKey("argName", i).c_str(), name.second);
+                push_location(L, name.second);
+                lua_setfield(L, -2, "location");
+                lua_rawseti(L, nameArrayIndex, int(i + 1));
+            } else if (i < names.size) {
+                lua_pushnil(L);
+                lua_rawseti(L, nameArrayIndex, int(i + 1));
+            }
+
+            if (nameColonPositions && i < nameColonPositions->size &&
+                nameColonPositions->data[i].hasValue())
+                consumeSyntax(ownerRef, numberedKey("argNameColon", i).c_str(),
+                              nameColonPositions->data[i], ":");
+
+            types.types.data[i]->visit(this);
+            lua_rawseti(L, typeArrayIndex, int(i + 1));
+
+            if (commaPositions && i < commaPositions->size)
+                consumeSyntax(ownerRef, numberedKey("argComma", i).c_str(), commaPositions->data[i],
+                              ",");
+        }
+
+        lua_pushvalue(L, typeArrayIndex);
+        lua_setfield(L, typeListIndex, "types");
+        lua_remove(L, typeArrayIndex);
+
+        if (types.tailType) {
+            types.tailType->visit(this);
+            lua_setfield(L, typeListIndex, "tail");
+        }
+
+        lua_setfield(L, parentIndex, "argNames");
+        lua_setfield(L, parentIndex, "argTypes");
+    }
+
+    void serialiseOptionalArgNames(Luau::AstArray<std::optional<Luau::AstArgumentName>> argNames) {
+        lua_createtable(L, argNames.size, 0);
+        for (size_t i = 0; i < argNames.size; ++i) {
+            if (argNames.data[i].has_value()) {
+                lua_createtable(L, 0, 2);
+                lua_pushstring(L, argNames.data[i]->first.value);
+                lua_setfield(L, -2, "name");
+                push_location(L, argNames.data[i]->second);
                 lua_setfield(L, -2, "location");
             } else {
                 lua_pushnil(L);
             }
-            lua_rawseti(L, -2, (int)(i + 1));
+            lua_rawseti(L, -2, int(i + 1));
         }
-        lua_setfield(L, -2, "argNames");
-        // return types
-        if (t->returnTypes) {
-            push_typepack(L, t->returnTypes);
-            lua_setfield(L, -2, "returnTypes");
-        }
-    } else if (auto* t = type->as<AstTypeTypeof>()) {
-        begin_node(L, "TypeTypeof", t->location);
-        push_expr(L, t->expr);
-        lua_setfield(L, -2, "expr");
-    } else if (type->as<AstTypeOptional>()) {
-        begin_node(L, "TypeOptional", type->location);
-    } else if (auto* t = type->as<AstTypeUnion>()) {
-        begin_node(L, "TypeUnion", t->location);
-        lua_createtable(L, (int)t->types.size, 0);
-        for (size_t i = 0; i < t->types.size; i++) {
-            push_type(L, t->types.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "types");
-    } else if (auto* t = type->as<AstTypeIntersection>()) {
-        begin_node(L, "TypeIntersection", t->location);
-        lua_createtable(L, (int)t->types.size, 0);
-        for (size_t i = 0; i < t->types.size; i++) {
-            push_type(L, t->types.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "types");
-    } else if (auto* t = type->as<AstTypeSingletonBool>()) {
-        begin_node(L, "TypeSingletonBool", t->location);
-        lua_pushboolean(L, t->value);
-        lua_setfield(L, -2, "value");
-    } else if (auto* t = type->as<AstTypeSingletonString>()) {
-        begin_node(L, "TypeSingletonString", t->location);
-        lua_pushlstring(L, t->value.data, t->value.size);
-        lua_setfield(L, -2, "value");
-    } else if (auto* t = type->as<AstTypeGroup>()) {
-        begin_node(L, "TypeGroup", t->location);
-        push_type(L, t->type);
-        lua_setfield(L, -2, "inner");
-    } else if (type->as<AstTypeError>()) {
-        auto* t = type->as<AstTypeError>();
-        begin_node(L, "TypeError", type->location);
-        lua_createtable(L, (int)t->types.size, 0);
-        for (size_t i = 0; i < t->types.size; i++) {
-            push_type(L, t->types.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "types");
-        lua_pushboolean(L, t->isMissing);
-        lua_setfield(L, -2, "isMissing");
-        lua_pushinteger(L, (lua_Integer)t->messageIndex);
-        lua_setfield(L, -2, "messageIndex");
-    } else {
-        begin_node(L, "TypeUnknown", type->location);
     }
-}
 
-// ---------------------------------------------------------------------------
-// TypePack serialisation
-// ---------------------------------------------------------------------------
-static void push_typepack(lua_State* L, AstTypePack* tp) {
-    if (!tp) {
-        lua_pushnil(L);
-        return;
-    }
-    ensure_stack(L, 20);
-
-    if (auto* t = tp->as<AstTypePackExplicit>()) {
-        begin_node(L, "TypePackExplicit", t->location);
-        lua_createtable(L, (int)t->typeList.types.size, 0);
-        for (size_t i = 0; i < t->typeList.types.size; i++) {
-            push_type(L, t->typeList.types.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
+    void serialiseArgNames(Luau::AstArray<Luau::AstArgumentName> argNames) {
+        lua_createtable(L, argNames.size, 0);
+        for (size_t i = 0; i < argNames.size; ++i) {
+            lua_createtable(L, 0, 2);
+            lua_pushstring(L, argNames.data[i].first.value);
+            lua_setfield(L, -2, "name");
+            push_location(L, argNames.data[i].second);
+            lua_setfield(L, -2, "location");
+            lua_rawseti(L, -2, int(i + 1));
         }
-        lua_setfield(L, -2, "types");
-        if (t->typeList.tailType) {
-            push_typepack(L, t->typeList.tailType);
-            lua_setfield(L, -2, "tail");
-        }
-    } else if (auto* t = tp->as<AstTypePackVariadic>()) {
-        begin_node(L, "TypePackVariadic", t->location);
-        push_type(L, t->variadicType);
-        lua_setfield(L, -2, "variadicType");
-    } else if (auto* t = tp->as<AstTypePackGeneric>()) {
-        begin_node(L, "TypePackGeneric", t->location);
-        push_name(L, t->genericName);
-        lua_setfield(L, -2, "name");
-    } else {
-        begin_node(L, "TypePackUnknown", tp->location);
     }
-}
 
-// ---------------------------------------------------------------------------
-// AstLocal helper
-// ---------------------------------------------------------------------------
-static void push_local(lua_State* L, AstLocal* local) {
-    if (!local) {
-        lua_pushnil(L);
-        return;
-    }
-    lua_createtable(L, 0, 7);
-    push_name(L, local->name);
-    lua_setfield(L, -2, "name");
-    push_location(L, local->location);
-    lua_setfield(L, -2, "location");
-    lua_pushinteger(L, (lua_Integer)local->functionDepth);
-    lua_setfield(L, -2, "functionDepth");
-    lua_pushinteger(L, (lua_Integer)local->loopDepth);
-    lua_setfield(L, -2, "loopDepth");
-    lua_pushboolean(L, local->isConst);
-    lua_setfield(L, -2, "isConst");
-    if (local->annotation) {
-        push_type(L, local->annotation);
-        lua_setfield(L, -2, "annotation");
-    }
-    if (local->shadow) {
-        lua_createtable(L, 0, 2);
-        push_name(L, local->shadow->name);
-        lua_setfield(L, -2, "name");
-        push_location(L, local->shadow->location);
+    void serialiseTableIndexer(Luau::AstTableIndexer* indexer) {
+        if (!indexer) {
+            lua_pushnil(L);
+            return;
+        }
+
+        lua_createtable(L, 0, 5);
+        indexer->indexType->visit(this);
+        lua_setfield(L, -2, "indexType");
+        indexer->resultType->visit(this);
+        lua_setfield(L, -2, "resultType");
+        push_location(L, indexer->location);
         lua_setfield(L, -2, "location");
-        lua_setfield(L, -2, "shadow");
+        lua_pushstring(L, tableAccessToString(indexer->access));
+        lua_setfield(L, -2, "access");
+        if (indexer->accessLocation) {
+            push_location(L, *indexer->accessLocation);
+            lua_setfield(L, -2, "accessLocation");
+        }
     }
-}
 
-// ---------------------------------------------------------------------------
-// Expression serialisation
-// ---------------------------------------------------------------------------
-static void push_expr(lua_State* L, AstExpr* expr) {
-    if (!expr) {
-        lua_pushnil(L);
-        return;
+    void serialiseSyntheticArrayIndexType(Luau::AstType* node) {
+        if (auto refNode = node->as<Luau::AstTypeReference>()) {
+            serialiseNode(refNode, "type", "reference");
+            lua_pushboolean(L, refNode->hasParameterList);
+            lua_setfield(L, -2, "hasParameterList");
+            lua_pushstring(L, refNode->name.value);
+            lua_setfield(L, -2, "name");
+            push_location(L, refNode->nameLocation);
+            lua_setfield(L, -2, "nameLocation");
+        } else {
+            serialiseNode(node, "type", "unknown");
+        }
     }
-    ensure_stack(L, 20);
 
-    if (auto* e = expr->as<AstExprGroup>()) {
-        begin_node(L, "ExprGroup", e->location);
-        push_expr(L, e->expr);
-        lua_setfield(L, -2, "expr");
-    } else if (expr->as<AstExprConstantNil>()) {
-        begin_node(L, "ExprConstantNil", expr->location);
-    } else if (auto* e = expr->as<AstExprConstantBool>()) {
-        begin_node(L, "ExprConstantBool", e->location);
-        lua_pushboolean(L, e->value);
-        lua_setfield(L, -2, "value");
-    } else if (auto* e = expr->as<AstExprConstantNumber>()) {
-        begin_node(L, "ExprConstantNumber", e->location);
-        lua_pushnumber(L, e->value);
-        lua_setfield(L, -2, "value");
-        lua_pushstring(L, number_parse_result_to_string(e->parseResult));
-        lua_setfield(L, -2, "parseResult");
-    } else if (auto* e = expr->as<AstExprConstantString>()) {
-        begin_node(L, "ExprConstantString", e->location);
-        lua_pushlstring(L, e->value.data, e->value.size);
-        lua_setfield(L, -2, "value");
-        lua_pushstring(L, quote_style_to_string(e->quoteStyle));
-        lua_setfield(L, -2, "quoteStyle");
-        lua_pushboolean(L, e->isQuoted());
-        lua_setfield(L, -2, "isQuoted");
-    } else if (auto* e = expr->as<AstExprLocal>()) {
-        begin_node(L, "ExprLocal", e->location);
-        push_local(L, e->local);
-        lua_setfield(L, -2, "local");
-        lua_pushboolean(L, e->upvalue);
-        lua_setfield(L, -2, "upvalue");
-    } else if (auto* e = expr->as<AstExprGlobal>()) {
-        begin_node(L, "ExprGlobal", e->location);
-        push_name(L, e->name);
+    int serialiseNode(Luau::AstNode* node, const char* category, const char* name) {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising AST node");
+
+        lua_createtable(L, 0, 3 + 2);
+        lua_pushstring(L, category);
+        lua_setfield(L, -2, "category");
+        lua_pushstring(L, name);
+        lua_setfield(L, -2, "type");
+        push_location(L, node->location);
+        lua_setfield(L, -2, "location");
+        return refCurrentNode();
+    }
+
+    int serialiseExprNode(Luau::AstExpr* node, const char* name) {
+        return serialiseNode(node, "expr", name);
+    }
+    int serialiseStatNode(Luau::AstStat* node, const char* name) {
+        int ref = serialiseNode(node, "stat", name);
+        lua_pushboolean(L, node->hasSemicolon);
+        lua_setfield(L, -2, "hasSemicolon");
+        return ref;
+    }
+
+    void serialiseLocal(Luau::AstLocal* node) {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising AST local");
+
+        // TODO: Trivia?
+        auto cached = localIds.find(node);
+        if (cached != localIds.end()) {
+            lua_rawgeti(L, localTableIndex, cached->second);
+            return;
+        }
+
+        lua_createtable(L, 0, 10 + 2);
+        int localId = ++nextLocalId;
+        lua_pushvalue(L, -1);
+        lua_rawseti(L, localTableIndex, localId);
+        localIds[node] = localId;
+
+        lua_pushstring(L, "");
+        lua_setfield(L, -2, "category");
+        lua_pushstring(L, "local");
+        lua_setfield(L, -2, "type");
+        push_location(L, node->location);
+        lua_setfield(L, -2, "location");
+
+        // node->location references the original local!
+        // attachLeadingTrivia(node->location.begin);
+
+        lua_pushstring(L, node->name.value);
         lua_setfield(L, -2, "name");
-    } else if (expr->as<AstExprVarargs>()) {
-        begin_node(L, "ExprVarargs", expr->location);
-    } else if (auto* e = expr->as<AstExprCall>()) {
-        begin_node(L, "ExprCall", e->location);
-        push_expr(L, e->func);
-        lua_setfield(L, -2, "func");
-        if (e->typeArguments.size > 0) {
-            lua_createtable(L, (int)e->typeArguments.size, 0);
-            for (size_t i = 0; i < e->typeArguments.size; i++) {
-                push_type_or_pack(L, e->typeArguments.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "typeArguments");
+        if (node->shadow) {
+            serialiseLocal(node->shadow);
+            lua_setfield(L, -2, "shadows");
         }
-        push_array<AstExpr>(L, e->args, push_expr);
-        lua_setfield(L, -2, "args");
-        lua_pushboolean(L, e->self);
-        lua_setfield(L, -2, "self");
-        push_location(L, e->argLocation);
-        lua_setfield(L, -2, "argLocation");
-    } else if (auto* e = expr->as<AstExprIndexName>()) {
-        // ---- Iterative index-name chain (a.b.c.d) ----
-        std::vector<AstExprIndexName*> idxChain;
-        AstExpr* leftmost = expr;
-        while (auto* idx = leftmost->as<AstExprIndexName>()) {
-            idxChain.push_back(idx);
-            leftmost = idx->expr;
-        }
-        // leftmost is the non-IndexName root; serialise it first.
-        push_expr(L, leftmost);
-        // Build from innermost to outermost.
-        for (int i = (int)idxChain.size() - 1; i >= 0; i--) {
-            ensure_stack(L, 20);
-            auto* idx = idxChain[i];
-            begin_node(L, "ExprIndexName", idx->location);
-            // Stack: [..., leftVal, idxTable]
-            lua_pushvalue(L, -2);         // copy leftVal
-            lua_setfield(L, -2, "expr");  // idxTable.expr = leftVal
-            lua_remove(L, -2);            // pop original leftVal
-            push_name(L, idx->index);
-            lua_setfield(L, -2, "index");
-            push_location(L, idx->indexLocation);
-            lua_setfield(L, -2, "indexLocation");
-            push_position(L, idx->opPosition);
-            lua_setfield(L, -2, "opPosition");
-            lua_pushlstring(L, &idx->op, 1);
-            lua_setfield(L, -2, "op");
-            // Stack: [..., idxTable] - becomes leftVal for next level
-        }
-    } else if (auto* e = expr->as<AstExprIndexExpr>()) {
-        begin_node(L, "ExprIndexExpr", e->location);
-        push_expr(L, e->expr);
-        lua_setfield(L, -2, "expr");
-        push_expr(L, e->index);
-        lua_setfield(L, -2, "index");
-    } else if (auto* e = expr->as<AstExprFunction>()) {
-        begin_node(L, "ExprFunction", e->location);
-        if (e->attributes.size > 0) {
-            lua_createtable(L, (int)e->attributes.size, 0);
-            for (size_t i = 0; i < e->attributes.size; i++) {
-                push_ast_attr(L, e->attributes.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "attributes");
-        }
-        push_name(L, e->debugname);
-        lua_setfield(L, -2, "debugname");
-        // generics
-        if (e->generics.size > 0) {
-            lua_createtable(L, (int)e->generics.size, 0);
-            for (size_t i = 0; i < e->generics.size; i++) {
-                push_generic_type(L, e->generics.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "generics");
-        }
-        if (e->genericPacks.size > 0) {
-            lua_createtable(L, (int)e->genericPacks.size, 0);
-            for (size_t i = 0; i < e->genericPacks.size; i++) {
-                push_generic_typepack(L, e->genericPacks.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "genericPacks");
-        }
-        // args
-        lua_createtable(L, (int)e->args.size, 0);
-        for (size_t i = 0; i < e->args.size; i++) {
-            push_local(L, e->args.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "args");
-        lua_pushboolean(L, e->vararg);
-        lua_setfield(L, -2, "vararg");
-        push_location(L, e->varargLocation);
-        lua_setfield(L, -2, "varargLocation");
-        if (e->varargAnnotation) {
-            push_typepack(L, e->varargAnnotation);
-            lua_setfield(L, -2, "varargAnnotation");
-        }
-        if (e->returnAnnotation) {
-            push_typepack(L, e->returnAnnotation);
-            lua_setfield(L, -2, "returnAnnotation");
-        }
-        if (e->self) {
-            push_local(L, e->self);
-            lua_setfield(L, -2, "self");
-        }
-        if (e->argLocation) {
-            push_location(L, *e->argLocation);
-            lua_setfield(L, -2, "argLocation");
-        }
-        lua_pushinteger(L, (lua_Integer)e->functionDepth);
+        lua_pushnumber(L, node->functionDepth);
         lua_setfield(L, -2, "functionDepth");
-        // body
-        push_stat(L, e->body);
-        lua_setfield(L, -2, "body");
-    } else if (auto* e = expr->as<AstExprTable>()) {
-        begin_node(L, "ExprTable", e->location);
-        lua_createtable(L, (int)e->items.size, 0);
-        for (size_t i = 0; i < e->items.size; i++) {
-            lua_createtable(L, 0, 3);
-            switch (e->items.data[i].kind) {
-                case AstExprTable::Item::List:
-                    lua_pushstring(L, "List");
-                    break;
-                case AstExprTable::Item::Record:
-                    lua_pushstring(L, "Record");
-                    break;
-                case AstExprTable::Item::General:
-                    lua_pushstring(L, "General");
-                    break;
-            }
-            lua_setfield(L, -2, "kind");
-            if (e->items.data[i].key) {
-                push_expr(L, e->items.data[i].key);
-                lua_setfield(L, -2, "key");
-            }
-            push_expr(L, e->items.data[i].value);
-            lua_setfield(L, -2, "value");
-            lua_rawseti(L, -2, (int)(i + 1));
+        lua_pushnumber(L, node->loopDepth);
+        lua_setfield(L, -2, "loopDepth");
+        lua_pushboolean(L, node->isConst);
+        lua_setfield(L, -2, "isConst");
+        lua_pushboolean(L, node->isExported);
+        lua_setfield(L, -2, "isExported");
+    }
+
+    template <typename T>
+    void attachVisitArray(Luau::AstArray<T*> arr, const char* name) {
+        if (!lua_checkstack(L, 16))
+            luaL_error(L, "luau.parse: stack overflow while serialising AST array");
+
+        lua_createtable(L, arr.size, 0);
+        auto idx = 1;
+        for (auto i : arr) {
+            i->visit(this);
+            lua_rawseti(L, -2, idx++);
         }
-        lua_setfield(L, -2, "items");
-    } else if (auto* e = expr->as<AstExprUnary>()) {
-        begin_node(L, "ExprUnary", e->location);
-        std::string opStr = toString(e->op);
-        lua_pushstring(L, opStr.c_str());
-        lua_setfield(L, -2, "op");
-        push_expr(L, e->expr);
+        lua_setfield(L, -2, name);
+    }
+
+   public:
+    /// AstExpr
+    virtual bool visit(Luau::AstExprGroup* node) {
+        int ref = serialiseExprNode(node, "group");
+        consumeSyntax(ref, "openParen", node->location.begin, "(");
+        node->expr->visit(this);
         lua_setfield(L, -2, "expr");
-    } else if (auto* e = expr->as<AstExprBinary>()) {
-        // ---- Iterative left-spine of binary expr chain ----
-        // `a + b + c + d` parses left-leaning; flatten to avoid
-        // O(n) recursion depth.
-        std::vector<AstExprBinary*> binChain;
-        AstExpr* leftmost = expr;
-        while (auto* bin = leftmost->as<AstExprBinary>()) {
-            binChain.push_back(bin);
-            leftmost = bin->left;
+        if (auto cst = locateCst<Luau::CstExprGroup*>(node))
+            consumeSyntax(ref, "closeParen", cst->closePosition, ")");
+        else
+            consumeSyntax(ref, "closeParen",
+                          positionFromOffset(offsetFromPosition(node->location.end) - 1), ")");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprConstantNil* node) {
+        int ref = serialiseExprNode(node, "constantNil");
+        consumeSyntax(ref, "token", node->location.begin, "nil");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprConstantBool* node) {
+        int ref = serialiseExprNode(node, "constantBool");
+        lua_pushboolean(L, node->value);
+        lua_setfield(L, -2, "value");
+        consumeSyntax(ref, "token", node->location.begin, node->value ? "true" : "false");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprConstantNumber* node) {
+        int ref = serialiseExprNode(node, "constantNumber");
+        lua_pushnumber(L, node->value);
+        lua_setfield(L, -2, "value");
+        auto cst = locateCst<Luau::CstExprConstantNumber*>(node);
+        consumeSyntax(ref, "token", node->location.begin, cst->value.size);
+        return false;
+    }
+    virtual bool visit(Luau::AstExprConstantInteger* node) {
+        int ref = serialiseExprNode(node, "constantInteger");
+        lua_pushinteger64(L, node->value);
+        lua_setfield(L, -2, "value");
+        auto cst = locateCst<Luau::CstExprConstantInteger*>(node);
+        consumeSyntax(ref, "token", node->location.begin, cst->value.size);
+        return false;
+    }
+    virtual bool visit(Luau::AstExprConstantString* node) {
+        int ref = serialiseExprNode(node, "constantString");
+        lua_pushlstring(L, node->value.data, node->value.size);
+        lua_setfield(L, -2, "value");
+        lua_pushstring(L, quote_style_to_string(node->quoteStyle));
+        lua_setfield(L, -2, "quoteStyle");
+        lua_pushboolean(L, node->isQuoted());
+        lua_setfield(L, -2, "isQuoted");
+        consumeSyntax(ref, "token", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstExprLocal* node) {
+        int ref = serialiseExprNode(node, "local");
+        consumeIdentifier(ref, "name", node->location);
+        serialiseLocal(node->local);
+        lua_setfield(L, -2, "local");
+        lua_pushboolean(L, node->upvalue);
+        lua_setfield(L, -2, "upvalue");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprGlobal* node) {
+        int ref = serialiseExprNode(node, "global");
+        consumeIdentifier(ref, "name", node->location);
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprVarargs* node) {
+        int ref = serialiseExprNode(node, "varargs");
+        consumeSyntax(ref, "token", node->location.begin, "...");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprCall* node) {
+        int ref = serialiseExprNode(node, "call");
+        auto cst = locateCst<Luau::CstExprCall*>(node);
+
+        node->func->visit(this);
+        lua_setfield(L, -2, "func");
+
+        if (cst->explicitTypes) {
+            consumeSyntax(ref, "leftArrow1", cst->explicitTypes->leftArrow1Position, "<");
+            consumeSyntax(ref, "leftArrow2", cst->explicitTypes->leftArrow2Position, "<");
         }
-        // leftmost is the non-binary leaf; serialise it first.
-        push_expr(L, leftmost);
-        // Build from innermost to outermost.
-        for (int i = (int)binChain.size() - 1; i >= 0; i--) {
-            ensure_stack(L, 20);
-            auto* bin = binChain[i];
-            begin_node(L, "ExprBinary", bin->location);
-            std::string opStr = toString(bin->op);
-            lua_pushstring(L, opStr.c_str());
-            lua_setfield(L, -2, "op");
-            // Stack: [..., leftVal, binTable]
-            lua_pushvalue(L, -2);         // copy leftVal
-            lua_setfield(L, -2, "left");  // binTable.left = leftVal
-            lua_remove(L, -2);            // pop original leftVal
-            push_expr(L, bin->right);     // right side (recurse normally)
-            lua_setfield(L, -2, "right");
-            // Stack: [..., binTable] - becomes leftVal for next level
-        }
-    } else if (auto* e = expr->as<AstExprTypeAssertion>()) {
-        begin_node(L, "ExprTypeAssertion", e->location);
-        push_expr(L, e->expr);
-        lua_setfield(L, -2, "expr");
-        push_type(L, e->annotation);
-        lua_setfield(L, -2, "annotation");
-    } else if (auto* e = expr->as<AstExprIfElse>()) {
-        begin_node(L, "ExprIfElse", e->location);
-        push_expr(L, e->condition);
-        lua_setfield(L, -2, "condition");
-        lua_pushboolean(L, e->hasThen);
-        lua_setfield(L, -2, "hasThen");
-        push_expr(L, e->trueExpr);
-        lua_setfield(L, -2, "trueExpr");
-        lua_pushboolean(L, e->hasElse);
-        lua_setfield(L, -2, "hasElse");
-        push_expr(L, e->falseExpr);
-        lua_setfield(L, -2, "falseExpr");
-    } else if (auto* e = expr->as<AstExprInterpString>()) {
-        begin_node(L, "ExprInterpString", e->location);
-        // strings
-        lua_createtable(L, (int)e->strings.size, 0);
-        for (size_t i = 0; i < e->strings.size; i++) {
-            lua_pushlstring(L, e->strings.data[i].data, e->strings.data[i].size);
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "strings");
-        push_array<AstExpr>(L, e->expressions, push_expr);
-        lua_setfield(L, -2, "expressions");
-    } else if (auto* e = expr->as<AstExprInstantiate>()) {
-        begin_node(L, "ExprInstantiate", e->location);
-        push_expr(L, e->expr);
-        lua_setfield(L, -2, "expr");
-        lua_createtable(L, (int)e->typeArguments.size, 0);
-        for (size_t i = 0; i < e->typeArguments.size; i++) {
-            push_type_or_pack(L, e->typeArguments.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
+
+        lua_createtable(L, node->typeArguments.size, 0);
+        auto idx = 1;
+        for (size_t typeIdx = 0; typeIdx < node->typeArguments.size; ++typeIdx) {
+            const auto& i = node->typeArguments.data[typeIdx];
+            if (i.type)
+                i.type->visit(this);
+            else
+                i.typePack->visit(this);
+            lua_rawseti(L, -2, idx++);
+            if (cst->explicitTypes && typeIdx < cst->explicitTypes->commaPositions.size)
+                consumeSyntax(ref, numberedKey("typeComma", typeIdx).c_str(),
+                              cst->explicitTypes->commaPositions.data[typeIdx], ",");
         }
         lua_setfield(L, -2, "typeArguments");
-    } else if (auto* e = expr->as<AstExprError>()) {
-        begin_node(L, "ExprError", e->location);
-        push_array<AstExpr>(L, e->expressions, push_expr);
-        lua_setfield(L, -2, "expressions");
-        lua_pushinteger(L, (lua_Integer)e->messageIndex);
-        lua_setfield(L, -2, "messageIndex");
-    } else {
-        begin_node(L, "ExprUnknown", expr->location);
+
+        if (cst->explicitTypes) {
+            consumeSyntax(ref, "rightArrow1", cst->explicitTypes->rightArrow1Position, ">");
+            consumeSyntax(ref, "rightArrow2", cst->explicitTypes->rightArrow2Position, ">");
+        }
+
+        consumeSyntax(ref, "openParen", cst->openParens, "(");
+
+        lua_createtable(L, node->args.size, 0);
+        for (size_t argIdx = 0; argIdx < node->args.size; ++argIdx) {
+            node->args.data[argIdx]->visit(this);
+            lua_rawseti(L, -2, int(argIdx + 1));
+            if (argIdx < cst->commaPositions.size)
+                consumeSyntax(ref, numberedKey("argComma", argIdx).c_str(),
+                              cst->commaPositions.data[argIdx], ",");
+        }
+        lua_setfield(L, -2, "args");
+
+        lua_pushboolean(L, node->self);
+        lua_setfield(L, -2, "self");
+
+        push_location(L, node->argLocation);
+        lua_setfield(L, -2, "argLocation");
+
+        consumeSyntax(ref, "closeParen", cst->closeParens, ")");
+        return false;
     }
-}
+    virtual bool visit(Luau::AstExprIndexName* node) {
+        int ref = serialiseExprNode(node, "indexName");
 
-// ---------------------------------------------------------------------------
-// Statement serialisation
-// ---------------------------------------------------------------------------
-static void push_stat(lua_State* L, AstStat* stat) {
-    if (!stat) {
-        lua_pushnil(L);
-        return;
-    }
-    ensure_stack(L, 20);
-
-    if (auto* s = stat->as<AstStatBlock>()) {
-        begin_node(L, "Block", s->location);
-        set_stat_common(L, s);
-        push_array<AstStat>(L, s->body, push_stat);
-        lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->hasEnd);
-        lua_setfield(L, -2, "hasEnd");
-    } else if (auto* s = stat->as<AstStatIf>()) {
-        // ---- Iterative if / elseif chain ----
-        // Each elseif is a nested AstStatIf in the else branch.  Rather
-        // than recursing (depth == number of elseifs), we collect the
-        // chain, build all tables on the Lua stack, then collapse them.
-        std::vector<AstStatIf*> ifChain;
-        AstStatIf* cur = s;
-        while (cur) {
-            ifChain.push_back(cur);
-            cur = cur->elsebody ? cur->elsebody->as<AstStatIf>() : nullptr;
-        }
-
-        for (auto* node : ifChain) {
-            ensure_stack(L, 20);
-            begin_node(L, "StatIf", node->location);
-            set_stat_common(L, node);
-            push_expr(L, node->condition);
-            lua_setfield(L, -2, "condition");
-            push_stat(L, node->thenbody);
-            lua_setfield(L, -2, "thenBody");
-            if (node->thenLocation) {
-                push_location(L, *node->thenLocation);
-                lua_setfield(L, -2, "thenLocation");
-            }
-            if (node->elseLocation) {
-                push_location(L, *node->elseLocation);
-                lua_setfield(L, -2, "elseLocation");
-            }
-        }
-
-        // Handle final else body (non-if) on the last node
-        AstStatIf* last = ifChain.back();
-        if (last->elsebody && !last->elsebody->as<AstStatIf>()) {
-            push_stat(L, last->elsebody);
-            lua_setfield(L, -2, "elseBody");
-        }
-
-        // Collapse: set each table as elseBody of the one below it
-        for (int i = (int)ifChain.size() - 1; i > 0; i--) {
-            lua_setfield(L, -2, "elseBody");
-        }
-        // Top of stack is the outermost StatIf table.
-    } else if (auto* s = stat->as<AstStatWhile>()) {
-        begin_node(L, "StatWhile", s->location);
-        set_stat_common(L, s);
-        push_expr(L, s->condition);
-        lua_setfield(L, -2, "condition");
-        push_stat(L, s->body);
-        lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->hasDo);
-        lua_setfield(L, -2, "hasDo");
-        push_location(L, s->doLocation);
-        lua_setfield(L, -2, "doLocation");
-    } else if (auto* s = stat->as<AstStatRepeat>()) {
-        begin_node(L, "StatRepeat", s->location);
-        set_stat_common(L, s);
-        push_expr(L, s->condition);
-        lua_setfield(L, -2, "condition");
-        push_stat(L, s->body);
-        lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->DEPRECATED_hasUntil);
-        lua_setfield(L, -2, "hasUntil");
-    } else if (stat->as<AstStatBreak>()) {
-        begin_node(L, "StatBreak", stat->location);
-        set_stat_common(L, stat);
-    } else if (stat->as<AstStatContinue>()) {
-        begin_node(L, "StatContinue", stat->location);
-        set_stat_common(L, stat);
-    } else if (auto* s = stat->as<AstStatReturn>()) {
-        begin_node(L, "StatReturn", s->location);
-        set_stat_common(L, s);
-        push_array<AstExpr>(L, s->list, push_expr);
-        lua_setfield(L, -2, "list");
-    } else if (auto* s = stat->as<AstStatExpr>()) {
-        begin_node(L, "StatExpr", s->location);
-        set_stat_common(L, s);
-        push_expr(L, s->expr);
+        node->expr->visit(this);
         lua_setfield(L, -2, "expr");
-    } else if (auto* s = stat->as<AstStatLocal>()) {
-        begin_node(L, "StatLocal", s->location);
-        set_stat_common(L, s);
-        // vars
-        lua_createtable(L, (int)s->vars.size, 0);
-        for (size_t i = 0; i < s->vars.size; i++) {
-            push_local(L, s->vars.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
+        char opText[2] = { node->op, '\0' };
+        consumeSyntax(ref, "op", node->opPosition, opText);
+        lua_pushstring(L, node->index.value);
+        lua_setfield(L, -2, "index");
+        consumeSyntax(ref, "index", node->indexLocation);
+        push_location(L, node->indexLocation);
+        lua_setfield(L, -2, "indexLocation");
+        push_position(L, node->opPosition);
+        lua_setfield(L, -2, "opPosition");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprIndexExpr* node) {
+        int ref = serialiseExprNode(node, "indexExpr");
+        auto cst = locateCst<Luau::CstExprIndexExpr*>(node);
+
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+        consumeSyntax(ref, "openBracket", cst->openBracketPosition, "[");
+        node->index->visit(this);
+        lua_setfield(L, -2, "index");
+        consumeSyntax(ref, "closeBracket", cst->closeBracketPosition, "]");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprFunction* node) {
+        int ref = serialiseExprNode(node, "function");
+        auto cst = locateCst<Luau::CstExprFunction*>(node);
+
+        attachVisitArray(node->attributes, "attributes");
+        if (cst->functionKeywordPosition.hasValue() && claimedFunctionKeywords.erase(node) == 0)
+            consumeSyntax(ref, "functionKeyword", cst->functionKeywordPosition, "function");
+
+        if (node->generics.size > 0 || node->genericPacks.size > 0)
+            consumeSyntax(ref, "openGenerics", cst->openGenericsPosition, "<");
+        attachVisitArray(node->generics, "generics");
+        attachVisitArray(node->genericPacks, "genericPacks");
+        if (node->generics.size > 0 || node->genericPacks.size > 0)
+            consumeSyntax(ref, "closeGenerics", cst->closeGenericsPosition, ">");
+
+        if (node->self) {
+            serialiseLocal(node->self);
+            lua_setfield(L, -2, "self");
+        }
+
+        if (auto val = node->argLocation) consumeSyntax(ref, "openParen", val->begin, "(");
+
+        lua_createtable(L, node->args.size, 0);
+        auto idx = 1;
+        for (size_t argIdx = 0; argIdx < node->args.size; ++argIdx) {
+            auto local = node->args.data[argIdx];
+            consumeIdentifier(ref, numberedKey("arg", argIdx).c_str(), local->location);
+            serialiseLocal(local);
+            int localIndex = lua_absindex(L, -1);
+            if (argIdx < cst->argsAnnotationColonPositions.size)
+                consumeSyntax(ref, numberedKey("argColon", argIdx).c_str(),
+                              cst->argsAnnotationColonPositions.data[argIdx], ":");
+            if (local->annotation) {
+                local->annotation->visit(this);
+                lua_setfield(L, localIndex, "annotation");
+            }
+            lua_rawseti(L, -2, idx++);
+            if (argIdx < cst->argsCommaPositions.size)
+                consumeSyntax(ref, numberedKey("argComma", argIdx).c_str(),
+                              cst->argsCommaPositions.data[argIdx], ",");
+        }
+        lua_setfield(L, -2, "args");
+
+        lua_pushboolean(L, node->vararg);
+        lua_setfield(L, -2, "vararg");
+        push_location(L, node->varargLocation);
+        lua_setfield(L, -2, "varargLocation");
+        if (node->vararg) consumeSyntax(ref, "vararg", node->varargLocation.begin, "...");
+        if (node->varargAnnotation)
+            consumeSyntax(ref, "varargColon", cst->varargAnnotationColonPosition, ":");
+        if (node->varargAnnotation) {
+            node->varargAnnotation->visit(this);
+            lua_setfield(L, -2, "varargAnnotation");
+        }
+        if (auto val = node->argLocation)
+            consumeSyntax(ref, "closeParen", positionFromOffset(offsetFromPosition(val->end) - 1),
+                          ")");
+
+        if (node->returnAnnotation)
+            consumeSyntax(ref, "returnColon", cst->returnSpecifierPosition, ":");
+        if (node->returnAnnotation) {
+            node->returnAnnotation->visit(this);
+            lua_setfield(L, -2, "returnAnnotation");
+        }
+
+        node->body->visit(this);
+        lua_setfield(L, -2, "body");
+        consumeSyntax(ref, "endKeyword", node->body->location.end, "end");
+
+        lua_pushnumber(L, node->functionDepth);
+        lua_setfield(L, -2, "functionDepth");
+
+        lua_pushstring(L, node->debugname.value);
+        lua_setfield(L, -2, "debugname");
+
+        if (auto val = node->argLocation) {
+            push_location(L, *val);
+            lua_setfield(L, -2, "argLocation");
+        }
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprTable* node) {
+        int ref = serialiseExprNode(node, "table");
+        auto cst = locateCst<Luau::CstExprTable*>(node);
+        consumeSyntax(ref, "openBrace", node->location.begin, "{");
+
+        lua_createtable(L, node->items.size, 0);
+        for (size_t itemIdx = 0; itemIdx < node->items.size; ++itemIdx) {
+            auto i = node->items.data[itemIdx];
+            auto cstItem = cst->items.data[itemIdx];
+            //
+            lua_createtable(L, 0, 3);
+            lua_pushstring(L, i.kind == Luau::AstExprTable::Item::List     ? "list"
+                              : i.kind == Luau::AstExprTable::Item::Record ? "record"
+                                                                           : "general");
+            lua_setfield(L, -2, "kind");
+
+            if (i.key) {
+                if (i.kind == Luau::AstExprTable::Item::General)
+                    consumeSyntax(ref, numberedKey("itemOpenBracket", itemIdx).c_str(),
+                                  cstItem.indexerOpenPosition, "[");
+                i.key->visit(this);
+                lua_setfield(L, -2, "key");
+                if (i.kind == Luau::AstExprTable::Item::General)
+                    consumeSyntax(ref, numberedKey("itemCloseBracket", itemIdx).c_str(),
+                                  cstItem.indexerClosePosition, "]");
+                if (i.kind != Luau::AstExprTable::Item::List)
+                    consumeSyntax(ref, numberedKey("itemEquals", itemIdx).c_str(),
+                                  cstItem.equalsPosition, "=");
+            }
+            i.value->visit(this);
+            lua_setfield(L, -2, "value");
+            if (cstItem.separator != Luau::CstExprTable::Missing)
+                consumeSyntax(ref, numberedKey("itemSeparator", itemIdx).c_str(),
+                              cstItem.separatorPosition,
+                              cstItem.separator == Luau::CstExprTable::Comma ? "," : ";");
+
+            lua_rawseti(L, -2, int(itemIdx + 1));
+        }
+        lua_setfield(L, -2, "items");
+
+        consumeSyntax(ref, "closeBrace",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 1), "}");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprUnary* node) {
+        int ref = serialiseExprNode(node, "unary");
+
+        auto op = toString(node->op);
+        op[0] = tolower(op[0]);
+        lua_pushstring(L, op.c_str());
+        lua_setfield(L, -2, "op");
+
+        auto cst = locateCst<Luau::CstExprOp*>(node);
+        consumeSyntax(ref, "op", cst->opPosition, toString(node->op).data());
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprBinary* node) {
+        int ref = serialiseExprNode(node, "binary");
+
+        auto op = toString(node->op);
+        op[0] = tolower(op[0]);
+        lua_pushstring(L, op.c_str());
+        lua_setfield(L, -2, "op");
+
+        node->left->visit(this);
+        lua_setfield(L, -2, "left");
+        auto cst = locateCst<Luau::CstExprOp*>(node);
+        consumeSyntax(ref, "op", cst->opPosition, toString(node->op).data());
+        node->right->visit(this);
+        lua_setfield(L, -2, "right");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprTypeAssertion* node) {
+        int ref = serialiseExprNode(node, "typeAssertion");
+
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+        auto cst = locateCst<Luau::CstExprTypeAssertion*>(node);
+        consumeSyntax(ref, "op", cst->opPosition, "::");
+        node->annotation->visit(this);
+        lua_setfield(L, -2, "annotation");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprIfElse* node) {
+        int ref = serialiseExprNode(node, "ifElse");
+        auto cst = locateCst<Luau::CstExprIfElse*>(node);
+
+        // CstExprIfElse::isElseIf describes whether *this* node's else-branch is
+        // spelled `elseif` (chaining into another if-else expression), not
+        // whether this node is itself an elseif. A node that is an elseif is
+        // flagged by its parent claiming it below; the parent's `elseKeyword`
+        // owns the `elseif` token, so a claimed node skips its own leading
+        // keyword. Every other node leads with a plain `if`.
+        bool isClaimedElseif = claimedElseifExprKeywords.erase(node) != 0;
+        if (!isClaimedElseif) consumeSyntax(ref, "ifKeyword", node->location.begin, "if");
+        node->condition->visit(this);
+        lua_setfield(L, -2, "condition");
+        if (node->hasThen) {
+            consumeSyntax(ref, "thenKeyword", cst->thenPosition, "then");
+            node->trueExpr->visit(this);
+            lua_setfield(L, -2, "thenExpr");
+        }
+        if (node->hasElse) {
+            consumeSyntax(ref, "elseKeyword", cst->elsePosition, cst->isElseIf ? "elseif" : "else");
+            if (cst->isElseIf) {
+                if (auto elseifExpr =
+                        node->falseExpr ? node->falseExpr->as<Luau::AstExprIfElse>() : nullptr)
+                    claimedElseifExprKeywords.insert(elseifExpr);
+            }
+            node->falseExpr->visit(this);
+            lua_setfield(L, -2, "elseExpr");
+        }
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprInterpString* node) {
+        int ref = serialiseExprNode(node, "interpString");
+        auto cst = locateCst<Luau::CstExprInterpString*>(node);
+
+        lua_createtable(L, node->strings.size, 0);
+        auto idx = 1;
+        for (auto i : node->strings) {
+            lua_pushlstring(L, i.data, i.size);
+            lua_rawseti(L, -2, idx++);
+        }
+        lua_setfield(L, -2, "strings");
+        lua_createtable(L, node->expressions.size, 0);
+        int expressionsIndex = lua_absindex(L, -1);
+        for (size_t i = 0; i < cst->sourceStrings.size; ++i) {
+            consumeSyntax(ref, numberedKey("stringPart", i).c_str(), cst->stringPositions.data[i],
+                          cst->sourceStrings.data[i].size);
+            if (i < node->expressions.size) {
+                node->expressions.data[i]->visit(this);
+                lua_rawseti(L, expressionsIndex, int(i + 1));
+            }
+        }
+        lua_setfield(L, -2, "expressions");
+
+        return false;
+    }
+    virtual bool visit(Luau::AstExprInstantiate* node) {
+        int ref = serialiseExprNode(node, "instantiate");
+        const auto& cst = locateCst<Luau::CstExprExplicitTypeInstantiation*>(node)->instantiation;
+
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+        consumeSyntax(ref, "leftArrow1", cst.leftArrow1Position, "<");
+        consumeSyntax(ref, "leftArrow2", cst.leftArrow2Position, "<");
+
+        lua_createtable(L, node->typeArguments.size, 0);
+        for (size_t i = 0; i < node->typeArguments.size; ++i) {
+            auto typeArg = node->typeArguments.data[i];
+            if (typeArg.type)
+                typeArg.type->visit(this);
+            else
+                typeArg.typePack->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst.commaPositions.size)
+                consumeSyntax(ref, numberedKey("typeComma", i).c_str(), cst.commaPositions.data[i],
+                              ",");
+        }
+        lua_setfield(L, -2, "typeArguments");
+        consumeSyntax(ref, "rightArrow1", cst.rightArrow1Position, ">");
+        consumeSyntax(ref, "rightArrow2", cst.rightArrow2Position, ">");
+
+        return false;
+    }
+
+    /// AstStat
+    virtual bool visit(Luau::AstStatBlock* node) {
+        int ref = serialiseStatNode(node, "block");
+        attachVisitArray(node->body, "body");
+        if (node->location.begin == Luau::Position{ 0, 0 }) consumeEof(ref);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatIf* node) {
+        int ref = serialiseStatNode(node, "if");
+        bool isElseif = claimedElseifKeywords.erase(node) != 0;
+        if (!isElseif) consumeSyntax(ref, "ifKeyword", node->location.begin, "if");
+        node->condition->visit(this);
+        lua_setfield(L, -2, "condition");
+        if (auto i = node->thenLocation) consumeSyntax(ref, "thenKeyword", i->begin, "then");
+        node->thenbody->visit(this);
+        lua_setfield(L, -2, "thenBody");
+        if (node->elsebody) {
+            bool hasElseif = node->elsebody->is<Luau::AstStatIf>();
+            if (auto i = node->elseLocation)
+                consumeSyntax(ref, "elseKeyword", i->begin, hasElseif ? "elseif" : "else");
+            if (hasElseif) claimedElseifKeywords.insert(node->elsebody->as<Luau::AstStatIf>());
+            node->elsebody->visit(this);
+            lua_setfield(L, -2, "elseBody");
+        }
+        if (auto i = node->thenLocation) {
+            push_location(L, *i);
+            lua_setfield(L, -2, "thenLocation");
+        }
+        if (auto i = node->elseLocation) {
+            push_location(L, *i);
+            lua_setfield(L, -2, "elseLocation");
+        }
+        if (!node->elsebody || !node->elsebody->is<Luau::AstStatIf>())
+            consumeSyntax(ref, "endKeyword",
+                          positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatWhile* node) {
+        int ref = serialiseStatNode(node, "while");
+        consumeSyntax(ref, "whileKeyword", node->location.begin, "while");
+        node->condition->visit(this);
+        lua_setfield(L, -2, "condition");
+        if (node->hasDo) consumeSyntax(ref, "doKeyword", node->doLocation.begin, "do");
+        node->body->visit(this);
+        lua_setfield(L, -2, "body");
+
+        if (node->hasDo) {
+            push_location(L, node->doLocation);
+            lua_setfield(L, -2, "doLocation");
+        }
+
+        consumeSyntax(ref, "endKeyword",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatRepeat* node) {
+        int ref = serialiseStatNode(node, "repeat");
+        auto cst = locateCst<Luau::CstStatRepeat*>(node);
+        consumeSyntax(ref, "repeatKeyword", node->location.begin, "repeat");
+        node->body->visit(this);
+        lua_setfield(L, -2, "body");
+        consumeSyntax(ref, "untilKeyword", cst->untilPosition, "until");
+        node->condition->visit(this);
+        lua_setfield(L, -2, "condition");
+
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatBreak* node) {
+        int ref = serialiseStatNode(node, "break");
+        consumeSyntax(ref, "breakKeyword", node->location.begin, "break");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatContinue* node) {
+        int ref = serialiseStatNode(node, "continue");
+        consumeSyntax(ref, "continueKeyword", node->location.begin, "continue");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatReturn* node) {
+        int ref = serialiseStatNode(node, "return");
+        auto cst = locateCst<Luau::CstStatReturn*>(node);
+        consumeSyntax(ref, "returnKeyword", node->location.begin, "return");
+        lua_createtable(L, node->list.size, 0);
+        for (size_t i = 0; i < node->list.size; ++i) {
+            node->list.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->commaPositions.size)
+                consumeSyntax(ref, numberedKey("valueComma", i).c_str(),
+                              cst->commaPositions.data[i], ",");
+        }
+        lua_setfield(L, -2, "list");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatExpr* node) {
+        int ref = serialiseStatNode(node, "expr");
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatLocal* node) {
+        int ref = serialiseStatNode(node, "local");
+        auto cst = locateCst<Luau::CstStatLocal*>(node);
+        consumeSyntax(ref, "localKeyword",
+                      cst->declarationKeywordPosition.hasValue() ? cst->declarationKeywordPosition
+                                                                 : node->location.begin,
+                      node->isConst ? "const" : "local");
+
+        lua_createtable(L, node->vars.size, 0);
+        for (size_t i = 0; i < node->vars.size; ++i) {
+            auto local = node->vars.data[i];
+            consumeIdentifier(ref, numberedKey("var", i).c_str(), local->location);
+            serialiseLocal(local);
+            int localIndex = lua_absindex(L, -1);
+            if (i < cst->varsAnnotationColonPositions.size)
+                consumeSyntax(ref, numberedKey("varColon", i).c_str(),
+                              cst->varsAnnotationColonPositions.data[i], ":");
+            if (local->annotation) {
+                local->annotation->visit(this);
+                lua_setfield(L, localIndex, "annotation");
+            }
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->varsCommaPositions.size)
+                consumeSyntax(ref, numberedKey("varComma", i).c_str(),
+                              cst->varsCommaPositions.data[i], ",");
         }
         lua_setfield(L, -2, "vars");
-        push_array<AstExpr>(L, s->values, push_expr);
+
+        if (auto i = node->equalsSignLocation) consumeSyntax(ref, "equals", i->begin, "=");
+
+        lua_createtable(L, node->values.size, 0);
+        for (size_t i = 0; i < node->values.size; ++i) {
+            node->values.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->valuesCommaPositions.size)
+                consumeSyntax(ref, numberedKey("valueComma", i).c_str(),
+                              cst->valuesCommaPositions.data[i], ",");
+        }
         lua_setfield(L, -2, "values");
-        if (s->equalsSignLocation) {
-            push_location(L, *s->equalsSignLocation);
+        lua_pushboolean(L, node->isConst);
+        lua_setfield(L, -2, "isConst");
+
+        if (auto i = node->equalsSignLocation) {
+            push_location(L, *i);
             lua_setfield(L, -2, "equalsSignLocation");
         }
-    } else if (auto* s = stat->as<AstStatFor>()) {
-        begin_node(L, "StatFor", s->location);
-        set_stat_common(L, s);
-        push_local(L, s->var);
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatFor* node) {
+        int ref = serialiseStatNode(node, "for");
+        auto cst = locateCst<Luau::CstStatFor*>(node);
+        consumeSyntax(ref, "forKeyword", node->location.begin, "for");
+
+        consumeIdentifier(ref, "var", node->var->location);
+        serialiseLocal(node->var);
+        int varIndex = lua_absindex(L, -1);
+        if (cst->annotationColonPosition.hasValue())
+            consumeSyntax(ref, "varColon", cst->annotationColonPosition, ":");
+        if (node->var->annotation) {
+            node->var->annotation->visit(this);
+            lua_setfield(L, varIndex, "annotation");
+        }
         lua_setfield(L, -2, "var");
-        push_expr(L, s->from);
+        consumeSyntax(ref, "equals", cst->equalsPosition, "=");
+        node->from->visit(this);
         lua_setfield(L, -2, "from");
-        push_expr(L, s->to);
+        consumeSyntax(ref, "endComma", cst->endCommaPosition, ",");
+        node->to->visit(this);
         lua_setfield(L, -2, "to");
-        if (s->step) {
-            push_expr(L, s->step);
+        if (node->step) {
+            consumeSyntax(ref, "stepComma", cst->stepCommaPosition, ",");
+            node->step->visit(this);
             lua_setfield(L, -2, "step");
         }
-        push_stat(L, s->body);
+        if (node->hasDo) consumeSyntax(ref, "doKeyword", node->doLocation.begin, "do");
+        node->body->visit(this);
         lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->hasDo);
-        lua_setfield(L, -2, "hasDo");
-        push_location(L, s->doLocation);
-        lua_setfield(L, -2, "doLocation");
-    } else if (auto* s = stat->as<AstStatForIn>()) {
-        begin_node(L, "StatForIn", s->location);
-        set_stat_common(L, s);
-        lua_createtable(L, (int)s->vars.size, 0);
-        for (size_t i = 0; i < s->vars.size; i++) {
-            push_local(L, s->vars.data[i]);
-            lua_rawseti(L, -2, (int)(i + 1));
+        if (node->hasDo) {
+            push_location(L, node->doLocation);
+            lua_setfield(L, -2, "doLocation");
+        }
+
+        consumeSyntax(ref, "endKeyword",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatForIn* node) {
+        int ref = serialiseStatNode(node, "forIn");
+        auto cst = locateCst<Luau::CstStatForIn*>(node);
+        consumeSyntax(ref, "forKeyword", node->location.begin, "for");
+
+        lua_createtable(L, node->vars.size, 0);
+        for (size_t i = 0; i < node->vars.size; ++i) {
+            auto local = node->vars.data[i];
+            consumeIdentifier(ref, numberedKey("var", i).c_str(), local->location);
+            serialiseLocal(local);
+            int localIndex = lua_absindex(L, -1);
+            if (i < cst->varsAnnotationColonPositions.size)
+                consumeSyntax(ref, numberedKey("varColon", i).c_str(),
+                              cst->varsAnnotationColonPositions.data[i], ":");
+            if (local->annotation) {
+                local->annotation->visit(this);
+                lua_setfield(L, localIndex, "annotation");
+            }
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->varsCommaPositions.size)
+                consumeSyntax(ref, numberedKey("varComma", i).c_str(),
+                              cst->varsCommaPositions.data[i], ",");
         }
         lua_setfield(L, -2, "vars");
-        push_array<AstExpr>(L, s->values, push_expr);
+
+        if (node->hasIn) consumeSyntax(ref, "inKeyword", node->inLocation.begin, "in");
+        lua_createtable(L, node->values.size, 0);
+        for (size_t i = 0; i < node->values.size; ++i) {
+            node->values.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->valuesCommaPositions.size)
+                consumeSyntax(ref, numberedKey("valueComma", i).c_str(),
+                              cst->valuesCommaPositions.data[i], ",");
+        }
         lua_setfield(L, -2, "values");
-        push_stat(L, s->body);
+        if (node->hasDo) consumeSyntax(ref, "doKeyword", node->doLocation.begin, "do");
+        node->body->visit(this);
         lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->hasIn);
-        lua_setfield(L, -2, "hasIn");
-        push_location(L, s->inLocation);
-        lua_setfield(L, -2, "inLocation");
-        lua_pushboolean(L, s->hasDo);
-        lua_setfield(L, -2, "hasDo");
-        push_location(L, s->doLocation);
-        lua_setfield(L, -2, "doLocation");
-    } else if (auto* s = stat->as<AstStatAssign>()) {
-        begin_node(L, "StatAssign", s->location);
-        set_stat_common(L, s);
-        push_array<AstExpr>(L, s->vars, push_expr);
+
+        if (node->hasIn) {
+            push_location(L, node->inLocation);
+            lua_setfield(L, -2, "inLocation");
+        }
+        if (node->hasDo) {
+            push_location(L, node->doLocation);
+            lua_setfield(L, -2, "doLocation");
+        }
+
+        consumeSyntax(ref, "endKeyword",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatAssign* node) {
+        int ref = serialiseStatNode(node, "assign");
+        auto cst = locateCst<Luau::CstStatAssign*>(node);
+        lua_createtable(L, node->vars.size, 0);
+        for (size_t i = 0; i < node->vars.size; ++i) {
+            node->vars.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->varsCommaPositions.size)
+                consumeSyntax(ref, numberedKey("varComma", i).c_str(),
+                              cst->varsCommaPositions.data[i], ",");
+        }
         lua_setfield(L, -2, "vars");
-        push_array<AstExpr>(L, s->values, push_expr);
+        consumeSyntax(ref, "equals", cst->equalsPosition, "=");
+        lua_createtable(L, node->values.size, 0);
+        for (size_t i = 0; i < node->values.size; ++i) {
+            node->values.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (i < cst->valuesCommaPositions.size)
+                consumeSyntax(ref, numberedKey("valueComma", i).c_str(),
+                              cst->valuesCommaPositions.data[i], ",");
+        }
         lua_setfield(L, -2, "values");
-    } else if (auto* s = stat->as<AstStatCompoundAssign>()) {
-        begin_node(L, "StatCompoundAssign", s->location);
-        set_stat_common(L, s);
-        std::string opStr = toString(s->op);
-        lua_pushstring(L, opStr.c_str());
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatCompoundAssign* node) {
+        int ref = serialiseStatNode(node, "compoundAssign");
+        auto cst = locateCst<Luau::CstStatCompoundAssign*>(node);
+
+        auto op = toString(node->op);
+        op[0] = tolower(op[0]);
+        lua_pushstring(L, op.c_str());
         lua_setfield(L, -2, "op");
-        push_expr(L, s->var);
+
+        node->var->visit(this);
         lua_setfield(L, -2, "var");
-        push_expr(L, s->value);
+        std::string opText = std::string(toString(node->op)) + "=";
+        consumeSyntax(ref, "op", cst->opPosition, opText.size());
+        node->value->visit(this);
         lua_setfield(L, -2, "value");
-    } else if (auto* s = stat->as<AstStatFunction>()) {
-        begin_node(L, "StatFunction", s->location);
-        set_stat_common(L, s);
-        push_expr(L, s->name);
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatFunction* node) {
+        int ref = serialiseStatNode(node, "function");
+        auto cst = locateCst<Luau::CstStatFunction*>(node);
+        consumeSyntax(ref, "functionKeyword", cst->functionKeywordPosition, "function");
+        claimedFunctionKeywords.insert(node->func);
+
+        node->name->visit(this);
         lua_setfield(L, -2, "name");
-        push_expr(L, s->func);
+        node->func->visit(this);
         lua_setfield(L, -2, "func");
-    } else if (auto* s = stat->as<AstStatLocalFunction>()) {
-        begin_node(L, "StatLocalFunction", s->location);
-        set_stat_common(L, s);
-        push_local(L, s->name);
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatLocalFunction* node) {
+        int ref = serialiseStatNode(node, "localFunction");
+        auto cst = locateCst<Luau::CstStatLocalFunction*>(node);
+        consumeSyntax(ref, "localKeyword", cst->localKeywordPosition, "local");
+        consumeSyntax(ref, "functionKeyword", cst->functionKeywordPosition, "function");
+        claimedFunctionKeywords.insert(node->func);
+
+        consumeIdentifier(ref, "name", node->name->location);
+        serialiseLocal(node->name);
         lua_setfield(L, -2, "name");
-        push_expr(L, s->func);
+        node->func->visit(this);
         lua_setfield(L, -2, "func");
-    } else if (auto* s = stat->as<AstStatTypeAlias>()) {
-        begin_node(L, "StatTypeAlias", s->location);
-        set_stat_common(L, s);
-        push_name(L, s->name);
+        lua_pushboolean(L, node->isConst);
+        lua_setfield(L, -2, "isConst");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatTypeAlias* node) {
+        int ref = serialiseStatNode(node, "typeAlias");
+        auto cst = locateCst<Luau::CstStatTypeAlias*>(node);
+        if (node->exported) consumeSyntax(ref, "exportKeyword", node->location.begin, "export");
+        consumeSyntax(ref, "typeKeyword", cst->typeKeywordPosition, "type");
+
+        lua_pushstring(L, node->name.value);
         lua_setfield(L, -2, "name");
-        push_location(L, s->nameLocation);
+        consumeSyntax(ref, "name", node->nameLocation);
+
+        push_location(L, node->nameLocation);
         lua_setfield(L, -2, "nameLocation");
-        lua_pushboolean(L, s->exported);
-        lua_setfield(L, -2, "exported");
-        push_type(L, s->type);
+
+        if (node->generics.size > 0 || node->genericPacks.size > 0)
+            consumeSyntax(ref, "openGenerics", cst->genericsOpenPosition, "<");
+        attachVisitArray(node->generics, "generics");
+        attachVisitArray(node->genericPacks, "genericPacks");
+        if (node->generics.size > 0 || node->genericPacks.size > 0)
+            consumeSyntax(ref, "closeGenerics", cst->genericsClosePosition, ">");
+
+        consumeSyntax(ref, "equals", cst->equalsPosition, "=");
+        node->type->visit(this);
         lua_setfield(L, -2, "aliasedType");
-        if (s->generics.size > 0) {
-            lua_createtable(L, (int)s->generics.size, 0);
-            for (size_t i = 0; i < s->generics.size; i++) {
-                push_generic_type(L, s->generics.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "generics");
-        }
-        if (s->genericPacks.size > 0) {
-            lua_createtable(L, (int)s->genericPacks.size, 0);
-            for (size_t i = 0; i < s->genericPacks.size; i++) {
-                push_generic_typepack(L, s->genericPacks.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "genericPacks");
-        }
-    } else if (auto* s = stat->as<AstStatTypeFunction>()) {
-        begin_node(L, "StatTypeFunction", s->location);
-        set_stat_common(L, s);
-        push_name(L, s->name);
-        lua_setfield(L, -2, "name");
-        push_location(L, s->nameLocation);
-        lua_setfield(L, -2, "nameLocation");
-        push_expr(L, s->body);
-        lua_setfield(L, -2, "body");
-        lua_pushboolean(L, s->exported);
+
+        lua_pushboolean(L, node->exported);
         lua_setfield(L, -2, "exported");
-        lua_pushboolean(L, s->hasErrors);
+
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatTypeFunction* node) {
+        int ref = serialiseStatNode(node, "typeFunction");
+        auto cst = locateCst<Luau::CstStatTypeFunction*>(node);
+        if (node->exported) consumeSyntax(ref, "exportKeyword", node->location.begin, "export");
+        consumeSyntax(ref, "typeKeyword", cst->typeKeywordPosition, "type");
+        consumeSyntax(ref, "functionKeyword", cst->functionKeywordPosition, "function");
+
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name", node->nameLocation);
+
+        push_location(L, node->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
+
+        if (node->body) {
+            claimedFunctionKeywords.insert(node->body);
+            node->body->visit(this);
+            lua_setfield(L, -2, "body");
+        }
+
+        lua_pushboolean(L, node->exported);
+        lua_setfield(L, -2, "exported");
+        lua_pushboolean(L, node->hasErrors);
         lua_setfield(L, -2, "hasErrors");
-    } else if (auto* s = stat->as<AstStatDeclareGlobal>()) {
-        begin_node(L, "StatDeclareGlobal", s->location);
-        set_stat_common(L, s);
-        push_name(L, s->name);
+
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatClass* node) {
+        int ref = serialiseStatNode(node, "class");
+        if (node->exported) consumeSyntax(ref, "exportKeyword", node->location.begin, "export");
+
+        size_t classSearchStart = node->exported ? offsetFromPosition(node->location.begin) + 6
+                                                 : offsetFromPosition(node->location.begin);
+        if (auto classPos = findCharPosition(classSearchStart,
+                                             offsetFromPosition(node->name->location.begin), 'c'))
+            consumeSyntax(ref, "classKeyword", *classPos, "class");
+
+        consumeIdentifier(ref, "name", node->name->location);
+        serialiseLocal(node->name);
         lua_setfield(L, -2, "name");
-        push_location(L, s->nameLocation);
+
+        lua_createtable(L, node->members.size, 0);
+        for (size_t i = 0; i < node->members.size; ++i) {
+            lua_createtable(L, 0, 8);
+            if (auto prop = node->members.data[i].get_if<Luau::AstClassProperty>()) {
+                lua_pushstring(L, "property");
+                lua_setfield(L, -2, "kind");
+                if (prop->qualifierLocation.begin.hasValue()) {
+                    consumeSyntax(ref, numberedKey("memberQualifier", i).c_str(),
+                                  prop->qualifierLocation.begin,
+                                  sourceSlice(offsetFromPosition(prop->qualifierLocation.begin),
+                                              offsetFromPosition(prop->qualifierLocation.end))
+                                      .size());
+                    push_location(L, prop->qualifierLocation);
+                    lua_setfield(L, -2, "qualifierLocation");
+                }
+                lua_pushstring(L, prop->name.value);
+                lua_setfield(L, -2, "name");
+                consumeSyntax(ref, numberedKey("memberName", i).c_str(), prop->nameLocation);
+                push_location(L, prop->nameLocation);
+                lua_setfield(L, -2, "nameLocation");
+                if (prop->typeColonLocation) {
+                    consumeSyntax(ref, numberedKey("memberColon", i).c_str(),
+                                  prop->typeColonLocation->begin, ":");
+                    push_location(L, *prop->typeColonLocation);
+                    lua_setfield(L, -2, "typeColonLocation");
+                }
+                if (prop->ty) {
+                    prop->ty->visit(this);
+                    lua_setfield(L, -2, "type");
+                }
+            } else if (auto method = node->members.data[i].get_if<Luau::AstClassMethod>()) {
+                lua_pushstring(L, "method");
+                lua_setfield(L, -2, "kind");
+                if (method->qualifierLocation) {
+                    consumeSyntax(ref, numberedKey("memberQualifier", i).c_str(),
+                                  method->qualifierLocation->begin,
+                                  sourceSlice(offsetFromPosition(method->qualifierLocation->begin),
+                                              offsetFromPosition(method->qualifierLocation->end))
+                                      .size());
+                    push_location(L, *method->qualifierLocation);
+                    lua_setfield(L, -2, "qualifierLocation");
+                }
+                consumeSyntax(ref, numberedKey("memberFunctionKeyword", i).c_str(),
+                              method->keywordLocation.begin, "function");
+                push_location(L, method->keywordLocation);
+                lua_setfield(L, -2, "keywordLocation");
+                lua_pushstring(L, method->functionName.value);
+                lua_setfield(L, -2, "name");
+                consumeSyntax(ref, numberedKey("memberName", i).c_str(), method->nameLocation);
+                push_location(L, method->nameLocation);
+                lua_setfield(L, -2, "nameLocation");
+                claimedFunctionKeywords.insert(method->function);
+                method->function->visit(this);
+                lua_setfield(L, -2, "function");
+            }
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        lua_setfield(L, -2, "members");
+        lua_pushboolean(L, node->exported);
+        lua_setfield(L, -2, "exported");
+        consumeSyntax(ref, "endKeyword",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+
+    /// AstType
+    virtual bool visit(Luau::AstType* node) {
+        int ref = serialiseNode(node, "type", "unknown");
+        consumeSyntax(ref, "token", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeReference* node) {
+        int ref = serialiseNode(node, "type", "reference");
+        auto cst = maybeCst<Luau::CstTypeReference*>(node);
+
+        lua_pushboolean(L, node->hasParameterList);
+        lua_setfield(L, -2, "hasParameterList");
+        if (node->prefix) {
+            lua_pushstring(L, node->prefix->value);
+            lua_setfield(L, -2, "prefix");
+            if (node->prefixLocation) consumeSyntax(ref, "prefix", *node->prefixLocation);
+            if (cst) consumeSyntax(ref, "prefixDot", cst->prefixPointPosition, ".");
+            if (node->prefixLocation) {
+                push_location(L, *node->prefixLocation);
+                lua_setfield(L, -2, "prefixLocation");
+            }
+        }
+
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name", node->nameLocation);
+        push_location(L, node->nameLocation);
         lua_setfield(L, -2, "nameLocation");
-        push_type(L, s->type);
-        lua_setfield(L, -2, "declaredType");
-    } else if (auto* s = stat->as<AstStatDeclareFunction>()) {
-        begin_node(L, "StatDeclareFunction", s->location);
-        set_stat_common(L, s);
-        if (s->attributes.size > 0) {
-            lua_createtable(L, (int)s->attributes.size, 0);
-            for (size_t i = 0; i < s->attributes.size; i++) {
-                push_ast_attr(L, s->attributes.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
+
+        if (node->parameters.size > 0 || node->hasParameterList) {
+            if (cst) consumeSyntax(ref, "openParameters", cst->openParametersPosition, "<");
+            lua_createtable(L, node->parameters.size, 0);
+            for (size_t i = 0; i < node->parameters.size; ++i) {
+                serialiseTypeOrPack(node->parameters.data[i]);
+                lua_rawseti(L, -2, int(i + 1));
+                if (cst && i < cst->parametersCommaPositions.size)
+                    consumeSyntax(ref, numberedKey("parameterComma", i).c_str(),
+                                  cst->parametersCommaPositions.data[i], ",");
             }
-            lua_setfield(L, -2, "attributes");
+            lua_setfield(L, -2, "parameters");
+            if (cst) consumeSyntax(ref, "closeParameters", cst->closeParametersPosition, ">");
         }
-        push_name(L, s->name);
-        lua_setfield(L, -2, "name");
-        push_location(L, s->nameLocation);
-        lua_setfield(L, -2, "nameLocation");
-        if (s->generics.size > 0) {
-            lua_createtable(L, (int)s->generics.size, 0);
-            for (size_t i = 0; i < s->generics.size; i++) {
-                push_generic_type(L, s->generics.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "generics");
-        }
-        if (s->genericPacks.size > 0) {
-            lua_createtable(L, (int)s->genericPacks.size, 0);
-            for (size_t i = 0; i < s->genericPacks.size; i++) {
-                push_generic_typepack(L, s->genericPacks.data[i]);
-                lua_rawseti(L, -2, (int)(i + 1));
-            }
-            lua_setfield(L, -2, "genericPacks");
-        }
-        push_type_list(L, s->params);
-        lua_setfield(L, -2, "params");
-        lua_createtable(L, (int)s->paramNames.size, 0);
-        for (size_t i = 0; i < s->paramNames.size; i++) {
-            lua_createtable(L, 0, 2);
-            push_name(L, s->paramNames.data[i].first);
-            lua_setfield(L, -2, "name");
-            push_location(L, s->paramNames.data[i].second);
-            lua_setfield(L, -2, "location");
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "paramNames");
-        lua_pushboolean(L, s->vararg);
-        lua_setfield(L, -2, "vararg");
-        push_location(L, s->varargLocation);
-        lua_setfield(L, -2, "varargLocation");
-        push_typepack(L, s->retTypes);
-        lua_setfield(L, -2, "returnTypes");
-    } else if (auto* s = stat->as<AstStatDeclareExternType>()) {
-        begin_node(L, "StatDeclareExternType", s->location);
-        set_stat_common(L, s);
-        push_name(L, s->name);
-        lua_setfield(L, -2, "name");
-        push_optional_name(L, s->superName);
-        lua_setfield(L, -2, "superName");
-        lua_createtable(L, (int)s->props.size, 0);
-        for (size_t i = 0; i < s->props.size; i++) {
-            lua_createtable(L, 0, 6);
-            push_name(L, s->props.data[i].name);
-            lua_setfield(L, -2, "name");
-            push_location(L, s->props.data[i].nameLocation);
-            lua_setfield(L, -2, "nameLocation");
-            push_type(L, s->props.data[i].ty);
-            lua_setfield(L, -2, "type");
-            lua_pushboolean(L, s->props.data[i].isMethod);
-            lua_setfield(L, -2, "isMethod");
-            push_location(L, s->props.data[i].location);
-            lua_setfield(L, -2, "location");
-            lua_rawseti(L, -2, (int)(i + 1));
-        }
-        lua_setfield(L, -2, "props");
-        if (s->indexer) {
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeTable* node) {
+        int ref = serialiseNode(node, "type", "table");
+        auto cst = maybeCst<Luau::CstTypeTable*>(node);
+        consumeSyntax(ref, "openBrace", node->location.begin, "{");
+
+        lua_createtable(L, node->props.size, 0);
+        int propsIndex = lua_absindex(L, -1);
+        int parentIndex = lua_absindex(L, -2);
+
+        size_t propIndex = 0;
+        if (cst && cst->isArray && node->indexer) {
             lua_createtable(L, 0, 5);
-            push_type(L, s->indexer->indexType);
-            lua_setfield(L, -2, "indexType");
-            push_type(L, s->indexer->resultType);
+            node->indexer->resultType->visit(this);
             lua_setfield(L, -2, "resultType");
-            push_location(L, s->indexer->location);
+            serialiseSyntheticArrayIndexType(node->indexer->indexType);
+            lua_setfield(L, -2, "indexType");
+            push_location(L, node->indexer->location);
             lua_setfield(L, -2, "location");
-            lua_pushstring(L, table_access_to_string(s->indexer->access));
+            lua_pushstring(L, tableAccessToString(node->indexer->access));
             lua_setfield(L, -2, "access");
-            if (s->indexer->accessLocation) {
-                push_location(L, *s->indexer->accessLocation);
+            if (node->indexer->accessLocation) {
+                push_location(L, *node->indexer->accessLocation);
                 lua_setfield(L, -2, "accessLocation");
             }
+            lua_setfield(L, parentIndex, "indexer");
+        } else if (cst && !cst->isArray) {
+            for (size_t i = 0; i < cst->items.size; ++i) {
+                const auto& item = cst->items.data[i];
+                if (item.kind == Luau::CstTypeTable::Item::Kind::Indexer && node->indexer) {
+                    lua_createtable(L, 0, 5);
+                    if (node->indexer->accessLocation) {
+                        consumeSyntax(ref, numberedKey("indexerAccess", i).c_str(),
+                                      *node->indexer->accessLocation);
+                        push_location(L, *node->indexer->accessLocation);
+                        lua_setfield(L, -2, "accessLocation");
+                    }
+                    consumeSyntax(ref, numberedKey("indexerOpen", i).c_str(),
+                                  item.indexerOpenPosition, "[");
+                    node->indexer->indexType->visit(this);
+                    lua_setfield(L, -2, "indexType");
+                    consumeSyntax(ref, numberedKey("indexerClose", i).c_str(),
+                                  item.indexerClosePosition, "]");
+                    consumeSyntax(ref, numberedKey("indexerColon", i).c_str(), item.colonPosition,
+                                  ":");
+                    node->indexer->resultType->visit(this);
+                    lua_setfield(L, -2, "resultType");
+                    push_location(L, node->indexer->location);
+                    lua_setfield(L, -2, "location");
+                    lua_pushstring(L, tableAccessToString(node->indexer->access));
+                    lua_setfield(L, -2, "access");
+                    lua_setfield(L, parentIndex, "indexer");
+                } else if (propIndex < node->props.size) {
+                    auto& prop = node->props.data[propIndex];
+                    lua_createtable(L, 0, 5);
+                    lua_pushstring(L, prop.name.value);
+                    lua_setfield(L, -2, "name");
+                    if (prop.accessLocation) {
+                        consumeSyntax(ref, numberedKey("propAccess", propIndex).c_str(),
+                                      *prop.accessLocation);
+                        push_location(L, *prop.accessLocation);
+                        lua_setfield(L, -2, "accessLocation");
+                    }
+                    if (item.kind == Luau::CstTypeTable::Item::Kind::StringProperty) {
+                        consumeSyntax(ref, numberedKey("propOpenBracket", propIndex).c_str(),
+                                      item.indexerOpenPosition, "[");
+                        if (item.stringInfo)
+                            consumeSyntax(ref, numberedKey("propString", propIndex).c_str(),
+                                          item.stringPosition, item.stringInfo->sourceString.size);
+                        consumeSyntax(ref, numberedKey("propCloseBracket", propIndex).c_str(),
+                                      item.indexerClosePosition, "]");
+                    } else {
+                        consumeSyntax(ref, numberedKey("propName", propIndex).c_str(),
+                                      prop.location);
+                    }
+                    consumeSyntax(ref, numberedKey("propColon", propIndex).c_str(),
+                                  item.colonPosition, ":");
+                    prop.type->visit(this);
+                    lua_setfield(L, -2, "type");
+                    push_location(L, prop.location);
+                    lua_setfield(L, -2, "location");
+                    lua_pushstring(L, tableAccessToString(prop.access));
+                    lua_setfield(L, -2, "access");
+                    lua_rawseti(L, propsIndex, int(propIndex + 1));
+                    ++propIndex;
+                }
+                if (item.separator != Luau::CstExprTable::Missing)
+                    consumeSyntax(ref, numberedKey("itemSeparator", i).c_str(),
+                                  item.separatorPosition,
+                                  item.separator == Luau::CstExprTable::Comma ? "," : ";");
+            }
+        } else {
+            for (size_t i = 0; i < node->props.size; ++i) {
+                auto& prop = node->props.data[i];
+                lua_createtable(L, 0, 5);
+                lua_pushstring(L, prop.name.value);
+                lua_setfield(L, -2, "name");
+                if (prop.accessLocation) {
+                    consumeSyntax(ref, numberedKey("propAccess", i).c_str(), *prop.accessLocation);
+                    push_location(L, *prop.accessLocation);
+                    lua_setfield(L, -2, "accessLocation");
+                }
+                consumeSyntax(ref, numberedKey("propName", i).c_str(), prop.location);
+                prop.type->visit(this);
+                lua_setfield(L, -2, "type");
+                push_location(L, prop.location);
+                lua_setfield(L, -2, "location");
+                lua_pushstring(L, tableAccessToString(prop.access));
+                lua_setfield(L, -2, "access");
+                lua_rawseti(L, propsIndex, int(i + 1));
+            }
+            if (node->indexer) {
+                serialiseTableIndexer(node->indexer);
+                lua_setfield(L, parentIndex, "indexer");
+            }
+        }
+        lua_setfield(L, parentIndex, "props");
+        consumeSyntax(ref, "closeBrace",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 1), "}");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeFunction* node) {
+        int ref = serialiseNode(node, "type", "function");
+        auto cst = maybeCst<Luau::CstTypeFunction*>(node);
+
+        attachVisitArray(node->attributes, "attributes");
+        if (node->generics.size > 0 || node->genericPacks.size > 0) {
+            if (cst) consumeSyntax(ref, "openGenerics", cst->openGenericsPosition, "<");
+            attachVisitArray(node->generics, "generics");
+            attachVisitArray(node->genericPacks, "genericPacks");
+            if (cst) consumeSyntax(ref, "closeGenerics", cst->closeGenericsPosition, ">");
+        }
+
+        if (cst) consumeSyntax(ref, "openArgs", cst->openArgsPosition, "(");
+        serialiseTypeFunctionArgs(node->argTypes, node->argNames,
+                                  cst ? &cst->argumentNameColonPositions : nullptr,
+                                  cst ? &cst->argumentsCommaPositions : nullptr, ref);
+        if (cst) consumeSyntax(ref, "closeArgs", cst->closeArgsPosition, ")");
+        if (cst) consumeSyntax(ref, "returnArrow", cst->returnArrowPosition, "->");
+        if (node->returnTypes) {
+            node->returnTypes->visit(this);
+            lua_setfield(L, -2, "returnTypes");
+        }
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeTypeof* node) {
+        int ref = serialiseNode(node, "type", "typeof");
+        auto cst = maybeCst<Luau::CstTypeTypeof*>(node);
+        consumeSyntax(ref, "typeofKeyword", node->location.begin, "typeof");
+        if (cst) consumeSyntax(ref, "openParen", cst->openPosition, "(");
+        node->expr->visit(this);
+        lua_setfield(L, -2, "expr");
+        if (cst) consumeSyntax(ref, "closeParen", cst->closePosition, ")");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeOptional* node) {
+        int ref = serialiseNode(node, "type", "optional");
+        consumeSyntax(ref, "token", node->location.begin, "?");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeUnion* node) {
+        int ref = serialiseNode(node, "type", "union");
+        auto cst = maybeCst<Luau::CstTypeUnion*>(node);
+        if (cst && cst->leadingPosition.hasValue())
+            consumeSyntax(ref, "leadingSeparator", cst->leadingPosition, "|");
+        lua_createtable(L, node->types.size, 0);
+        // A postfix `?` becomes an AstTypeOptional member of the union with no
+        // `|` of its own, so separators do not line up one-to-one with members.
+        // The `|` tokens are recorded in order, each preceding a non-optional
+        // member after the first; consume them on that basis instead.
+        size_t separatorIdx = 0;
+        for (size_t i = 0; i < node->types.size; ++i) {
+            if (i > 0 && !node->types.data[i]->is<Luau::AstTypeOptional>() && cst &&
+                separatorIdx < cst->separatorPositions.size) {
+                consumeSyntax(ref, numberedKey("separator", separatorIdx).c_str(),
+                              cst->separatorPositions.data[separatorIdx], "|");
+                ++separatorIdx;
+            }
+            node->types.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        lua_setfield(L, -2, "types");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeIntersection* node) {
+        int ref = serialiseNode(node, "type", "intersection");
+        auto cst = maybeCst<Luau::CstTypeIntersection*>(node);
+        if (cst && cst->leadingPosition.hasValue())
+            consumeSyntax(ref, "leadingSeparator", cst->leadingPosition, "&");
+        lua_createtable(L, node->types.size, 0);
+        for (size_t i = 0; i < node->types.size; ++i) {
+            node->types.data[i]->visit(this);
+            lua_rawseti(L, -2, int(i + 1));
+            if (cst && i < cst->separatorPositions.size)
+                consumeSyntax(ref, numberedKey("separator", i).c_str(),
+                              cst->separatorPositions.data[i], "&");
+        }
+        lua_setfield(L, -2, "types");
+        return false;
+    }
+    virtual bool visit(Luau::AstExprError* node) {
+        int ref = serialiseExprNode(node, "error");
+        attachVisitArray(node->expressions, "expressions");
+        lua_pushinteger(L, node->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
+        consumeSpan(ref, "span", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatError* node) {
+        int ref = serialiseStatNode(node, "error");
+        attachVisitArray(node->expressions, "expressions");
+        attachVisitArray(node->statements, "statements");
+        lua_pushinteger(L, node->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
+        consumeSpan(ref, "span", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeError* node) {
+        int ref = serialiseNode(node, "type", "error");
+        attachVisitArray(node->types, "types");
+        lua_pushboolean(L, node->isMissing);
+        lua_setfield(L, -2, "isMissing");
+        lua_pushinteger(L, node->messageIndex);
+        lua_setfield(L, -2, "messageIndex");
+        consumeSpan(ref, "span", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeSingletonBool* node) {
+        int ref = serialiseNode(node, "type", "singletonBool");
+        lua_pushboolean(L, node->value);
+        lua_setfield(L, -2, "value");
+        consumeSyntax(ref, "token", node->location.begin, node->value ? "true" : "false");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeSingletonString* node) {
+        int ref = serialiseNode(node, "type", "singletonString");
+        auto cst = maybeCst<Luau::CstTypeSingletonString*>(node);
+        lua_pushlstring(L, node->value.data, node->value.size);
+        lua_setfield(L, -2, "value");
+        consumeSyntax(ref, "token", node->location.begin,
+                      cst ? cst->sourceString.size
+                          : offsetFromPosition(node->location.end) -
+                                offsetFromPosition(node->location.begin));
+        return false;
+    }
+    virtual bool visit(Luau::AstTypeGroup* node) {
+        int ref = serialiseNode(node, "type", "group");
+        consumeSyntax(ref, "openParen", node->location.begin, "(");
+        node->type->visit(this);
+        lua_setfield(L, -2, "innerType");
+        if (auto cst = maybeCst<Luau::CstTypeGroup*>(node))
+            consumeSyntax(ref, "closeParen", cst->closePosition, ")");
+        else
+            consumeSyntax(ref, "closeParen",
+                          positionFromOffset(offsetFromPosition(node->location.end) - 1), ")");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypePack* node) {
+        int ref = serialiseNode(node, "typePack", "unknown");
+        consumeSyntax(ref, "token", node->location);
+        return false;
+    }
+    virtual bool visit(Luau::AstTypePackExplicit* node) {
+        int ref = serialiseNode(node, "typePack", "explicit");
+        auto cst = maybeCst<Luau::CstTypePackExplicit*>(node);
+        if (cst && cst->openParenthesesPosition.hasValue())
+            consumeSyntax(ref, "openParen", cst->openParenthesesPosition, "(");
+        serialiseTypeList(node->typeList, ref, cst ? &cst->commaPositions : nullptr, "comma");
+        lua_setfield(L, -2, "typeList");
+        if (cst && cst->closeParenthesesPosition.hasValue())
+            consumeSyntax(ref, "closeParen", cst->closeParenthesesPosition, ")");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypePackVariadic* node) {
+        int ref = serialiseNode(node, "typePack", "variadic");
+        // A variadic pack from `...T` in a type list bakes the `...` into its
+        // location, so its begin sits before the type. The variant synthesised
+        // for a function's vararg annotation (`function f(...: T)`) has no `...`
+        // of its own - its location is just the type `T`, while the `...` and
+        // `:` are owned by the enclosing function. Only consume the ellipsis
+        // when it is genuinely present in front of the type.
+        if (node->location.begin != node->variadicType->location.begin)
+            consumeSyntax(ref, "ellipsis", node->location.begin, "...");
+        node->variadicType->visit(this);
+        lua_setfield(L, -2, "variadicType");
+        return false;
+    }
+    virtual bool visit(Luau::AstTypePackGeneric* node) {
+        int ref = serialiseNode(node, "typePack", "generic");
+        auto cst = maybeCst<Luau::CstTypePackGeneric*>(node);
+        lua_pushstring(L, node->genericName.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name",
+                      Luau::Location{ node->location.begin, cst && cst->ellipsisPosition.hasValue()
+                                                                ? cst->ellipsisPosition
+                                                                : node->location.end });
+        if (cst) consumeSyntax(ref, "ellipsis", cst->ellipsisPosition, "...");
+        return false;
+    }
+
+    /// Weird misc
+    virtual bool visit(Luau::AstGenericTypePack* node) {
+        int ref = serialiseNode(node, "generic", "typePack");
+        auto cst = maybeCst<Luau::CstGenericTypePack*>(node);
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name",
+                      Luau::Location{ node->location.begin, cst && cst->ellipsisPosition.hasValue()
+                                                                ? cst->ellipsisPosition
+                                                                : node->location.end });
+        if (cst) consumeSyntax(ref, "ellipsis", cst->ellipsisPosition, "...");
+        if (node->defaultValue) {
+            if (cst) consumeSyntax(ref, "defaultEquals", cst->defaultEqualsPosition, "=");
+            node->defaultValue->visit(this);
+            lua_setfield(L, -2, "default");
+        }
+        return false;
+    }
+    virtual bool visit(Luau::AstGenericType* node) {
+        int ref = serialiseNode(node, "generic", "type");
+        auto cst = maybeCst<Luau::CstGenericType*>(node);
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name",
+                      node->defaultValue && cst
+                          ? Luau::Location{ node->location.begin, cst->defaultEqualsPosition }
+                          : node->location);
+        if (node->defaultValue) {
+            if (cst) consumeSyntax(ref, "defaultEquals", cst->defaultEqualsPosition, "=");
+            node->defaultValue->visit(this);
+            lua_setfield(L, -2, "default");
+        }
+        return false;
+    }
+
+    /// Declaration syntax
+    virtual bool visit(Luau::AstStatDeclareGlobal* node) {
+        int ref = serialiseStatNode(node, "declareGlobal");
+        consumeSyntax(ref, "declareKeyword", node->location.begin, "declare");
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name", node->nameLocation);
+        push_location(L, node->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
+        if (auto colon = findCharPosition(offsetFromPosition(node->nameLocation.end),
+                                          offsetFromPosition(node->type->location.begin), ':'))
+            consumeSyntax(ref, "colon", *colon, ":");
+        node->type->visit(this);
+        lua_setfield(L, -2, "declaredType");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatDeclareFunction* node) {
+        int ref = serialiseStatNode(node, "declareFunction");
+        consumeSyntax(ref, "declareKeyword", node->location.begin, "declare");
+        attachVisitArray(node->attributes, "attributes");
+        if (auto functionPos = findCharPosition(offsetFromPosition(node->location.begin),
+                                                offsetFromPosition(node->nameLocation.begin), 'f'))
+            consumeSyntax(ref, "functionKeyword", *functionPos, "function");
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        consumeSyntax(ref, "name", node->nameLocation);
+        push_location(L, node->nameLocation);
+        lua_setfield(L, -2, "nameLocation");
+        attachVisitArray(node->generics, "generics");
+        attachVisitArray(node->genericPacks, "genericPacks");
+        serialiseTypeList(node->params);
+        lua_setfield(L, -2, "params");
+        serialiseArgNames(node->paramNames);
+        lua_setfield(L, -2, "paramNames");
+        lua_pushboolean(L, node->vararg);
+        lua_setfield(L, -2, "vararg");
+        push_location(L, node->varargLocation);
+        lua_setfield(L, -2, "varargLocation");
+        if (node->retTypes) {
+            node->retTypes->visit(this);
+            lua_setfield(L, -2, "returnTypes");
+        }
+        consumeSemicolonIfPresent(ref, node);
+        return false;
+    }
+    virtual bool visit(Luau::AstStatDeclareExternType* node) {
+        int ref = serialiseStatNode(node, "declareExternType");
+        // Luau sets this node's location to begin at the class *name*, not the
+        // `declare` keyword (see Parser::parseDeclaration). Consuming "declare"
+        // at location.begin would stamp it over the name and overshoot the end
+        // of an empty class body, so locate the real keyword from the cursor.
+        if (auto declarePos = findCharPosition(offsetFromPosition(cursor),
+                                               offsetFromPosition(node->location.begin), 'd'))
+            consumeSyntax(ref, "declareKeyword", *declarePos, "declare");
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        if (node->superName) {
+            lua_pushstring(L, node->superName->value);
+            lua_setfield(L, -2, "superName");
+        }
+        lua_createtable(L, node->props.size, 0);
+        for (size_t i = 0; i < node->props.size; ++i) {
+            const auto& prop = node->props.data[i];
+            lua_createtable(L, 0, 7);
+            lua_pushstring(L, prop.name.value);
+            lua_setfield(L, -2, "name");
+            push_location(L, prop.nameLocation);
+            lua_setfield(L, -2, "nameLocation");
+            if (prop.ty) {
+                prop.ty->visit(this);
+                lua_setfield(L, -2, "type");
+            }
+            lua_pushboolean(L, prop.isMethod);
+            lua_setfield(L, -2, "isMethod");
+            lua_pushstring(L, tableAccessToString(prop.access));
+            lua_setfield(L, -2, "access");
+            push_location(L, prop.location);
+            lua_setfield(L, -2, "location");
+            lua_rawseti(L, -2, int(i + 1));
+        }
+        lua_setfield(L, -2, "props");
+        if (node->indexer) {
+            serialiseTableIndexer(node->indexer);
             lua_setfield(L, -2, "indexer");
         }
-    } else if (stat->as<AstStatError>()) {
-        auto* s = stat->as<AstStatError>();
-        begin_node(L, "StatError", stat->location);
-        set_stat_common(L, s);
-        push_array<AstExpr>(L, s->expressions, push_expr);
-        lua_setfield(L, -2, "expressions");
-        push_array<AstStat>(L, s->statements, push_stat);
-        lua_setfield(L, -2, "statements");
-        lua_pushinteger(L, (lua_Integer)s->messageIndex);
-        lua_setfield(L, -2, "messageIndex");
-    } else {
-        begin_node(L, "StatUnknown", stat->location);
+        consumeSyntax(ref, "endKeyword",
+                      positionFromOffset(offsetFromPosition(node->location.end) - 3), "end");
+        consumeSemicolonIfPresent(ref, node);
+        return false;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Generic node dispatcher
-// ---------------------------------------------------------------------------
-static void push_node(lua_State* L, AstNode* node) {
-    if (!node) {
-        lua_pushnil(L);
-        return;
-    }
-    if (node->asExpr())
-        push_expr(L, node->asExpr());
-    else if (node->asStat())
-        push_stat(L, node->asStat());
-    else if (node->asType())
-        push_type(L, node->asType());
-    else {
-        begin_node(L, "Unknown", node->location);
-    }
-}
-
-static bool is_ascii_whitespace(char ch) {
-    return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r' || ch == '\v' || ch == '\f';
-}
-
-static std::vector<size_t> compute_line_offsets(std::string_view source) {
-    std::vector<size_t> lineOffsets;
-    lineOffsets.push_back(0);
-
-    for (size_t i = 0; i < source.size(); ++i) {
-        if (source[i] == '\n') lineOffsets.push_back(i + 1);
-    }
-
-    return lineOffsets;
-}
-
-static size_t absolute_offset_from_position(const std::vector<size_t>& lineOffsets,
-                                            const Position& pos) {
-    LUAU_ASSERT(pos.line < lineOffsets.size());
-    return lineOffsets[pos.line] + pos.column;
-}
-
-static size_t absolute_offset_from_1based(const std::vector<size_t>& lineOffsets, int line,
-                                          int column) {
-    LUAU_ASSERT(line >= 1);
-    LUAU_ASSERT((size_t)(line - 1) < lineOffsets.size());
-    return lineOffsets[(size_t)(line - 1)] + (size_t)(column - 1);
-}
-
-static std::vector<CommentSpan> compute_comment_spans(const ParseResult& result,
-                                                      std::string_view source) {
-    std::vector<CommentSpan> spans;
-    const std::vector<size_t> lineOffsets = compute_line_offsets(source);
-    spans.reserve(result.commentLocations.size());
-
-    for (const Comment& comment : result.commentLocations) {
-        spans.push_back(CommentSpan{
-            absolute_offset_from_position(lineOffsets, comment.location.begin),
-            absolute_offset_from_position(lineOffsets, comment.location.end),
-            comment.type,
-        });
-    }
-
-    return spans;
-}
-
-static std::unordered_map<size_t, size_t> build_comment_end_map(
-    const std::vector<CommentSpan>& spans) {
-    std::unordered_map<size_t, size_t> map;
-    map.reserve(spans.size());
-
-    for (size_t i = 0; i < spans.size(); ++i) map[spans[i].endOffset] = i;
-
-    return map;
-}
-
-static std::unordered_map<size_t, size_t> build_comment_start_map(
-    const std::vector<CommentSpan>& spans) {
-    std::unordered_map<size_t, size_t> map;
-    map.reserve(spans.size());
-
-    for (size_t i = 0; i < spans.size(); ++i) map[spans[i].startOffset] = i;
-
-    return map;
-}
-
-static size_t scan_leading_boundary(std::string_view source, size_t startOffset,
-                                    const std::unordered_map<size_t, size_t>& commentsByEnd,
-                                    const std::vector<CommentSpan>& commentSpans) {
-    size_t cursor = startOffset;
-
-    while (cursor > 0) {
-        size_t previous = cursor;
-
-        while (cursor > 0 && is_ascii_whitespace(source[cursor - 1])) --cursor;
-
-        auto commentIt = commentsByEnd.find(cursor);
-        if (commentIt != commentsByEnd.end()) {
-            cursor = commentSpans[commentIt->second].startOffset;
-            continue;
-        }
-
-        if (cursor == previous) break;
-    }
-
-    return cursor;
-}
-
-static size_t scan_trailing_boundary(std::string_view source, size_t endOffset,
-                                     const std::unordered_map<size_t, size_t>& commentsByStart,
-                                     const std::vector<CommentSpan>& commentSpans) {
-    size_t cursor = endOffset;
-
-    while (cursor < source.size()) {
-        size_t previous = cursor;
-
-        while (cursor < source.size() && is_ascii_whitespace(source[cursor])) ++cursor;
-
-        auto commentIt = commentsByStart.find(cursor);
-        if (commentIt != commentsByStart.end()) {
-            cursor = commentSpans[commentIt->second].endOffset;
-            continue;
-        }
-
-        if (cursor == previous) break;
-    }
-
-    return cursor;
-}
-
-static bool lua_is_dense_array(lua_State* L, int index) {
-    index = lua_absindex(L, index);
-    size_t length = lua_objlen(L, index);
-    if (length == 0) return false;
-
-    lua_pushnil(L);
-    while (lua_next(L, index) != 0) {
-        if (lua_type(L, -2) != LUA_TNUMBER) {
-            lua_pop(L, 2);
-            return false;
-        }
-
-        lua_Number key = lua_tonumber(L, -2);
-        if (key < 1 || std::floor(key) != key || key > (lua_Number)length) {
-            lua_pop(L, 2);
-            return false;
-        }
-
-        lua_pop(L, 1);
-    }
-
-    return true;
-}
-
-static bool lua_read_serialized_location(lua_State* L, int index, int& beginLine, int& beginColumn,
-                                         int& endLine, int& endColumn) {
-    index = lua_absindex(L, index);
-
-    if (!lua_istable(L, index) && !lua_isuserdata(L, index)) return false;
-
-    lua_getfield(L, index, "beginline");
-    lua_getfield(L, index, "begincolumn");
-    lua_getfield(L, index, "endline");
-    lua_getfield(L, index, "endcolumn");
-
-    const bool ok =
-        lua_isnumber(L, -4) && lua_isnumber(L, -3) && lua_isnumber(L, -2) && lua_isnumber(L, -1);
-    if (ok) {
-        beginLine = (int)lua_tointeger(L, -4);
-        beginColumn = (int)lua_tointeger(L, -3);
-        endLine = (int)lua_tointeger(L, -2);
-        endColumn = (int)lua_tointeger(L, -1);
-    }
-
-    lua_pop(L, 4);
-    return ok;
-}
-
-static void attach_surrounding_text(lua_State* L, int nodeIndex, int surroundingIndex,
-                                    std::string_view source, const std::vector<size_t>& lineOffsets,
-                                    const std::vector<CommentSpan>& commentSpans,
-                                    const std::unordered_map<size_t, size_t>& commentsByStart,
-                                    const std::unordered_map<size_t, size_t>& commentsByEnd);
-
-static void attach_surrounding_text_in_value(
-    lua_State* L, int valueIndex, int surroundingIndex, std::string_view source,
-    const std::vector<size_t>& lineOffsets, const std::vector<CommentSpan>& commentSpans,
-    const std::unordered_map<size_t, size_t>& commentsByStart,
-    const std::unordered_map<size_t, size_t>& commentsByEnd) {
-    valueIndex = lua_absindex(L, valueIndex);
-    if (!lua_istable(L, valueIndex)) return;
-
-    if (lua_is_dense_array(L, valueIndex)) {
-        const size_t length = lua_objlen(L, valueIndex);
-        for (size_t i = 1; i <= length; ++i) {
-            lua_rawgeti(L, valueIndex, (int)i);
-            attach_surrounding_text_in_value(L, -1, surroundingIndex, source, lineOffsets,
-                                             commentSpans, commentsByStart, commentsByEnd);
-            lua_pop(L, 1);
-        }
-        return;
-    }
-
-    attach_surrounding_text(L, valueIndex, surroundingIndex, source, lineOffsets, commentSpans,
-                            commentsByStart, commentsByEnd);
-}
-
-static void attach_surrounding_text(lua_State* L, int nodeIndex, int surroundingIndex,
-                                    std::string_view source, const std::vector<size_t>& lineOffsets,
-                                    const std::vector<CommentSpan>& commentSpans,
-                                    const std::unordered_map<size_t, size_t>& commentsByStart,
-                                    const std::unordered_map<size_t, size_t>& commentsByEnd) {
-    nodeIndex = lua_absindex(L, nodeIndex);
-    surroundingIndex = lua_absindex(L, surroundingIndex);
-
-    lua_getfield(L, nodeIndex, "location");
-    int beginLine = 0;
-    int beginColumn = 0;
-    int endLine = 0;
-    int endColumn = 0;
-    const bool isNode =
-        lua_read_serialized_location(L, -1, beginLine, beginColumn, endLine, endColumn);
-    lua_pop(L, 1);
-
-    if (isNode) {
-        const size_t startOffset = absolute_offset_from_1based(lineOffsets, beginLine, beginColumn);
-        const size_t endOffset = absolute_offset_from_1based(lineOffsets, endLine, endColumn);
-        const size_t leadingStart =
-            scan_leading_boundary(source, startOffset, commentsByEnd, commentSpans);
-        const size_t trailingEnd =
-            scan_trailing_boundary(source, endOffset, commentsByStart, commentSpans);
-
-        const std::string leading(source.substr(leadingStart, startOffset - leadingStart));
-        const std::string trailing(source.substr(endOffset, trailingEnd - endOffset));
-
-        if (!leading.empty() || !trailing.empty()) {
-            lua_pushvalue(L, nodeIndex);
-            lua_createtable(L, 0, 2);
-            if (!leading.empty()) {
-                lua_pushlstring(L, leading.data(), leading.size());
-                lua_setfield(L, -2, "leading");
+    virtual bool visit(Luau::AstAttr* node) {
+        int ref = serialiseNode(node, "attr", "attribute");
+        consumeSyntax(ref, "name", node->location.begin, 1 + std::strlen(node->name.value));
+        lua_pushstring(L, attrTypeToString(node->type));
+        lua_setfield(L, -2, "attrType");
+        lua_pushstring(L, node->name.value);
+        lua_setfield(L, -2, "name");
+        attachVisitArray(node->args, "args");
+        if (node->type == Luau::AstAttr::Deprecated) {
+            auto info = node->deprecatedInfo();
+            lua_createtable(L, 0, 3);
+            lua_pushboolean(L, info.deprecated);
+            lua_setfield(L, -2, "deprecated");
+            if (info.use) {
+                lua_pushstring(L, info.use->c_str());
+                lua_setfield(L, -2, "use");
             }
-            if (!trailing.empty()) {
-                lua_pushlstring(L, trailing.data(), trailing.size());
-                lua_setfield(L, -2, "trailing");
+            if (info.reason) {
+                lua_pushstring(L, info.reason->c_str());
+                lua_setfield(L, -2, "reason");
             }
-            lua_rawset(L, surroundingIndex);
+            lua_setfield(L, -2, "deprecatedInfo");
         }
+        return false;
     }
 
-    lua_pushnil(L);
-    while (lua_next(L, nodeIndex) != 0) {
-        if (!(lua_type(L, -2) == LUA_TSTRING &&
-              std::strcmp(lua_tostring(L, -2), "location") == 0)) {
-            attach_surrounding_text_in_value(L, -1, surroundingIndex, source, lineOffsets,
-                                             commentSpans, commentsByStart, commentsByEnd);
-        }
-        lua_pop(L, 1);
+    /// Fallback
+    virtual bool visit(Luau::AstNode* node) {
+        luaL_errorL(L, "Unimplemented node in AST serialiser: %s", getNodeTypeName(node));
     }
-}
-
-static const char* comment_type_to_string(Lexeme::Type type) {
-    switch (type) {
-        case Lexeme::Comment:
-            return "Comment";
-        case Lexeme::BlockComment:
-            return "BlockComment";
-        case Lexeme::BrokenComment:
-            return "BrokenComment";
-        default:
-            return "Unknown";
-    }
-}
+};
 
 // ---------------------------------------------------------------------------
-// Protected AST serialisation -- runs inside lua_pcall so longjmp from a
-// stack-overflow error won't skip RAII cleanup of Allocator / ParseResult.
+// luau.parse(source [, options]) -> ParseResult
 // ---------------------------------------------------------------------------
-static int l_serialize_ast(lua_State* L) {
-    auto* ctx = static_cast<ParseSerializeCtx*>(lua_touserdata(L, 1));
-    const ParseResult& result = *ctx->result;
-    ensure_stack(L, 40);
-
-    // Build result table: { root, errors, comments?, surroundingText?, lines }
-    lua_createtable(L, 0, 5);
-
-    // root
-    push_stat(L, result.root);
-    lua_setfield(L, -2, "root");
-
-    if (ctx->collectSurroundingText) {
-        const std::vector<size_t> lineOffsets = compute_line_offsets(ctx->source);
-        const std::vector<CommentSpan> commentSpans = compute_comment_spans(result, ctx->source);
-        const std::unordered_map<size_t, size_t> commentsByStart =
-            build_comment_start_map(commentSpans);
-        const std::unordered_map<size_t, size_t> commentsByEnd =
-            build_comment_end_map(commentSpans);
-
-        lua_createtable(L, 0, 0);
-        lua_getfield(L, -2, "root");
-        attach_surrounding_text(L, -1, -2, ctx->source, lineOffsets, commentSpans, commentsByStart,
-                                commentsByEnd);
+static bool read_collect_comments_option(lua_State* L, int index) {
+    bool collectComments = false;
+    if (lua_istable(L, index)) {
+        lua_getfield(L, index, "collectComments");
+        if (lua_isboolean(L, -1)) collectComments = lua_toboolean(L, -1) != 0;
         lua_pop(L, 1);
-        lua_setfield(L, -2, "surroundingText");
+
+        lua_getfield(L, index, "captureComments");
+        if (lua_isboolean(L, -1)) collectComments = collectComments || lua_toboolean(L, -1) != 0;
+        lua_pop(L, 1);
     }
 
-    // lines
-    lua_pushinteger(L, (int)result.lines);
-    lua_setfield(L, -2, "lines");
+    return collectComments;
+}
 
-    // errors
-    lua_createtable(L, (int)result.errors.size(), 0);
+template <typename Result>
+static void attach_parse_result_fields(lua_State* L, int resultIndex, const Result& result,
+                                       const char* src, size_t srcLen, bool collectComments) {
+    lua_createtable(L, int(result.errors.size()), 0);
     for (size_t i = 0; i < result.errors.size(); i++) {
         lua_createtable(L, 0, 2);
         lua_pushstring(L, result.errors[i].getMessage().c_str());
         lua_setfield(L, -2, "message");
         push_location(L, result.errors[i].getLocation());
         lua_setfield(L, -2, "location");
-        lua_rawseti(L, -2, (int)(i + 1));
+        lua_rawseti(L, -2, int(i + 1));
     }
-    lua_setfield(L, -2, "errors");
+    lua_setfield(L, resultIndex, "errors");
 
-    // comments (only if captureComments was set)
-    if (ctx->captureComments) {
-        lua_createtable(L, (int)result.commentLocations.size(), 0);
+    if (collectComments) {
+        lua_createtable(L, int(result.commentLocations.size()), 0);
         for (size_t i = 0; i < result.commentLocations.size(); i++) {
             lua_createtable(L, 0, 2);
             lua_pushstring(L, comment_type_to_string(result.commentLocations[i].type));
             lua_setfield(L, -2, "type");
             push_location(L, result.commentLocations[i].location);
             lua_setfield(L, -2, "location");
-            lua_rawseti(L, -2, (int)(i + 1));
+            lua_rawseti(L, -2, int(i + 1));
         }
-        lua_setfield(L, -2, "comments");
+        lua_setfield(L, resultIndex, "comments");
     }
-
-    return 1;
 }
 
-// ---------------------------------------------------------------------------
-// luau.parse(source [, options]) -> ParseResult
-// ---------------------------------------------------------------------------
 static int l_parse(lua_State* L) {
     size_t srcLen = 0;
     const char* src = luaL_checklstring(L, 1, &srcLen);
@@ -1502,41 +2163,71 @@ static int l_parse(lua_State* L) {
     eryx_enable_all_luau_flags();
     eryx_apply_user_flags_opt(L, 2);
 
-    // Optional options table
-    bool captureComments = false;
-    bool collectSurroundingText = false;
-    if (lua_istable(L, 2)) {
-        lua_getfield(L, 2, "captureComments");
-        if (lua_isboolean(L, -1)) captureComments = lua_toboolean(L, -1) != 0;
-        lua_pop(L, 1);
+    bool collectComments = read_collect_comments_option(L, 2);
 
-        lua_getfield(L, 2, "collectSurroundingText");
-        if (lua_isboolean(L, -1)) collectSurroundingText = lua_toboolean(L, -1) != 0;
-        lua_pop(L, 1);
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseOptions opts;
+    opts.allowDeclarationSyntax = true;
+    opts.captureComments = collectComments;
+    opts.storeCstData = true;
+
+    Luau::ParseResult result = Luau::Parser::parse(src, srcLen, names, allocator, opts);
+
+    AstSerialiser serialiser{ L, src, srcLen, result.cstNodeMap };
+
+    lua_createtable(L, 0, 6);
+    int resultIndex = lua_absindex(L, -1);
+
+    if (result.root) {
+        result.root->visit(&serialiser);
+        lua_setfield(L, resultIndex, "root");
+    } else {
+        lua_pushnil(L);
+        lua_setfield(L, resultIndex, "root");
     }
 
-    int status;
-    {
-        // RAII scope -- Allocator, AstNameTable, and ParseResult are destroyed
-        // at the end of this block, even if serialisation raises an error.
-        Allocator allocator;
-        AstNameTable names(allocator);
-        ParseOptions opts;
-        opts.allowDeclarationSyntax = true;
-        opts.captureComments = captureComments || collectSurroundingText;
+    attach_parse_result_fields(L, resultIndex, result, src, srcLen, collectComments);
 
-        ParseResult result = Parser::parse(src, srcLen, names, allocator, opts);
+    return 1;
+}
 
-        // Serialise inside a protected call so a longjmp doesn't skip destructors.
-        ParseSerializeCtx ctx{ &result, std::string_view(src, srcLen), captureComments,
-                               collectSurroundingText };
-        lua_pushcfunction(L, l_serialize_ast, "serialize_ast");
-        lua_pushlightuserdata(L, &ctx);
-        status = eryx_pcall(L, 1, 1, 0);
+// ---------------------------------------------------------------------------
+// luau.parseExpr(source [, options]) -> ParseExprResult
+// ---------------------------------------------------------------------------
+static int l_parseExpr(lua_State* L) {
+    size_t srcLen = 0;
+    const char* src = luaL_checklstring(L, 1, &srcLen);
+
+    eryx_enable_all_luau_flags();
+    eryx_apply_user_flags_opt(L, 2);
+
+    bool collectComments = read_collect_comments_option(L, 2);
+
+    Luau::Allocator allocator;
+    Luau::AstNameTable names(allocator);
+    Luau::ParseOptions opts;
+    opts.allowDeclarationSyntax = true;
+    opts.captureComments = collectComments;
+    opts.storeCstData = true;
+
+    Luau::ParseNodeResult<Luau::AstExpr> result =
+        Luau::Parser::parseExpr(src, srcLen, names, allocator, opts);
+
+    AstSerialiser serialiser{ L, src, srcLen, result.cstNodeMap };
+
+    lua_createtable(L, 0, 6);
+    int resultIndex = lua_absindex(L, -1);
+
+    if (result.root) {
+        result.root->visit(&serialiser);
+        lua_setfield(L, resultIndex, "root");
+    } else {
+        lua_pushnil(L);
+        lua_setfield(L, resultIndex, "root");
     }
-    // Allocator, names, result all cleanly destroyed here.
 
-    if (status != 0) lua_error(L);  // re-raise; safe to longjmp now
+    attach_parse_result_fields(L, resultIndex, result, src, srcLen, collectComments);
 
     return 1;
 }
@@ -1549,7 +2240,7 @@ static int l_prettyPrint(lua_State* L) {
     const char* src = luaL_checklstring(L, 1, &srcLen);
 
     std::string_view sv(src, srcLen);
-    PrettyPrintResult ppr = prettyPrint(sv);
+    Luau::PrettyPrintResult ppr = Luau::prettyPrint(sv);
 
     if (!ppr.parseError.empty()) {
         luaL_error(L, "parse error: %s", ppr.parseError.c_str());
@@ -1913,19 +2604,21 @@ static int l_parseLuaurc(lua_State* L) {
     lua_setfield(L, -2, "mode");
 
     lua_createtable(L, 0, 0);
-    for (int code = LintWarning::Code_Unknown; code < LintWarning::Code__Count; ++code) {
-        if (cfg.enabledLint.isEnabled(LintWarning::Code(code))) {
+    for (int code = Luau::LintWarning::Code_Unknown; code < Luau::LintWarning::Code__Count;
+         ++code) {
+        if (cfg.enabledLint.isEnabled(Luau::LintWarning::Code(code))) {
             lua_pushboolean(L, true);
-            lua_setfield(L, -2, LintWarning::getName(LintWarning::Code(code)));
+            lua_setfield(L, -2, Luau::LintWarning::getName(Luau::LintWarning::Code(code)));
         }
     }
     lua_setfield(L, -2, "enabledLint");
 
     lua_createtable(L, 0, 0);
-    for (int code = LintWarning::Code_Unknown; code < LintWarning::Code__Count; ++code) {
-        if (cfg.fatalLint.isEnabled(LintWarning::Code(code))) {
+    for (int code = Luau::LintWarning::Code_Unknown; code < Luau::LintWarning::Code__Count;
+         ++code) {
+        if (cfg.fatalLint.isEnabled(Luau::LintWarning::Code(code))) {
             lua_pushboolean(L, true);
-            lua_setfield(L, -2, LintWarning::getName(LintWarning::Code(code)));
+            lua_setfield(L, -2, Luau::LintWarning::getName(Luau::LintWarning::Code(code)));
         }
     }
     lua_setfield(L, -2, "fatalLint");
@@ -1980,6 +2673,7 @@ static void register_module(lua_State* L, const luaL_Reg* funcs) {
 
 static const luaL_Reg parse_funcs[] = {
     { "parse", l_parse },
+    { "parseExpr", l_parseExpr },
     { "prettyPrint", l_prettyPrint },
     { nullptr, nullptr },
 };

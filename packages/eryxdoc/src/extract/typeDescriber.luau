@@ -61,12 +61,14 @@ local function normalizeTypeList(typeList: any): ({ any }, any)
 		return {}, nil
 	end
 
-	-- New shape: { types = {...}, tail = ... }
+	if type(typeList.typeList) == "table" then
+		typeList = typeList.typeList
+	end
+
 	if type(typeList.types) == "table" then
 		return typeList.types, typeList.tail
 	end
 
-	-- Old shape: direct array
 	return typeList, nil
 end
 
@@ -84,8 +86,8 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 		return { tp("any", true, "type") }
 	end
 
-	if node.type == "TypeReference" then
-		local ref = node :: luau.TypeReference
+	if node.type == "reference" then
+		local ref = node :: luau.AstTypeReference
 		local parts: { SignaturePart } = {}
 		if ref.prefix then
 			table.insert(parts, tp(ref.prefix, false, "plain"))
@@ -104,8 +106,8 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 			table.insert(parts, tp(">", false, "punct"))
 		end
 		return parts
-	elseif node.type == "TypeTable" then
-		local tbl = node :: luau.TypeTable
+	elseif node.type == "table" then
+		local tbl = node :: luau.AstTypeTable
 		if tbl.indexer then
 			local idx = tbl.indexer
 			local resultType = idx.resultType or idx.indexerType or idx.result
@@ -139,8 +141,8 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 		end
 		table.insert(parts, tp(" }", false, "punct"))
 		return parts
-	elseif node.type == "TypeFunction" then
-		local fn = node :: luau.TypeFunction
+	elseif node.type == "function" then
+		local fn = node :: luau.AstTypeFunction
 		local parts: { SignaturePart } = { tp("(", false, "punct"), tp("(", false, "punct") }
 		if fn.argTypes then
 			local argTypes = fn.argTypes
@@ -175,9 +177,9 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 		end
 		table.insert(parts, tp(")", false, "punct"))
 		return parts
-	elseif node.type == "TypeUnion" then
-		local u = node :: luau.TypeUnion
-		if #u.types == 2 and u.types[2] and u.types[2].type == "TypeOptional" then
+	elseif node.type == "union" then
+		local u = node :: luau.AstTypeUnion
+		if #u.types == 2 and u.types[2] and u.types[2].type == "optional" then
 			local parts = describer.describeTypeParts(u.types[1])
 			table.insert(parts, tp("?", false, "punct"))
 			return parts
@@ -185,7 +187,7 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 		local parts: { SignaturePart } = {}
 		local first = true
 		for _, t in u.types do
-			if t.type == "TypeOptional" then
+			if t.type == "optional" then
 				continue
 			end
 			if not first then
@@ -194,12 +196,12 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 			tpExtend(parts, describer.describeTypeParts(t))
 			first = false
 		end
-		if u.types[#u.types] and u.types[#u.types].type == "TypeOptional" then
+		if u.types[#u.types] and u.types[#u.types].type == "optional" then
 			table.insert(parts, tp("?", false, "punct"))
 		end
 		return parts
-	elseif node.type == "TypeIntersection" then
-		local inter = node :: luau.TypeIntersection
+	elseif node.type == "intersection" then
+		local inter = node :: luau.AstTypeIntersection
 		local parts: { SignaturePart } = {}
 		for i, t in inter.types do
 			if i > 1 then
@@ -208,36 +210,39 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 			tpExtend(parts, describer.describeTypeParts(t))
 		end
 		return parts
-	elseif node.type == "TypeOptional" then
+	elseif node.type == "optional" then
 		return { tp("?", false, "punct") }
-	elseif node.type == "TypeSingletonBool" then
-		return { tp(tostring((node :: luau.TypeSingletonBool).value), false, "keyword") }
-	elseif node.type == "TypeSingletonString" then
-		return { tp('"' .. tostring((node :: luau.TypeSingletonString).value) .. '"', false, "plain") }
-	elseif node.type == "TypeGroup" then
+	elseif node.type == "singletonBool" then
+		return { tp(tostring((node :: luau.AstTypeSingletonBool).value), false, "keyword") }
+	elseif node.type == "singletonString" then
+		return { tp('"' .. tostring((node :: luau.AstTypeSingletonString).value) .. '"', false, "plain") }
+	elseif node.type == "group" then
 		local parts = { tp("(", false, "punct") }
-		tpExtend(parts, describer.describeTypeParts((node :: luau.TypeGroup).inner))
+		tpExtend(parts, describer.describeTypeParts((node :: luau.AstTypeGroup).innerType))
 		table.insert(parts, tp(")", false, "punct"))
 		return parts
-	elseif node.type == "TypePackExplicit" then
-		local pack = node :: luau.TypePackExplicit
-		if pack.types then
+	elseif node.type == "explicit" then
+		local pack = node :: luau.AstTypePackExplicit
+		local packTypes, packTail = normalizeTypeList(pack.typeList)
+		if #packTypes > 0 or packTail then
 			local inner: { SignaturePart } = {}
-			for i, t in pack.types do
+			for i, t in packTypes do
 				if i > 1 then
 					table.insert(inner, tp(", ", false, "punct"))
 				end
 				tpExtend(inner, describer.describeTypeParts(t))
 			end
-			if pack.tail then
-				table.insert(inner, tp(", ", false, "punct"))
-				tpExtend(inner, describer.describeTypeParts(pack.tail))
+			if packTail then
+				if #packTypes > 0 then
+					table.insert(inner, tp(", ", false, "punct"))
+				end
+				tpExtend(inner, describer.describeTypeParts(packTail))
 				local parts = { tp("(", false, "punct") }
 				tpExtend(parts, inner)
 				table.insert(parts, tp(")", false, "punct"))
 				return parts
 			end
-			if #pack.types == 1 then
+			if #packTypes == 1 then
 				return inner
 			end
 			local parts = { tp("(", false, "punct") }
@@ -246,12 +251,12 @@ local function describeCompactTypeParts(node: luau.AstType | luau.AstTypePack): 
 			return parts
 		end
 		return { tp("()", false, "punct") }
-	elseif node.type == "TypePackVariadic" then
+	elseif node.type == "variadic" then
 		local parts = { tp("...", false, "punct") }
-		tpExtend(parts, describer.describeTypeParts((node :: luau.TypePackVariadic).variadicType))
+		tpExtend(parts, describer.describeTypeParts((node :: luau.AstTypePackVariadic).variadicType))
 		return parts
-	elseif node.type == "TypePackGeneric" then
-		return { tp((node :: luau.TypePackGeneric).name .. "...", false, "type") }
+	elseif node.type == "generic" then
+		return { tp((node :: luau.AstTypePackGeneric).name .. "...", false, "type") }
 	end
 
 	return { tp("<" .. tostring(node.type) .. ">", false, "plain") }
@@ -276,8 +281,8 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 		return compact
 	end
 
-	if node.type == "TypeReference" then
-		local ref = node :: luau.TypeReference
+	if node.type == "reference" then
+		local ref = node :: luau.AstTypeReference
 		if not ref.parameters or #ref.parameters == 0 then
 			return compact
 		end
@@ -320,8 +325,8 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 		end
 		table.insert(parts, tp(indent(level) .. ">", false, "punct"))
 		return parts
-	elseif node.type == "TypeTable" then
-		local tbl = node :: luau.TypeTable
+	elseif node.type == "table" then
+		local tbl = node :: luau.AstTypeTable
 		if tbl.indexer then
 			local idx = tbl.indexer
 			local resultType = idx.resultType or idx.indexerType or idx.result
@@ -362,8 +367,8 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 		end
 		table.insert(parts, tp(indent(level) .. "}", false, "punct"))
 		return parts
-	elseif node.type == "TypeFunction" then
-		local fn = node :: luau.TypeFunction
+	elseif node.type == "function" then
+		local fn = node :: luau.AstTypeFunction
 		local argTypes, argTail = normalizeTypeList(fn.argTypes)
 		local inlineReturn = if fn.returnTypes then describePrettyTypeParts(fn.returnTypes, level + 1) else nil
 
@@ -402,9 +407,9 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 			end
 		end
 		return parts
-	elseif node.type == "TypeUnion" then
-		local union = node :: luau.TypeUnion
-		if #union.types == 2 and union.types[2] and union.types[2].type == "TypeOptional" then
+	elseif node.type == "union" then
+		local union = node :: luau.AstTypeUnion
+		if #union.types == 2 and union.types[2] and union.types[2].type == "optional" then
 			local parts = describePrettyTypeParts(union.types[1], level)
 			table.insert(parts, tp("?", false, "punct"))
 			return parts
@@ -412,7 +417,7 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 
 		local visible: { luau.AstType } = {}
 		for _, part in union.types do
-			if part.type ~= "TypeOptional" then
+			if part.type ~= "optional" then
 				table.insert(visible, part)
 			end
 		end
@@ -424,7 +429,7 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 		if #visible == 2 and not hasLineBreak(parts) then
 			table.insert(parts, tp(" | ", false, "punct"))
 			tpExtend(parts, describePrettyTypeParts(visible[2], level))
-			if union.types[#union.types] and union.types[#union.types].type == "TypeOptional" then
+			if union.types[#union.types] and union.types[#union.types].type == "optional" then
 				table.insert(parts, tp("?", false, "punct"))
 			end
 			return parts
@@ -434,12 +439,12 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 			table.insert(parts, tp("\n" .. indent(level) .. "| ", false, "punct"))
 			tpExtend(parts, describePrettyTypeParts(visible[i], level + 1))
 		end
-		if union.types[#union.types] and union.types[#union.types].type == "TypeOptional" then
+		if union.types[#union.types] and union.types[#union.types].type == "optional" then
 			table.insert(parts, tp("?", false, "punct"))
 		end
 		return parts
-	elseif node.type == "TypeIntersection" then
-		local inter = node :: luau.TypeIntersection
+	elseif node.type == "intersection" then
+		local inter = node :: luau.AstTypeIntersection
 		local parts = describePrettyTypeParts(inter.types[1], level)
 		if #inter.types == 2 and not hasLineBreak(parts) then
 			table.insert(parts, tp(" & ", false, "punct"))
@@ -452,8 +457,8 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 			tpExtend(parts, describePrettyTypeParts(inter.types[i], level + 1))
 		end
 		return parts
-	elseif node.type == "TypeGroup" then
-		local inner = describePrettyTypeParts((node :: luau.TypeGroup).inner, level + 1)
+	elseif node.type == "group" then
+		local inner = describePrettyTypeParts((node :: luau.AstTypeGroup).innerType, level + 1)
 		if fitsInline(inner, level + 1) then
 			local parts = { tp("(", false, "punct") }
 			tpExtend(parts, inner)
@@ -465,15 +470,16 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 		appendIndentedLine(parts, level + 1, inner, "\n")
 		table.insert(parts, tp(indent(level) .. ")", false, "punct"))
 		return parts
-	elseif node.type == "TypePackExplicit" then
-		local pack = node :: luau.TypePackExplicit
-		if not pack.types or #pack.types == 0 then
+	elseif node.type == "explicit" then
+		local pack = node :: luau.AstTypePackExplicit
+		local packTypes, packTail = normalizeTypeList(pack.typeList)
+		if #packTypes == 0 and not packTail then
 			return compact
 		end
 
 		local parts = { tp("(\n", false, "punct") }
-		for i, packType in pack.types do
-			local hasMorePackItems = i < #pack.types or pack.tail ~= nil
+		for i, packType in packTypes do
+			local hasMorePackItems = i < #packTypes or packTail ~= nil
 			appendIndentedLine(
 				parts,
 				level + 1,
@@ -481,8 +487,8 @@ local function describePrettyTypeParts(node: luau.AstType | luau.AstTypePack, le
 				if hasMorePackItems then ",\n" else "\n"
 			)
 		end
-		if pack.tail then
-			appendIndentedLine(parts, level + 1, describePrettyTypeParts(pack.tail, level + 1), "\n")
+		if packTail then
+			appendIndentedLine(parts, level + 1, describePrettyTypeParts(packTail, level + 1), "\n")
 		end
 		table.insert(parts, tp(indent(level) .. ")", false, "punct"))
 		return parts

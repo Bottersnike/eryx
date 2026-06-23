@@ -119,6 +119,7 @@ add_luau_script_module(luau/
     src/modules/luau/init.luau
     src/modules/luau/ast.luau
     src/modules/luau/parse.luau
+    src/modules/luau/printer.luau
     src/modules/luau/vm.luau
     src/modules/luau/analysis.luau
     src/modules/luau/query.luau

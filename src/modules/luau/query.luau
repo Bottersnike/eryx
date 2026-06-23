@@ -3,11 +3,12 @@
 
 	`query.query` walks a parse result or any AST node recursively and
 	collects matching nodes into a `Query<T>` value. The returned object
-	supports chainable operations — `filter`, `map`, `flatMap`, `findAll`,
-	`forEach`, and `toArray` — for transforming and extracting data.
+	supports chainable operations: `filter`, `map`, `flatMap`, `findAll`,
+	`forEach`, and `toArray` for transforming and extracting data.
 
-	`query.children` returns the direct child nodes of a single node
-	without recursing further.
+	Traversal follows serialized AST payload tables, skips source locations
+	and concrete syntax tokens, and unwraps dense arrays so their node-like
+	items are visited directly.
 
 	```luau
 	local query = require("@eryx/luau/query")
@@ -17,7 +18,7 @@
 
 	-- Collect all function call expressions
 	local calls = query.query(result, function(node)
-	    if node.type == "ExprCall" then
+	    if node.category == "expr" and node.type == "call" then
 	        return node
 	    end
 	end)
@@ -30,7 +31,7 @@
 local ast = require("@eryx/luau/ast")
 local parse = require("@eryx/luau/parse")
 
-type ParseResult = parse.ParseResult
+type ParseResult = parse.ParseResult<ast.AstStatBlock>
 
 local Query = {}
 Query.__index = Query
@@ -47,7 +48,7 @@ local function copyArray<T>(items: { T }): { T }
 	return out
 end
 
-local function isLocation(value: any | ast.Location): boolean
+local function isLocation(value: any): boolean
 	return type(value) == "table"
 		and type(value.beginline) == "number"
 		and type(value.begincolumn) == "number"
@@ -71,12 +72,20 @@ local function isDenseArray(value: any): boolean
 	return count == #value
 end
 
-local function isTraversableNode(value: any | ast.AstNode): boolean
-	return type(value) == "table" and not isLocation(value) and not isDenseArray(value)
+local function isToken(value: any): boolean
+	return type(value) == "table" and value.type == "token"
 end
 
-local function appendChildren(into: { ast.AstNode }, value: ast.AstNode)
-	if type(value) ~= "table" or isLocation(value) then
+-- Internally the traversal is structural: nodes are distinguished from locations,
+-- dense arrays, and tokens at runtime. Typing these helpers with the full `AstAny`
+-- union makes the solver blow up ("code too complex"), so they operate on `any` and
+-- only the public surface is typed in terms of `AstAny`.
+local function isTraversableNode(value: any): boolean
+	return type(value) == "table" and not isLocation(value) and not isDenseArray(value) and not isToken(value)
+end
+
+local function appendChildren(into: { any }, value: any)
+	if type(value) ~= "table" or isLocation(value) or isToken(value) then
 		return
 	end
 
@@ -92,7 +101,7 @@ local function appendChildren(into: { ast.AstNode }, value: ast.AstNode)
 	table.insert(into, value)
 end
 
-local function collectChildren(node: ast.AstNode): { ast.AstNode }
+local function collectChildren(node: any): { any }
 	local out = {}
 	if type(node) ~= "table" then
 		return out
@@ -107,7 +116,7 @@ local function collectChildren(node: ast.AstNode): { ast.AstNode }
 	return out
 end
 
-local function visitAll(node: ast.AstNode, callback: (ast.AstNode) -> ())
+local function visitAll(node: any, callback: (ast.AstAny) -> ())
 	if not isTraversableNode(node) then
 		return
 	end
@@ -139,7 +148,7 @@ end
 	@return Query<T> -- A new query with the filtered nodes.
 ]=]
 function Query.filter<T>(self: Query<T>, pred: (T) -> boolean): Query<T>
-	local out = {}
+	local out: { T } = {}
 	for _, node in self.nodes do
 		if pred(node) then
 			table.insert(out, node)
@@ -155,7 +164,7 @@ end
 	@return Query<U> -- A new query with the mapped values.
 ]=]
 function Query.map<T, U>(self: Query<T>, fn: (T) -> U?): Query<U>
-	local out = {}
+	local out: { U } = {}
 	for _, node in self.nodes do
 		local mapped = fn(node)
 		if mapped ~= nil then
@@ -172,7 +181,7 @@ end
 	@return Query<U> -- A new query with all flattened values.
 ]=]
 function Query.flatMap<T, U>(self: Query<T>, fn: (T) -> { U }): Query<U>
-	local out = {}
+	local out: { U } = {}
 	for _, node in self.nodes do
 		local mapped = fn(node)
 		for _, item in mapped do
@@ -203,8 +212,8 @@ end
 	@param fn Selector function. Return a non-nil value to include a descendant node.
 	@return Query<U> -- A new query with all matched descendants.
 ]=]
-function Query.findAll<T, U>(self: Query<T>, fn: (ast.AstNode) -> U?): Query<U>
-	local out = {}
+function Query.findAll<T, U>(self: Query<T>, fn: (ast.AstAny) -> U?): Query<U>
+	local out: { U } = {}
 	for _, start in self.nodes do
 		visitAll(start, function(node)
 			local selected = fn(node)
@@ -229,13 +238,14 @@ local query = {}
 
 --[=[
 	Returns the direct child nodes of `node` without recursing further.
-	Location spans and dense arrays are unwrapped but not themselves returned
-	as children.
+	Location spans and concrete syntax tokens are skipped. Dense arrays are
+	unwrapped, so their node-like items are returned instead of the array
+	table itself.
 
 	@param node The AST node whose direct children to collect.
-	@return { AstNode } -- Array of direct child nodes.
+	@return { AstAny } -- Array of direct child nodes.
 ]=]
-function query.children(node: ast.AstNode): { ast.AstNode }
+function query.children(node: ast.AstAny): { ast.AstAny }
 	return collectChildren(node)
 end
 
@@ -243,12 +253,13 @@ end
 	Recursively walks all nodes in a parse result or AST node and collects
 	non-nil results of `fn` into a chainable `Query<T>`.
 
-	Pass a `ParseResult` to start from the root block, or any `AstNode` to
-	start from that node directly.
+	Pass a `ParseResult` to start from its `root`, or pass any AST payload
+	table to start from that table directly. Match serialized nodes by both
+	`category` and lowercase `type`; `type` values are not globally unique.
 
 	```luau
 	local calls = query.query(result, function(node)
-	    if node.type == "ExprCall" then
+	    if node.category == "expr" and node.type == "call" then
 	        return node
 	    end
 	end)
@@ -261,9 +272,9 @@ end
 	@param fn Selector function. Return a non-nil value to include a node.
 	@return Query<T> -- A chainable query containing all matched nodes.
 ]=]
-function query.query<T>(astOrNode: ParseResult | any, fn: (ast.AstNode) -> T?): Query<T>
+function query.query<T>(astOrNode: ParseResult | any, fn: (ast.AstAny) -> T?): Query<T>
 	local root = rootOf(astOrNode)
-	local out = {}
+	local out: { T } = {}
 
 	visitAll(root, function(node)
 		local selected = fn(node)

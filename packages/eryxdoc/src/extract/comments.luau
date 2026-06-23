@@ -5,6 +5,8 @@
 local luau = require("@eryx/luau/ast")
 local types = require("./types")
 type CommentBlock = types.CommentBlock
+type CommentInfo = { type: "line" | "block" | "broken" | "unknown", location: luau.Location }
+type ParseResultWithComments = { comments: { CommentInfo }? }
 
 -- Strip the leading comment-prefix dashes (e.g. `--`, `---`) and the single
 -- following space from a single source line.  Only used for LineComment text.
@@ -63,7 +65,7 @@ end
 -- Collect all comment blocks and inline comments from a parse result.
 -- Returns (block comments for doc association, inline comments by line number).
 local function collectComments(
-	result: luau.ParseResult,
+	result: ParseResultWithComments,
 	sourceLines: { string }
 ): ({ CommentBlock }, { [number]: string })
 	local blocks: { CommentBlock } = {}
@@ -102,7 +104,7 @@ local function collectComments(
 
 		if isInline then
 			local text: string
-			if c.type == "BlockComment" then
+			if c.type == "block" then
 				text = raw:gsub("^%-%-%[=*%[", ""):gsub("%]=*%]$", "")
 			else
 				text = stripLineCommentPrefix(raw)
@@ -113,7 +115,7 @@ local function collectComments(
 				table.insert(blocks, { text = unindent(table.concat(cur, "\n")), endLine = prevEnd })
 				cur = {}
 			end
-			if c.type == "BlockComment" then
+			if c.type == "block" then
 				raw = raw:gsub("^%-%-%[=*%[", ""):gsub("%]=*%]$", "")
 				table.insert(cur, raw)
 			else
