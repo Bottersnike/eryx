@@ -5,6 +5,18 @@
 #include <string>
 #include <vector>
 
+#ifndef ERYX_DATE_USE_HOWARD_TZ
+#if defined(_WIN32)
+#define ERYX_DATE_USE_HOWARD_TZ 0
+#else
+#define ERYX_DATE_USE_HOWARD_TZ 1
+#endif
+#endif
+
+#if ERYX_DATE_USE_HOWARD_TZ
+#include "date/tz.h"
+#endif
+
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
@@ -18,9 +30,39 @@ static const LuauModuleInfo INFO = {
 LUAU_MODULE_INFO()
 
 namespace tzdate {
+using Duration = std::chrono::nanoseconds;
+
+#if ERYX_DATE_USE_HOWARD_TZ
+namespace tz = date;
+using SysTime = date::sys_time<std::chrono::nanoseconds>;
+using LocalNs = date::local_time<std::chrono::nanoseconds>;
+using TzTimeZone = date::time_zone;
+template <typename D>
+using TzZonedTime = date::zoned_time<D>;
+template <typename T>
+auto format_time(const std::string& fmt, const T& value) {
+    return date::format(fmt, value);
+}
+template <typename T>
+auto parse_time(const std::string& fmt, T& value, std::chrono::minutes& offset) {
+    return date::parse(fmt, value, offset);
+}
+#else
+namespace tz = std::chrono;
 using SysTime = std::chrono::sys_time<std::chrono::nanoseconds>;
 using LocalNs = std::chrono::local_time<std::chrono::nanoseconds>;
-using Duration = std::chrono::nanoseconds;
+using TzTimeZone = std::chrono::time_zone;
+template <typename D>
+using TzZonedTime = std::chrono::zoned_time<D>;
+template <typename T>
+auto format_time(const std::string& fmt, const T& value) {
+    return std::vformat("{:" + fmt + "}", std::make_format_args(value));
+}
+template <typename T>
+auto parse_time(const std::string& fmt, T& value, std::chrono::minutes& offset) {
+    return std::chrono::parse(fmt, value, offset);
+}
+#endif
 
 struct ZonedInstant {
     SysTime utc;       // The actual UTC time
@@ -28,14 +70,14 @@ struct ZonedInstant {
     std::optional<std::chrono::minutes> fixed_offset;  // UTC offset when parsed from ISO string
 };
 
-inline const std::chrono::time_zone* resolve_zone(lua_State* L, const std::string& name) {
+inline const TzTimeZone* resolve_zone(lua_State* L, const std::string& name) {
     try {
-        return std::chrono::locate_zone(name);
+        return tz::locate_zone(name);
     } catch (...) {
         luaL_error(L, "Unable to locate time zone: %s", name.c_str());
     }
 }
-std::string current_timezone() { return std::string(std::chrono::current_zone()->name()); }
+std::string current_timezone() { return std::string(tz::current_zone()->name()); }
 
 // Returns the display name of the zone (IANA name or +HH:MM offset string)
 std::string zone_display(const ZonedInstant& z) {
@@ -53,7 +95,7 @@ LocalNs to_local_time(lua_State* L, const ZonedInstant& z) {
     if (z.fixed_offset) {
         return LocalNs{ z.utc.time_since_epoch() + *z.fixed_offset };
     }
-    return std::chrono::zoned_time{ resolve_zone(L, z.zone), z.utc }.get_local_time();
+    return TzZonedTime<std::chrono::nanoseconds>{ resolve_zone(L, z.zone), z.utc }.get_local_time();
 }
 
 ZonedInstant date_now(const std::string& zone) {
@@ -135,10 +177,11 @@ DateFields get_fields(lua_State* L, const ZonedInstant& z) {
     using namespace std::chrono;
 
     auto local = to_local_time(L, z);
-    auto dp = std::chrono::floor<std::chrono::days>(local);
-    year_month_day ymd{ dp };
-    hh_mm_ss<std::chrono::nanoseconds> hms{ std::chrono::duration_cast<std::chrono::nanoseconds>(
-        local - dp) };
+    auto dp = tz::floor<tz::days>(local);
+    tz::year_month_day ymd{ dp };
+    tz::hh_mm_ss<std::chrono::nanoseconds> hms{
+        std::chrono::duration_cast<std::chrono::nanoseconds>(local - dp)
+    };
 
     DateFields f;
     f.year = int(ymd.year());
@@ -162,14 +205,13 @@ DateFields get_fields(lua_State* L, const ZonedInstant& z) {
 ZonedInstant from_fields(lua_State* L, const DateFields& f, const std::string& zone) {
     using namespace std::chrono;
 
-    auto tz = resolve_zone(L, zone);
+    auto zone_info = resolve_zone(L, zone);
 
-    local_time<std::chrono::nanoseconds> lt =
-        local_days{ year{ f.year } / f.month / f.day } + std::chrono::hours{ f.hour } +
-        std::chrono::minutes{ f.minute } + std::chrono::seconds{ f.second } +
-        std::chrono::nanoseconds{ f.nanosecond };
+    LocalNs lt = tz::local_days{ tz::year{ f.year } / unsigned(f.month) / unsigned(f.day) } +
+                 std::chrono::hours{ f.hour } + std::chrono::minutes{ f.minute } +
+                 std::chrono::seconds{ f.second } + std::chrono::nanoseconds{ f.nanosecond };
 
-    std::chrono::zoned_time zt{ tz, lt, choose::latest };
+    TzZonedTime<std::chrono::nanoseconds> zt{ zone_info, lt, tz::choose::latest };
 
     ZonedInstant out;
     out.utc = zt.get_sys_time();
@@ -182,9 +224,9 @@ std::string format_iso(lua_State* L, const ZonedInstant& z) {
 
     if (z.fixed_offset) {
         auto local = to_local_time(L, z);
-        auto dp = std::chrono::floor<std::chrono::days>(local);
-        year_month_day ymd{ dp };
-        hh_mm_ss<std::chrono::nanoseconds> hms{
+        auto dp = tz::floor<tz::days>(local);
+        tz::year_month_day ymd{ dp };
+        tz::hh_mm_ss<std::chrono::nanoseconds> hms{
             std::chrono::duration_cast<std::chrono::nanoseconds>(local - dp)
         };
 
@@ -206,8 +248,8 @@ std::string format_iso(lua_State* L, const ZonedInstant& z) {
                            off_m);
     }
 
-    auto tz = resolve_zone(L, z.zone);
-    return std::format("{:%FT%T%Ez}", zoned_time{ tz, z.utc });
+    auto zone = resolve_zone(L, z.zone);
+    return format_time("%FT%T%Ez", TzZonedTime<std::chrono::nanoseconds>{ zone, z.utc });
 }
 
 // Parses an ISO 8601 timestamp; timezone is derived from the offset in the string.
@@ -220,7 +262,7 @@ ZonedInstant parse_iso(const std::string& s) {
     sys_time<std::chrono::nanoseconds> tp;
     std::chrono::minutes offset;
 
-    in >> parse(std::string("%FT%T%Ez"), tp, offset);
+    in >> parse_time(std::string("%FT%T%Ez"), tp, offset);
     // parse() into sys_time already converts to UTC; do NOT subtract offset again.
 
     if (in.fail()) throw std::runtime_error("Invalid ISO timestamp");
@@ -235,7 +277,7 @@ ZonedInstant parse_iso(const std::string& s) {
 int weekday(lua_State* L, const ZonedInstant& z) {
     using namespace std::chrono;
     auto local = to_local_time(L, z);
-    std::chrono::weekday wd{ std::chrono::floor<std::chrono::days>(local) };
+    tz::weekday wd{ tz::floor<tz::days>(local) };
     unsigned c = wd.c_encoding();  // 0=Sun, 1=Mon, ..., 6=Sat
     return c == 0 ? 7 : int(c);    // convert to ISO: 1=Mon ... 7=Sun
 }
@@ -244,23 +286,23 @@ int weekday(lua_State* L, const ZonedInstant& z) {
 int day_of_year(lua_State* L, const ZonedInstant& z) {
     using namespace std::chrono;
     auto local = to_local_time(L, z);
-    auto dp = std::chrono::floor<std::chrono::days>(local);
-    year_month_day ymd{ dp };
-    auto jan1 = local_days{ ymd.year() / January / 1 };
+    auto dp = tz::floor<tz::days>(local);
+    tz::year_month_day ymd{ dp };
+    auto jan1 = tz::local_days{ ymd.year() / tz::January / 1 };
     return int((dp - jan1).count()) + 1;
 }
 
-bool is_leap(int year) { return std::chrono::year{ year }.is_leap(); }
+bool is_leap(int year) { return tz::year{ year }.is_leap(); }
 
 int days_in_month(int year, unsigned int month) {
     using namespace std::chrono;
-    year_month_day_last ymdl{ std::chrono::year{ year } / std::chrono::month{ month } / last };
+    tz::year_month_day_last ymdl{ tz::year{ year } / tz::month{ month } / tz::last };
     return unsigned(ymdl.day());
 }
 
 std::vector<std::string> timezone_names() {
     std::vector<std::string> out;
-    for (auto& tz : std::chrono::get_tzdb().zones) out.push_back(std::string(tz.name()));
+    for (auto& zone : tz::get_tzdb().zones) out.push_back(std::string(zone.name()));
     return out;
 }
 
@@ -273,10 +315,9 @@ bool is_dst(lua_State* L, const ZonedInstant& z) {
 // Build a ZonedInstant from fields with a fixed offset (no IANA zone lookup needed).
 ZonedInstant from_fields_fixed(const DateFields& f, std::chrono::minutes offset) {
     using namespace std::chrono;
-    local_time<std::chrono::nanoseconds> lt =
-        local_days{ year{ f.year } / f.month / f.day } + std::chrono::hours{ f.hour } +
-        std::chrono::minutes{ f.minute } + std::chrono::seconds{ f.second } +
-        std::chrono::nanoseconds{ f.nanosecond };
+    LocalNs lt = tz::local_days{ tz::year{ f.year } / unsigned(f.month) / unsigned(f.day) } +
+                 std::chrono::hours{ f.hour } + std::chrono::minutes{ f.minute } +
+                 std::chrono::seconds{ f.second } + std::chrono::nanoseconds{ f.nanosecond };
     ZonedInstant out;
     out.utc = SysTime{ std::chrono::duration_cast<std::chrono::nanoseconds>(lt.time_since_epoch() -
                                                                             offset) };
@@ -349,8 +390,8 @@ std::string relative_time(const ZonedInstant& target, const ZonedInstant& base) 
 // For fixed-offset instants, %z/%Ez/%Z are substituted with the literal offset string.
 std::string format_custom(lua_State* L, const ZonedInstant& z, const std::string& fmt) {
     if (!z.fixed_offset) {
-        auto zt = std::chrono::zoned_time{ resolve_zone(L, z.zone), z.utc };
-        return std::vformat("{:" + fmt + "}", std::make_format_args(zt));
+        auto zt = TzZonedTime<std::chrono::nanoseconds>{ resolve_zone(L, z.zone), z.utc };
+        return format_time(fmt, zt);
     }
     // Preprocess timezone tokens into literal offset strings so local_time can handle the rest.
     int total = int(z.fixed_offset->count());
@@ -380,12 +421,12 @@ std::string format_custom(lua_State* L, const ZonedInstant& z, const std::string
         }
     }
     auto lt = to_local_time(L, z);
-    return std::vformat("{:" + processed + "}", std::make_format_args(lt));
+    return format_time(processed, lt);
 }
 
 // Format the underlying UTC time using a std::chrono-compatible format string.
 std::string format_utc(const ZonedInstant& z, const std::string& fmt) {
-    return std::vformat("{:" + fmt + "}", std::make_format_args(z.utc));
+    return format_time(fmt, z.utc);
 }
 
 // Parse a datetime string with a user-supplied format string.
@@ -397,7 +438,7 @@ ZonedInstant parse_custom(lua_State* L, const std::string& s, const std::string&
     std::istringstream in(s);
     sys_time<std::chrono::nanoseconds> tp;
     std::chrono::minutes offset{ 0 };
-    in >> parse(fmt, tp, offset);
+    in >> parse_time(fmt, tp, offset);
     if (in.fail()) throw std::runtime_error("Failed to parse datetime string");
     // parse() into sys_time already converts to UTC; do NOT subtract offset again.
 

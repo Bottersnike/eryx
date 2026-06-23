@@ -55,3 +55,6 @@
 [submodule "vendor/efsw"]
 	path = vendor/efsw
 	url = https://github.com/SpartanJ/efsw
+[submodule "vendor/date"]
+	path = vendor/date
+	url = https://github.com/HowardHinnant/date

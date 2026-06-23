@@ -144,7 +144,9 @@ add_luau_module(luau/_analysis_native src/modules/luau/analysis.cpp src/modules/
                    "${LUAU_DIR}/Config/src/LinterConfig.cpp"
 )
 
-add_luau_module(date src/modules/date.cpp src/modules/date.luau)
+add_luau_module(date src/modules/date.cpp src/modules/date.luau
+    EXTRA_LIBS ${ERYX_DATE_TZ_LIBS}
+)
 
 if(ERYX_USE_XML)
     add_luau_module(_native/xml src/modules/data/xml.cpp src/modules/_native/stub.luau

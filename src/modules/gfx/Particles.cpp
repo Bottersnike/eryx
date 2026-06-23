@@ -326,7 +326,7 @@ static HSVARange readHsva(lua_State* L, int idx, const char* name) {
 
     lua_getfield(L, idx, "a");
     if (lua_isnil(L, -1)) {
-        hsv.a = Range(255, 255);
+        hsv.a = Range{ 255, 255 };
     } else {
         if (!lua_isnumber(L, -1)) luaL_error(L, "'a' must be number");
         hsv.a = readRange(L, -1, "a");
