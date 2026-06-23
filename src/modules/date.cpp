@@ -44,8 +44,10 @@ auto format_time(const std::string& fmt, const T& value) {
     return date::format(fmt, value);
 }
 template <typename T>
-auto parse_time(const std::string& fmt, T& value, std::chrono::minutes& offset) {
-    return date::parse(fmt, value, offset);
+auto& parse_time(std::istringstream& in, const std::string& fmt, T& value,
+                 std::chrono::minutes& offset) {
+    std::string abbrev;
+    return date::from_stream(in, fmt.c_str(), value, &abbrev, &offset);
 }
 #else
 namespace tz = std::chrono;
@@ -59,8 +61,9 @@ auto format_time(const std::string& fmt, const T& value) {
     return std::vformat("{:" + fmt + "}", std::make_format_args(value));
 }
 template <typename T>
-auto parse_time(const std::string& fmt, T& value, std::chrono::minutes& offset) {
-    return std::chrono::parse(fmt, value, offset);
+auto& parse_time(std::istringstream& in, const std::string& fmt, T& value,
+                 std::chrono::minutes& offset) {
+    return in >> std::chrono::parse(fmt, value, offset);
 }
 #endif
 
@@ -262,7 +265,7 @@ ZonedInstant parse_iso(const std::string& s) {
     SysTime tp;
     std::chrono::minutes offset;
 
-    in >> parse_time(std::string("%FT%T%Ez"), tp, offset);
+    parse_time(in, std::string("%FT%T%Ez"), tp, offset);
     // parse() into sys_time already converts to UTC; do NOT subtract offset again.
 
     if (in.fail()) throw std::runtime_error("Invalid ISO timestamp");
@@ -438,7 +441,7 @@ ZonedInstant parse_custom(lua_State* L, const std::string& s, const std::string&
     std::istringstream in(s);
     SysTime tp;
     std::chrono::minutes offset{ 0 };
-    in >> parse_time(fmt, tp, offset);
+    parse_time(in, fmt, tp, offset);
     if (in.fail()) throw std::runtime_error("Failed to parse datetime string");
     // parse() into sys_time already converts to UTC; do NOT subtract offset again.
 
