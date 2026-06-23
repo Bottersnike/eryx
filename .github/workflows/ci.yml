@@ -77,6 +77,9 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      - name: Test
+        run: ${{ runner.os == 'Windows' && 'build\\eryx.exe test src/modules' || './build/eryx test src/modules' }}
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
