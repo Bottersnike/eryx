@@ -4,6 +4,10 @@
 #include <set>
 #include <vector>
 
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
+
 #include "../LuaUtil.hpp"
 #include "module_api.h"
 

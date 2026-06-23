@@ -366,11 +366,15 @@ struct ShapedGlyphNative {
     double yOffset = 0;
 };
 
-struct Rect {
+struct FontRect {
     double x = 0;
     double y = 0;
     double width = 0;
     double height = 0;
+
+    FontRect() = default;
+    FontRect(double x, double y, double width, double height)
+        : x(x), y(y), width(width), height(height) {}
 };
 
 struct ShapedRunUD {
@@ -378,7 +382,7 @@ struct ShapedRunUD {
     std::vector<ShapedGlyphNative> glyphs;
     double advanceX = 0;
     double advanceY = 0;
-    Rect bounds;
+    FontRect bounds;
     bool closed = false;
 };
 
@@ -511,7 +515,7 @@ static void push_vec2(lua_State* L, double x, double y) {
     lua_setreadonly(L, -1, true);
 }
 
-static void push_rect(lua_State* L, Rect r) {
+static void push_rect(lua_State* L, FontRect r) {
     lua_createtable(L, 0, 4);
     lua_pushnumber(L, r.x);
     lua_setfield(L, -2, "x");
@@ -1519,8 +1523,8 @@ static int font_outline_glyph(lua_State* L) {
 
     FT_BBox box;
     FT_Outline_Get_CBox(&slot->outline, &box);
-    Rect bounds{ ft26(box.xMin), ft26(box.yMin), ft26(box.xMax - box.xMin),
-                 ft26(box.yMax - box.yMin) };
+    FontRect bounds{ ft26(box.xMin), ft26(box.yMin), ft26(box.xMax - box.xMin),
+                     ft26(box.yMax - box.yMin) };
     push_rect(L, bounds);
     lua_setfield(L, -2, "bounds");
     lua_pushnumber(L, ft26(slot->advance.x));
@@ -1722,7 +1726,7 @@ static RenderedGlyphBitmap render_glyph_for_mask(lua_State* L, FontUD* font, uin
 }
 
 static void push_rendered_mask(lua_State* L, int width, int height, int baselineX, int baselineY,
-                               double advanceX, double advanceY, Rect bounds,
+                               double advanceX, double advanceY, FontRect bounds,
                                const std::vector<RenderedGlyphBitmap>& glyphs) {
     int imageWidth = std::max(1, width);
     int imageHeight = std::max(1, height);
@@ -1835,7 +1839,7 @@ static int font_render_glyph(lua_State* L) {
     int height = std::max(0, maxY - minY);
     int baselineX = -minX;
     int baselineY = -minY;
-    Rect bounds{ (double)minX, (double)minY, (double)width, (double)height };
+    FontRect bounds{ (double)minX, (double)minY, (double)width, (double)height };
     push_rendered_mask(L, width, height, baselineX, baselineY, glyph.advanceX, glyph.advanceY,
                        bounds, { glyph });
     return 1;
@@ -1934,8 +1938,8 @@ static int font_render_text(lua_State* L) {
     int height = hasBounds ? std::max(0, maxY - minY) : 0;
     int baselineX = hasBounds ? -minX : 0;
     int baselineY = hasBounds ? -minY : 0;
-    Rect bounds{ hasBounds ? (double)minX : 0, hasBounds ? (double)minY : 0, (double)width,
-                 (double)height };
+    FontRect bounds{ hasBounds ? (double)minX : 0, hasBounds ? (double)minY : 0, (double)width,
+                     (double)height };
     double advanceY = lines.size() > 1 ? (double)(lines.size() - 1) * lineHeight : 0;
     push_rendered_mask(L, width, height, baselineX, baselineY, maxAdvanceX, advanceY, bounds,
                        glyphs);

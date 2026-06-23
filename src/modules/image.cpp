@@ -272,11 +272,14 @@ struct ExifMetadata {
     std::vector<ExifTag> tags;
 };
 
-struct Rect {
+struct ImageRect {
     int x;
     int y;
     int width;
     int height;
+
+    ImageRect() = default;
+    ImageRect(int x, int y, int width, int height) : x(x), y(y), width(width), height(height) {}
 };
 
 enum class BlendMode : uint8_t {
@@ -449,11 +452,11 @@ static Color check_color(lua_State* L, int idx, Color fallback = { 0, 0, 0, 255 
     return c;
 }
 
-static Rect check_rect(lua_State* L, int idx) {
+static ImageRect check_rect(lua_State* L, int idx) {
     idx = lua_absindex(L, idx);
     luaL_checktype(L, idx, LUA_TTABLE);
 
-    Rect r;
+    ImageRect r;
     r.x = opt_int_field(L, idx, "x", 0);
     r.y = opt_int_field(L, idx, "y", 0);
     r.width = opt_int_field(L, idx, "width", 0);
@@ -461,10 +464,10 @@ static Rect check_rect(lua_State* L, int idx) {
     return r;
 }
 
-static Rect check_rect_args(lua_State* L, int idx) {
+static ImageRect check_rect_args(lua_State* L, int idx) {
     if (lua_istable(L, idx)) return check_rect(L, idx);
 
-    Rect r;
+    ImageRect r;
     r.x = luaL_checkinteger(L, idx);
     r.y = luaL_checkinteger(L, idx + 1);
     r.width = luaL_checkinteger(L, idx + 2);
@@ -485,7 +488,7 @@ static void push_color(lua_State* L, Color c) {
     lua_setreadonly(L, -1, true);
 }
 
-static void push_rect(lua_State* L, Rect r) {
+static void push_rect(lua_State* L, ImageRect r) {
     lua_createtable(L, 0, 4);
     lua_pushinteger(L, r.x);
     lua_setfield(L, -2, "x");
@@ -1023,14 +1026,14 @@ static void copy_image_pixels_oriented(LuaImage* dst, const LuaImage* src, uint1
     }
 }
 
-static bool rect_in_bounds(const LuaImage* i, Rect r) {
+static bool rect_in_bounds(const LuaImage* i, ImageRect r) {
     if (r.width <= 0 || r.height <= 0 || r.x < 0 || r.y < 0) return false;
     if (r.x > (int)i->width || r.y > (int)i->height) return false;
     if (r.width > (int)i->width - r.x || r.height > (int)i->height - r.y) return false;
     return true;
 }
 
-static void check_rect_in_bounds(lua_State* L, const LuaImage* i, Rect r) {
+static void check_rect_in_bounds(lua_State* L, const LuaImage* i, ImageRect r) {
     if (!rect_in_bounds(i, r)) {
         luaL_error(L, "rectangle is out of image bounds");
     }
@@ -1751,7 +1754,7 @@ static int image_gray(lua_State* L) {
 }
 
 static int image_rect(lua_State* L) {
-    Rect r = {
+    ImageRect r = {
         luaL_checkinteger(L, 1),
         luaL_checkinteger(L, 2),
         luaL_checkinteger(L, 3),
@@ -1868,7 +1871,7 @@ static int image_clone(lua_State* L) {
 
 static int image_crop(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    Rect r = check_rect_args(L, 2);
+    ImageRect r = check_rect_args(L, 2);
     check_rect_in_bounds(L, src, r);
 
     LuaImage* dst = new_owned_image(L, (uint32_t)r.width, (uint32_t)r.height, src->format,
@@ -1882,7 +1885,7 @@ static int image_crop(lua_State* L) {
 
 static int image_subimage(lua_State* L) {
     LuaImage* src = check_image(L, 1);
-    Rect r = check_rect_args(L, 2);
+    ImageRect r = check_rect_args(L, 2);
     check_rect_in_bounds(L, src, r);
 
     LuaImage* view = new_image_userdata(L, (uint32_t)r.width, (uint32_t)r.height, src->format,
@@ -1976,7 +1979,7 @@ static void fill_image(LuaImage* dst, Color color) {
     }
 }
 
-static bool resize_rect_into(const LuaImage* src, Rect srcRect, LuaImage* dst, bool nearest) {
+static bool resize_rect_into(const LuaImage* src, ImageRect srcRect, LuaImage* dst, bool nearest) {
     if (nearest) {
         for (uint32_t y = 0; y < dst->height; y++) {
             int sy = srcRect.y + std::min(srcRect.height - 1,
@@ -1995,7 +1998,7 @@ static bool resize_rect_into(const LuaImage* src, Rect srcRect, LuaImage* dst, b
                                    (int)dst->height, (int)dst->stride, stbir_layout(src->format));
 }
 
-static LuaImage* resize_exact(lua_State* L, LuaImage* src, Rect srcRect, int width, int height,
+static LuaImage* resize_exact(lua_State* L, LuaImage* src, ImageRect srcRect, int width, int height,
                               bool nearest) {
     LuaImage* dst = new_owned_image(L, (uint32_t)width, (uint32_t)height, src->format,
                                     make_metadata_ref(L, "raw"));
@@ -2013,7 +2016,7 @@ static int image_resize(lua_State* L) {
     if (width <= 0 || height <= 0) luaL_error(L, "image dimensions must be positive");
     ResizeOptionsNative opts = parse_resize_options(L, 4);
 
-    Rect srcRect = { 0, 0, (int)src->width, (int)src->height };
+    ImageRect srcRect = { 0, 0, (int)src->width, (int)src->height };
     if (opts.fit == ResizeFit::Stretch) {
         resize_exact(L, src, srcRect, width, height, opts.nearest);
         return 1;
@@ -2142,7 +2145,7 @@ static int image_clear(lua_State* L) {
 
 static int image_fillRect(lua_State* L) {
     LuaImage* i = check_image(L, 1);
-    Rect r = check_rect_args(L, 2);
+    ImageRect r = check_rect_args(L, 2);
     int colorArg = lua_istable(L, 2) ? 3 : 6;
     Color c = check_color(L, colorArg);
     check_rect_in_bounds(L, i, r);
@@ -2157,7 +2160,7 @@ static int image_fillRect(lua_State* L) {
 
 static int image_strokeRect(lua_State* L) {
     LuaImage* i = check_image(L, 1);
-    Rect r = check_rect_args(L, 2);
+    ImageRect r = check_rect_args(L, 2);
     int colorArg = lua_istable(L, 2) ? 3 : 6;
     int thicknessArg = colorArg + 1;
     Color c = check_color(L, colorArg);
@@ -2187,7 +2190,7 @@ static int image_blit(lua_State* L) {
     LuaImage* dst = check_image(L, 1);
     LuaImage* src = check_image(L, 2);
 
-    Rect srcRect;
+    ImageRect srcRect;
     int dstX;
     int dstY;
     int optionsArg;
@@ -2221,8 +2224,8 @@ static int image_blit(lua_State* L) {
 static int image_draw(lua_State* L) {
     LuaImage* dst = check_image(L, 1);
     LuaImage* src = check_image(L, 2);
-    Rect srcRect = check_rect(L, 3);
-    Rect dstRect = check_rect(L, 4);
+    ImageRect srcRect = check_rect(L, 3);
+    ImageRect dstRect = check_rect(L, 4);
     check_rect_in_bounds(L, src, srcRect);
     if (dstRect.width <= 0 || dstRect.height <= 0) {
         luaL_error(L, "destination rectangle dimensions must be positive");

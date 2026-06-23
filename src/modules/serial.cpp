@@ -54,6 +54,10 @@
 #include <sys/stat.h>
 #include <termios.h>
 #include <unistd.h>
+
+#ifndef TIOCINQ
+#define TIOCINQ FIONREAD
+#endif
 #endif
 
 // ---------------------------------------------------------------------------

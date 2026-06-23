@@ -259,7 +259,7 @@ ZonedInstant parse_iso(const std::string& s) {
 
     std::istringstream in(s);
 
-    sys_time<std::chrono::nanoseconds> tp;
+    SysTime tp;
     std::chrono::minutes offset;
 
     in >> parse_time(std::string("%FT%T%Ez"), tp, offset);
@@ -436,7 +436,7 @@ ZonedInstant parse_custom(lua_State* L, const std::string& s, const std::string&
                           const std::string& zone) {
     using namespace std::chrono;
     std::istringstream in(s);
-    sys_time<std::chrono::nanoseconds> tp;
+    SysTime tp;
     std::chrono::minutes offset{ 0 };
     in >> parse_time(fmt, tp, offset);
     if (in.fail()) throw std::runtime_error("Failed to parse datetime string");
