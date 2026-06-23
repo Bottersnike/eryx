@@ -67,10 +67,10 @@ else()
             <SOURCE_DIR>/configure ${MPFR_CONFIGURE_ARGS}
 
         BUILD_COMMAND
-            "${MAKE_EXECUTABLE}" -j
+            "${MAKE_EXECUTABLE}" -j MAKEINFO=true
 
         INSTALL_COMMAND
-            "${MAKE_EXECUTABLE}" install
+            "${MAKE_EXECUTABLE}" install MAKEINFO=true
 
         BUILD_BYPRODUCTS
             "${MPFR_LIBRARY}"
