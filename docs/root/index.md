@@ -36,10 +36,20 @@ end, "https://example.org")
 All it takes is `@eryx/`. [[Welcome to Eryx|Get started now]].
 
 <script>
-(function() {
+(async function() {
   var ua = navigator.userAgent;
+  var platform = navigator.userAgentData && navigator.userAgentData.platform
+      ? navigator.userAgentData.platform
+      : navigator.platform;
+  var arch = navigator.userAgentData && navigator.userAgentData.getHighEntropyValues
+      ? (await navigator.userAgentData.getHighEntropyValues(['architecture'])).architecture
+      : '';
+  var isMac = /Mac/i.test(platform) || /Macintosh/i.test(ua);
+  var isArmMac = isMac && (/arm|aarch64/i.test(arch) || /arm|aarch64/i.test(ua));
   var url = /Windows/i.test(ua) ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-windows.zip'
           : /Linux/i.test(ua)   ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-linux.zip'
+          : isArmMac            ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-macos-arm64.zip'
+          : isMac               ? 'https://github.com/Bottersnike/eryx/releases/download/nightly/eryx-standard-macos-x86_64.zip'
           : null;
   if (!url) return;
   var actions = document.querySelector('.md-hero-actions');

@@ -27,6 +27,7 @@
 local Signal = require("@eryx/signal")
 local task = require("@eryx/task")
 local _fs_watch = require("@eryx/_fs_watch")
+local fs = require("@eryx/fs")
 local path = require("@eryx/path")
 
 type Signal<T...> = Signal.Signal<T...>
@@ -133,20 +134,38 @@ function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
 	local changed: Signal<string, WatchEventKind> = Signal.new() :: Signal<string, WatchEventKind>
 	local recursive = if options then options.recursive else false
 	local debounce = if options then options.debounce else nil
+	local root = tostring(path)
 
 	-- Per-file debounce timers: filename -> pending thread
 	local pendingTimers: { [string]: thread } = {}
 	-- Per-file last event type
 	local pendingEvents: { [string]: WatchEventKind } = {}
+	local knownFiles: { [string]: boolean } = {}
 
-	local handle = _fs_watch.create(path, recursive or false, function(event: WatchEvent)
-		local filename = event.relativePath or event.filename
-		if not filename then
+	local function relativeFileName(fullPath: string): string
+		local rootPath = fs.path.canonicalize(root):gsub("\\", "/"):gsub("/+$", "")
+		local filePath = fs.path.canonicalize(fullPath):gsub("\\", "/")
+		if filePath:sub(1, #rootPath + 1) == rootPath .. "/" then
+			return filePath:sub(#rootPath + 2)
+		end
+		return filePath
+	end
+
+	local function rememberExistingFiles()
+		if not recursive then
 			return
 		end
 
+		for entry in fs.walk(root, { recursive = true, followSymlinks = false }) do
+			if fs.isFile(entry.path) then
+				knownFiles[relativeFileName(entry.path)] = true
+			end
+		end
+	end
+
+	local function fire(filename: string, kind: WatchEventKind)
 		if debounce and debounce > 0 then
-			pendingEvents[filename] = event.kind
+			pendingEvents[filename] = kind
 			local existing = pendingTimers[filename]
 			if existing then
 				task.cancel(existing)
@@ -160,7 +179,42 @@ function fs_watch.watchDir(path: PathLike, options: WatchOptions?): DirWatcher
 				end
 			end)
 		else
-			changed:fire(filename, event.kind)
+			changed:fire(filename, kind)
+		end
+	end
+
+	local function scanNewFiles()
+		if not recursive then
+			return
+		end
+
+		for entry in fs.walk(root, { recursive = true, followSymlinks = false }) do
+			if fs.isFile(entry.path) then
+				local filename = relativeFileName(entry.path)
+				if not knownFiles[filename] then
+					knownFiles[filename] = true
+					fire(filename, "create")
+				end
+			end
+		end
+	end
+
+	rememberExistingFiles()
+
+	local handle = _fs_watch.create(path, recursive or false, function(event: WatchEvent)
+		local filename = event.relativePath or event.filename
+		if not filename then
+			return
+		end
+
+		if recursive and fs.isFile(event.path) then
+			knownFiles[filename] = true
+		end
+
+		fire(filename, event.kind)
+
+		if recursive and event.isDirectory then
+			task.delay(0.05, scanNewFiles)
 		end
 	end)
 

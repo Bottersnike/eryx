@@ -202,14 +202,23 @@ local function prepare(root: string, cloneUrl: string, ref: types.GitRef, subdir
 		end
 	end
 
-	if not callGit(gitFolder, {
+	local fetchOk, _, fetchErr = callGit(gitFolder, {
 		"fetch",
 		"origin",
 		fetchRef,
 		"--depth=1",
 		"--filter=blob:none",
-	}) then
-		error(`Failed to fetch {cloneUrl} {ref.type} {ref.value}`)
+	})
+	if not fetchOk then
+		fetchOk, _, fetchErr = callGit(gitFolder, {
+			"fetch",
+			"origin",
+			fetchRef,
+			"--depth=1",
+		})
+	end
+	if not fetchOk then
+		error(`Failed to fetch {cloneUrl} {ref.type} {ref.value}\n{fetchErr}`)
 	end
 
 	local okCommit, commitOut = callGit(gitFolder, {

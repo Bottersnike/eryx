@@ -231,27 +231,6 @@ local function projectRoot(doc: project.ManifestDocument): string
 	return doc.root or tostring(os.cwd())
 end
 
-local function resolveWorkspacePath(root: string, configuredPath: string): string
-	local resolved = configuredPath
-	if not path.new(resolved):isAbsolute() then
-		resolved = fs.path.join(root, resolved)
-	end
-
-	if fs.exists(resolved) then
-		return fs.path.canonicalize(resolved)
-	end
-
-	return resolved
-end
-
-local function dependencyWorkspaceName(alias: string, dep: project.Dependency): string
-	if type(dep) == "table" and (dep :: any).repo then
-		return ((dep :: any).package or alias) :: string
-	end
-
-	return alias
-end
-
 local function packageRootForDirectDependency(root: string, lock: any, alias: string): string?
 	if not lock then
 		return nil
@@ -298,11 +277,7 @@ local function collectDependencyScriptMatches(doc: project.ManifestDocument): { 
 
 	local function scan(deps: project.Dependencies?)
 		for alias, dep in deps or {} do
-			local workspaceName = dependencyWorkspaceName(alias, dep)
-			local workspacePath = doc.manifest.workspace and doc.manifest.workspace[workspaceName]
-			local packageRoot = if workspacePath
-				then resolveWorkspacePath(root, workspacePath)
-				else packageRootForDirectDependency(root, lock, alias)
+			local packageRoot = packageRootForDirectDependency(root, lock, alias)
 			if packageRoot == nil then
 				continue
 			end
