@@ -58,6 +58,7 @@ else()
         URL
             "https://ftp.gnu.org/gnu/mpfr/mpfr-${MPFR_VERSION}.tar.xz"
             "https://www.mpfr.org/mpfr-${MPFR_VERSION}/mpfr-${MPFR_VERSION}.tar.xz"
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
         PREFIX "${MPFR_PREFIX}"
 
         DEPENDS GMP

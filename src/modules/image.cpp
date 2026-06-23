@@ -1216,7 +1216,7 @@ static LuaImage* image_from_jpeg_memory(lua_State* L, const uint8_t* bytes, size
     int w = 0;
     int h = 0;
     int subsamp = TJSAMP_UNKNOWN;
-    int colorspace = TJCS_DEFAULT;
+    int colorspace = 0;
     if (tjDecompressHeader3(handle, bytes, len, &w, &h, &subsamp, &colorspace) != 0) {
         std::string message = tjGetErrorStr2(handle);
         tjDestroy(handle);
