@@ -399,27 +399,14 @@ local function runGit(cwd: string, args: { string }): string
 	return res.stdout
 end
 
-local function eryxExePath(): string
-	local debug = fs.path.join(WORKSPACE_ROOT, "build", "Debug", "eryx.exe")
-	if fs.isFile(debug) then
-		return debug
-	end
-
-	local release = fs.path.join(WORKSPACE_ROOT, "build", "Release", "eryx.exe")
-	if fs.isFile(release) then
-		return release
-	end
-
-	error("Could not find eryx.exe in build/Debug or build/Release", 2)
-end
-
 local function runEryx(cwd: string, args: { string }): os.ExecResult
-	local exe = eryxExePath()
+	local exe = tostring(os.currentEryxBinary())
+	local env = os.environ()
+	env.ERYX_EXE_PATH = exe
+
 	return os.exec(exe, args, {
 		cwd = cwd,
-		env = {
-			ERYX_EXE_PATH = exe,
-		},
+		env = env,
 	})
 end
 

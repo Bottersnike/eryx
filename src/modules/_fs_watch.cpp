@@ -276,7 +276,11 @@ class EfswBackend final : public WatchBackend, public efsw::FileWatchListener {
     bool start(std::string& error) override {
         if (watching) return true;
 
+#ifdef __APPLE__
+        watcher = std::make_unique<efsw::FileWatcher>(true, 25);
+#else
         watcher = std::make_unique<efsw::FileWatcher>();
+#endif
         watchId = watcher->addWatch(path_to_utf8(watchedDirectory), this, recursive);
         if (watchId <= 0) {
             error = efsw::Errors::Log::getLastErrorLog();

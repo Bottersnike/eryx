@@ -1,3 +1,4 @@
+local fs = require("@eryx/fs")
 local osmod = require("@eryx/os")
 local test = require("@eryx/test")
 
@@ -28,6 +29,13 @@ suite:test("uid/gid api returns platform-appropriate identity types", function()
 		test.expect(type(euid)):toBe("number")
 		test.expect(type(egid)):toBe("number")
 	end
+end)
+
+suite:test("currentEryxBinary returns the running binary path", function()
+	local binary = tostring(osmod.currentEryxBinary())
+	test.expect(type(binary)):toBe("string")
+	test.expect(binary):toNotBe("")
+	test.expect(fs.isFile(binary)):toBeTrue()
 end)
 
 suite:test("userInfo and groupInfo return principal metadata", function()

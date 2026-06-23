@@ -22,6 +22,7 @@
 //     os.clock()              -> number (high-res monotonic)
 //     os.cwd()                -> string
 //     os.chdir(path)
+//     os.currentEryxBinary()  -> string
 //     os.cliargs()            -> {string}  (script argv: script name/path + script args)
 //
 //   Child processes:
@@ -778,7 +779,7 @@ static int os_cwd(lua_State* L) {
     char buf[4096];
     size_t size = sizeof(buf);
     if (uv_cwd(buf, &size) == 0) {
-        lua_pushpath(L, std::string(buf, size));
+        lua_pushlstring(L, buf, size);
     } else {
         luaL_error(L, "failed to get current working directory");
     }
@@ -792,6 +793,23 @@ static int os_chdir(lua_State* L) {
         luaL_error(L, "failed to change directory to '%s': %s", path.c_str(), uv_strerror(r));
     }
     return 0;
+}
+
+static int os_currentEryxBinary(lua_State* L) {
+    size_t size = 1024;
+    for (;;) {
+        std::vector<char> buf(size);
+        size_t len = buf.size();
+        int r = uv_exepath(buf.data(), &len);
+        if (r == 0) {
+            lua_pushlstring(L, buf.data(), len);
+            return 1;
+        }
+        if (r != UV_ENOBUFS || size >= (1024 * 1024)) {
+            luaL_error(L, "failed to resolve current Eryx binary: %s", uv_strerror(r));
+        }
+        size *= 2;
+    }
 }
 
 static bool os_push_runtime_cliargs(lua_State* L) {
@@ -2053,6 +2071,8 @@ LUAU_MODULE_EXPORT int luauopen_os(lua_State* L) {
     lua_setfield(L, -2, "cwd");
     lua_pushcfunction(L, os_chdir, "chdir");
     lua_setfield(L, -2, "chdir");
+    lua_pushcfunction(L, os_currentEryxBinary, "currentEryxBinary");
+    lua_setfield(L, -2, "currentEryxBinary");
     lua_pushcfunction(L, os_cliargs, "cliargs");
     lua_setfield(L, -2, "cliargs");
 

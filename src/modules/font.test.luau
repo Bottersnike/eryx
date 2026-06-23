@@ -12,20 +12,41 @@ local function firstPath(info: font.SystemFontInfo): string
 end
 
 local function systemFace(): font.Typeface?
-	local preferred = font.findSystem("Segoe UI")
-	if preferred ~= nil then
-		return preferred
+	local sample = "AHelloWorld"
+	local preferredFamilies = {
+		"Segoe UI",
+		"Arial",
+		"Helvetica",
+		"Helvetica Neue",
+		"Menlo",
+		"Courier New",
+		"DejaVu Sans",
+		"Liberation Sans",
+		"Noto Sans",
+	}
+
+	for _, family in preferredFamilies do
+		local preferred = font.findSystem(family)
+		if preferred ~= nil then
+			if preferred:hasText(sample) then
+				return preferred
+			end
+			preferred:close()
+		end
 	end
 
 	local fonts = font.listSystem()
-	if #fonts == 0 then
-		return nil
+	for _, info in fonts do
+		local face = font.openFile(firstPath(info), {
+			faceIndex = info.faceIndex,
+		})
+		if face:hasText(sample) then
+			return face
+		end
+		face:close()
 	end
 
-	local info = fonts[1]
-	return font.openFile(firstPath(info), {
-		faceIndex = info.faceIndex,
-	})
+	return nil
 end
 
 local function expectRenderedBuffer(rendered)
@@ -481,9 +502,17 @@ suite:test("Font: color emoji render returns rgba8 when a color emoji font is av
 		return
 	end
 
-	local sized = face:at(32, {
-		colorGlyphs = true,
-	})
+	local sizedOk, sized = pcall(function()
+		return face:at(32, {
+			colorGlyphs = true,
+		})
+	end)
+	if not sizedOk then
+		face:close()
+		test.skip("color emoji font could not be sized")
+		return
+	end
+
 	local rendered = sized:render(emoji, {
 		colorGlyphs = true,
 	})

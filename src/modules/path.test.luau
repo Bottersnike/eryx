@@ -283,10 +283,10 @@ suite:test("top-level convenience helpers accept PathLike and mirror common fs.p
 	end, "path-top-level-canonicalize")
 end)
 
-suite:test("native filesystem APIs accept PathLike and os.cwd returns a Path", function()
+suite:test("native filesystem APIs accept PathLike and os.cwd returns a string", function()
 	local cwd = osmod.cwd()
-	test.expect(pathmod.isPath(cwd)):toBeTrue()
-	test.expect(type(tostring(cwd))):toBe("string")
+	test.expect(type(cwd)):toBe("string")
+	test.expect(cwd):toNotBe("")
 
 	tempfile.withTempDir(function(dir)
 		local dirPath = pathmod.new(dir)
@@ -306,8 +306,8 @@ suite:test("native filesystem APIs accept PathLike and os.cwd returns a Path", f
 
 		local before = osmod.cwd()
 		osmod.chdir(dirPath)
-		test.expect(pathmod.isPath(osmod.cwd())):toBeTrue()
-		test.expect(tostring(osmod.cwd())):toBe(tostring(dirPath))
+		test.expect(type(osmod.cwd())):toBe("string")
+		test.expect(tostring(pathmod.canonicalize(osmod.cwd()))):toBe(tostring(pathmod.canonicalize(dirPath)))
 		osmod.chdir(before)
 	end, "pathlike-native-interop")
 end)

@@ -33,34 +33,6 @@ static std::string luaL_checkpathlike(lua_State* L, int idx) {
     return std::string();
 }
 
-static void lua_pushpath(lua_State* L, const std::string& value) {
-    lua_getglobal(L, "require");
-    if (!lua_isfunction(L, -1)) {
-        lua_pop(L, 1);
-        luaL_error(L, "require() is unavailable while constructing a Path");
-        return;
-    }
-
-    lua_pushstring(L, "@eryx/path");
-    lua_call(L, 1, 1);
-    if (!lua_istable(L, -1)) {
-        lua_pop(L, 1);
-        luaL_error(L, "@eryx/path did not return a module table");
-        return;
-    }
-
-    lua_getfield(L, -1, "new");
-    if (!lua_isfunction(L, -1)) {
-        lua_pop(L, 2);
-        luaL_error(L, "@eryx/path.new is unavailable");
-        return;
-    }
-
-    lua_pushlstring(L, value.data(), value.size());
-    lua_call(L, 1, 1);
-    lua_remove(L, -2);  // remove module table, keep Path result
-}
-
 static uint32_t luaL_checkcolour(lua_State* L, int numArg) {
     double colour = luaL_checknumber(L, numArg);
 

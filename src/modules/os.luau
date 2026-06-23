@@ -1,7 +1,6 @@
 local path = require("@eryx/path")
 local stream = require("@eryx/stream")
 
-type Path = path.Path
 type PathLike = path.PathLike
 
 --[=[
@@ -296,7 +295,7 @@ end
 	Get the current working directory.
 	@return Absolute path to the current working directory.
 ]=]
-function os.cwd(): Path
+function os.cwd(): string
 	return nil :: any
 end
 
@@ -305,6 +304,14 @@ end
 	@param path New working directory path.
 ]=]
 function os.chdir(path: PathLike) end
+
+--[=[
+	Get the currently running Eryx binary.
+	@return Absolute path to the active Eryx runtime binary.
+]=]
+function os.currentEryxBinary(): string
+	return nil :: any
+end
 
 --[=[
 	Get the command line arguments for this script.
