@@ -115,6 +115,8 @@ ERYX_API bool eryx_runtime_host_init(EryxRuntimeHost* host, const char* sourceFi
 ERYX_API void eryx_runtime_host_close(EryxRuntimeHost* host) {
     if (!host) return;
 
+    eryx_shutdown_runtime(host->rt);
+
     if (host->GL) {
         lua_close(host->GL);
     }

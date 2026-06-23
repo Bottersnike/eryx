@@ -59,8 +59,18 @@ extern "C" {
 
 // CLI args offset – default 1 (skip just the exe name)
 static volatile std::sig_atomic_t g_process_interrupt_requested = 0;
+static std::atomic<uv_async_t*> g_process_interrupt_async{ nullptr };
 
-ERYX_API void eryx_request_process_interrupt() { g_process_interrupt_requested = 1; }
+ERYX_API void eryx_request_process_interrupt() {
+    g_process_interrupt_requested = 1;
+
+#ifdef _WIN32
+    uv_async_t* async = g_process_interrupt_async.load(std::memory_order_acquire);
+    if (async) {
+        uv_async_send(async);
+    }
+#endif
+}
 
 static bool eryx_consume_process_interrupt() {
     if (!g_process_interrupt_requested) {
@@ -76,11 +86,14 @@ static bool eryx_consume_runtime_interrupt(lua_State* L) {
         return false;
     }
 
+    EryxRuntime* rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
     if (eryx_consume_process_interrupt()) {
+        if (rt) {
+            rt->interruptRequested.store(false);
+        }
         return true;
     }
 
-    EryxRuntime* rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
     return rt && rt->interruptRequested.exchange(false);
 }
 
@@ -725,8 +738,28 @@ ERYX_API EryxRuntime* eryx_setup_runtime(uv_loop_t* loop, lua_State* GL) {
     rt->GL = GL;
     rt->loop = loop;
     rt->sigint = nullptr;
+    rt->interruptAsync = nullptr;
     rt->interruptRequested.store(false);
     lua_callbacks(GL)->interrupt = eryx_default_interrupt_callback;
+
+    if (loop) {
+        uv_async_t* async = new uv_async_t;
+        if (uv_async_init(loop, async, [](uv_async_t* handle) {
+                EryxRuntime* rt = (EryxRuntime*)handle->data;
+                if (!rt) {
+                    return;
+                }
+                eryx_interrupt_runtime(rt);
+            }) == 0) {
+            async->data = rt;
+            uv_unref((uv_handle_t*)async);
+            rt->interruptAsync = async;
+            g_process_interrupt_async.store(async, std::memory_order_release);
+        } else {
+            delete async;
+        }
+    }
+
     return rt;
 }
 ERYX_API void eryx_push_thread(EryxRuntime* rt, int ref, int nargs, bool inError) {
@@ -824,6 +857,18 @@ ERYX_API void eryx_interrupt_runtime(EryxRuntime* rt) {
             uv_close((uv_handle_t*)rt->sigint, [](uv_handle_t* h) { delete (uv_signal_t*)h; });
         }
         rt->sigint = nullptr;
+    }
+}
+
+ERYX_API void eryx_shutdown_runtime(EryxRuntime* rt) {
+    if (!rt) return;
+
+    if (rt->interruptAsync) {
+        uv_async_t* expected = rt->interruptAsync;
+        g_process_interrupt_async.compare_exchange_strong(expected, nullptr,
+                                                          std::memory_order_acq_rel);
+        rt->interruptAsync->data = nullptr;
+        rt->interruptAsync = nullptr;
     }
 }
 

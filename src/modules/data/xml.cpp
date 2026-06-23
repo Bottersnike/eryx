@@ -1,4 +1,4 @@
-// xml.cpp – XML module for Luau (element tree + XPath)
+// xml.cpp - XML module for Luau (element tree + XPath)
 // Wraps pugixml to provide DOM parsing, manipulation, serialisation and XPath queries.
 
 #include <sstream>

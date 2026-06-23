@@ -1,4 +1,4 @@
-// regex.cpp – PCRE2-based regular expression module for Luau
+// regex.cpp - PCRE2-based regular expression module for Luau
 // Exposes pattern compilation, matching, searching, splitting, and replacement.
 
 #include <cstring>

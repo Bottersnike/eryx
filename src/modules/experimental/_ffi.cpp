@@ -1,4 +1,4 @@
-// _ffi.cpp  –  Foreign Function Interface for Luau (Win32)
+// _ffi.cpp  -  Foreign Function Interface for Luau (Win32)
 //
 // Loads native shared libraries at runtime and calls their exported
 // functions via dyncall.  Provides typed values for safe marshalling
@@ -81,7 +81,7 @@ struct LuaForeignFunction {
     FARPROC pFunc;
 };
 
-// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
+// Forward declarations - dtors are defined later but referenced by lua_newuserdatadtor
 static void ffi_lib_dtor(void* ud);
 static void ffi_func_dtor(void* ud);
 static void ffi_type_dtor(void* ud);

@@ -332,7 +332,7 @@ end
 --   - Literal (|) and folded (>) block scalars
 --   - Comments (#)
 --   - Anchors (&name) and aliases (*name)
---   - Multi-document separators (--- / ...) – first document only
+--   - Multi-document separators (--- / ...) - first document only
 --   - Core schema type resolution (null, bool, int, float)
 
 type Line = {

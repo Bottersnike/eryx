@@ -1,4 +1,4 @@
-// _luau.cpp  –  Luau parser / AST module
+// _luau.cpp  -  Luau parser / AST module
 //
 // Exposes the Luau parser to Luau scripts, returning the AST as a nested
 // table structure that can be inspected, transformed, or pretty-printed.
@@ -7,7 +7,7 @@
 //
 //   luau.parse(source [, options])  -> ParseResult
 //
-//     source  : string         – Luau source code to parse
+//     source  : string         - Luau source code to parse
 //     options : { captureComments: boolean? }?
 //
 //     Returns:
@@ -67,7 +67,7 @@
 // using namespace Luau;
 
 // ---------------------------------------------------------------------------
-// Helpers – push a Location / Position onto the Lua stack
+// Helpers - push a Location / Position onto the Lua stack
 // ---------------------------------------------------------------------------
 static void push_position(lua_State* L, const Luau::Position& pos) {
     if (!lua_checkstack(L, 4))

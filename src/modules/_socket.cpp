@@ -1,4 +1,4 @@
-// _socket.cpp  –  Low-level BSD-style socket API for Luau (Win32 / Winsock2)
+// _socket.cpp  -  Low-level BSD-style socket API for Luau (Win32 / Winsock2)
 //
 // All sockets are permanently non-blocking at the OS level.  Async I/O is
 // driven by libuv's event loop via uv_poll_t (watching raw Winsock handles).
@@ -43,7 +43,7 @@
 #include "../runtime/lexception.hpp"
 #include "uv.h"
 
-// Forward declaration – dtor is defined later but referenced by lua_newuserdatadtor
+// Forward declaration - dtor is defined later but referenced by lua_newuserdatadtor
 static void sock_dtor(void* ud);
 
 // ---------------------------------------------------------------------------

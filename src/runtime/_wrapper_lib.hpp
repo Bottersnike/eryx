@@ -37,6 +37,7 @@ typedef struct EryxRuntime {
     std::deque<EryxThreadInfo> threads;
     std::unordered_map<int, uv_timer_t*> pendingTimers;  // threadRef -> timer (for cancel)
     uv_signal_t* sigint;                                 // optional signal handle for interrupt
+    uv_async_t* interruptAsync;                          // cross-thread process interrupt wakeup
     std::vector<std::pair<EryxInterruptCallback, void*>> interruptCallbacks;
     std::atomic_bool interruptRequested = false;
 
@@ -76,6 +77,7 @@ ERYX_API void eryx_register_interrupt_callback(EryxRuntime* rt, EryxInterruptCal
 ERYX_API void eryx_unregister_interrupt_callback(EryxRuntime* rt, EryxInterruptCallback cb,
                                                  void* ctx);
 ERYX_API int eryx_pcall(lua_State* L, int nargs, int nresults, int errfunc);
+ERYX_API void eryx_shutdown_runtime(EryxRuntime* rt);
 
 // Luau Analysis wrappers (lua_CFunction implementations living in LuauShared)
 ERYX_API int eryx_luau_check(lua_State* L);

@@ -214,7 +214,7 @@ static int l_read_header(lua_State* L) {
         pos += xlen;
     }
 
-    // FNAME (bit 3) – null-terminated
+    // FNAME (bit 3) - null-terminated
     if (flg & 0x08) {
         const char* start = (const char*)(d + pos);
         while (pos < len && d[pos]) pos++;
@@ -224,7 +224,7 @@ static int l_read_header(lua_State* L) {
         pos++;  // skip null
     }
 
-    // FCOMMENT (bit 4) – null-terminated
+    // FCOMMENT (bit 4) - null-terminated
     if (flg & 0x10) {
         const char* start = (const char*)(d + pos);
         while (pos < len && d[pos]) pos++;
@@ -234,7 +234,7 @@ static int l_read_header(lua_State* L) {
         pos++;
     }
 
-    // FHCRC (bit 1) – CRC-16 of the header bytes
+    // FHCRC (bit 1) - CRC-16 of the header bytes
     if (flg & 0x02) {
         if (pos + 2 > len) luaL_error(L, "gzip: truncated header (FHCRC)");
         uint16_t hcrc = (uint16_t)d[pos] | ((uint16_t)d[pos + 1] << 8);

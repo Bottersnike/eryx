@@ -1,5 +1,5 @@
 --[=[
-XML library – DOM parsing, manipulation, serialisation and XPath queries.
+XML library - DOM parsing, manipulation, serialisation and XPath queries.
 
 Backed by pugixml. Provides two core types:
 - [[XmlDocument]]: An XML document that owns the DOM tree.

@@ -54,7 +54,7 @@ end
 --[=[
 	Decodes a hexadecimal string back into a buffer.
 
-	Accepts both uppercase (`A–F`) and lowercase (`a–f`) hex digits.
+	Accepts both uppercase (`A-F`) and lowercase (`a-f`) hex digits.
 	The input string length must be even.
 
 	@param str The hex-encoded string.

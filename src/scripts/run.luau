@@ -422,10 +422,18 @@ local function launchResolvedScript(resolved: ResolvedScript, scriptArgs: { stri
 		table.insert(childArgs, arg)
 	end
 
-	local result = os.exec(exe, childArgs, {
-		cwd = resolved.cwd,
-		inheritStdio = true,
-	})
+	local ok, result = pcall(function()
+		return os.exec(exe, childArgs, {
+			cwd = resolved.cwd,
+			inheritStdio = true,
+		})
+	end)
+	if not ok then
+		if typeof(result) == "Exception" and result.type == "interrupt" then
+			os.exit(130)
+		end
+		error(result)
+	end
 	os.exit(result.code)
 end
 

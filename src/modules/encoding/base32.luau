@@ -2,7 +2,7 @@
 	Base32 encoding utilities.
 
 	Encodes and decodes binary `buffer` data using the standard Base32
-	alphabet (RFC 4648 § 6: `A–Z`, `2–7`). Padding characters are not
+	alphabet (RFC 4648 § 6: `A-Z`, `2-7`). Padding characters are not
 	emitted.
 
 	```luau

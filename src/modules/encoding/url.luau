@@ -2,7 +2,7 @@
 	URL percent-encoding utilities.
 
 	Encodes and decodes strings using percent-encoding as defined by
-	RFC 3986. Unreserved characters (`A–Z`, `a–z`, `0–9`, `-`, `_`, `.`, `~`)
+	RFC 3986. Unreserved characters (`A-Z`, `a-z`, `0-9`, `-`, `_`, `.`, `~`)
 	are left untouched; all others are replaced with `%XX` hex sequences.
 
 	```luau

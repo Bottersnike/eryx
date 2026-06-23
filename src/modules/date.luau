@@ -124,15 +124,15 @@ export type DateTime = setmetatable<
 		year: number,
 		--- Month of year, 1 = January, 12 = December
 		month: number,
-		--- Day of month, 1–31
+		--- Day of month, 1-31
 		day: number,
-		--- Hour of day, 0–23
+		--- Hour of day, 0-23
 		hour: number,
-		--- Minute of hour, 0–59
+		--- Minute of hour, 0-59
 		minute: number,
-		--- Second of minute, 0–59
+		--- Second of minute, 0-59
 		second: number,
-		--- Nanosecond of second, 0–999999999
+		--- Nanosecond of second, 0-999999999
 		nanosecond: number,
 
 		--- IANA timezone name (e.g. `"America/New_York"`) for named-zone instants,
@@ -239,7 +239,7 @@ end
 
 --[=[
 	Creates a DateTime from individual calendar fields in the given timezone.
-	Missing optional fields default to 0. The day is not clamped – passing an
+	Missing optional fields default to 0. The day is not clamped - passing an
 	invalid date (e.g. February 30) raises an error.
 	@param fields  Table with required keys `year`, `month`, `day` and optional
 				keys `hour`, `minute`, `second`, `nanosecond`.
@@ -321,7 +321,7 @@ function date.hours(n: number): Duration
 end
 
 --- Returns a Duration of exactly `n` days (always 24 × 3600 seconds; not
---- calendar-aware – use `adddays` on DateTime for wall-clock days).
+--- calendar-aware - use `adddays` on DateTime for wall-clock days).
 function date.days(n: number): Duration
 	return nil :: any
 end

@@ -795,7 +795,7 @@ static int dt_addyears(lua_State* L) {
     return 1;
 }
 
-// date.parse(str, fmt, zone?) – parse using a std::chrono format string
+// date.parse(str, fmt, zone?) - parse using a std::chrono format string
 static int dt_relative(lua_State* L) {
     LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
     tzdate::ZonedInstant base;

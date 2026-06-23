@@ -1,4 +1,4 @@
-// stdio.cpp – Standard I/O module for Luau
+// stdio.cpp - Standard I/O module for Luau
 // Provides synchronous and asynchronous access to stdin, stdout, and stderr.
 
 #include <cerrno>

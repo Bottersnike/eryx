@@ -16,8 +16,8 @@ LUAU_MODULE_INFO()
 
 // ---------------------------------------------------------------------------
 // compress(data, quality?, lgwin?, mode?) -> buffer
-//   quality : 0 (fastest) – 11 (best). Default BROTLI_DEFAULT_QUALITY (11).
-//   lgwin   : log2 of the LZ77 window size (10–24). Default BROTLI_DEFAULT_WINDOW (22).
+//   quality : 0 (fastest) - 11 (best). Default BROTLI_DEFAULT_QUALITY (11).
+//   lgwin   : log2 of the LZ77 window size (10-24). Default BROTLI_DEFAULT_WINDOW (22).
 //             Larger windows improve compression but use more memory.
 //   mode    : MODE_GENERIC (0), MODE_TEXT (1), MODE_FONT (2).
 //             TEXT enables context modelling for UTF-8; FONT is for WOFF2.

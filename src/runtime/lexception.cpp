@@ -379,6 +379,7 @@ std::string getSourceLine(const char* source, int line) {
 }
 
 void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initialLevel) {
+    bool isInterrupt = exception->type && strcmp(exception->type, ETYPE_INTERRUPT) == 0;
     lua_Debug ar;
     std::vector<LuaFrame> newFrames;
     int remainingSkip = exception->pendingTracebackSkip;
@@ -395,7 +396,7 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
 
         // An =[C] at top level suggests we might have a unique type of error
         if (strcmp(arSource, "=[C]") == 0) {
-            if (level == initialLevel) {
+            if (level == initialLevel && !isInterrupt) {
                 if (arName && strcmp(arName, "error") == 0) {
                     exception->type = ETYPE_THROWN;
                     continue;
@@ -431,6 +432,43 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
     }
 
     if (!exception->traceback.empty()) {
+        if (newFrames.empty()) {
+            return;
+        }
+
+        bool duplicateFrames = exception->traceback.size() == newFrames.size();
+        if (duplicateFrames) {
+            for (size_t i = 0; i < newFrames.size(); ++i) {
+                const LuaFrame& lhs = newFrames[i];
+                const LuaFrame& rhs = exception->traceback[i];
+                if (lhs.source != rhs.source || lhs.line != rhs.line ||
+                    lhs.function != rhs.function) {
+                    duplicateFrames = false;
+                    break;
+                }
+            }
+        }
+        if (duplicateFrames) {
+            return;
+        }
+
+        bool duplicateRethrow = exception->traceback.size() > newFrames.size() &&
+                                exception->traceback[newFrames.size()].line == RETHROW_MAGIC;
+        if (duplicateRethrow) {
+            for (size_t i = 0; i < newFrames.size(); ++i) {
+                const LuaFrame& lhs = newFrames[i];
+                const LuaFrame& rhs = exception->traceback[i];
+                if (lhs.source != rhs.source || lhs.line != rhs.line ||
+                    lhs.function != rhs.function) {
+                    duplicateRethrow = false;
+                    break;
+                }
+            }
+        }
+        if (duplicateRethrow) {
+            return;
+        }
+
         // RETHROW: prepend
         LuaFrame rethrowFrame = { "", "", RETHROW_MAGIC, "", "" };
         newFrames.push_back(rethrowFrame);

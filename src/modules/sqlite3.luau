@@ -1,5 +1,5 @@
 --[=[
-SQLite3 library – embedded relational database.
+SQLite3 library - embedded relational database.
 
 Wraps the SQLite3 C library to provide full SQL database access from Luau.
 

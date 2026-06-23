@@ -1,4 +1,4 @@
-// sqlite3.cpp – SQLite3 module for Luau
+// sqlite3.cpp - SQLite3 module for Luau
 // Wraps the SQLite amalgamation to provide embedded relational database access.
 
 #include "sqlite3.h"
@@ -51,7 +51,7 @@ static LuaStatement* check_stmt(lua_State* L, int idx) {
     return (LuaStatement*)luaL_checkudata(L, idx, MT_STATEMENT);
 }
 
-// Forward declarations – dtors are defined later but referenced by lua_newuserdatadtor
+// Forward declarations - dtors are defined later but referenced by lua_newuserdatadtor
 static void db_dtor(void* ud);
 static void stmt_dtor(void* ud);
 

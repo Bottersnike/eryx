@@ -21,7 +21,7 @@ static int l_compress(lua_State* L) {
     const void* src = luaL_checkbuffer(L, 1, &srcLen);
     int blockSize = (int)luaL_optinteger(L, 2, 9);
 
-    if (blockSize < 1 || blockSize > 9) luaL_error(L, "bzip2: block_size must be 1–9");
+    if (blockSize < 1 || blockSize > 9) luaL_error(L, "bzip2: block_size must be 1-9");
 
     // bzip2 worst-case: n * 1.01 + 600 bytes
     unsigned int bound = (unsigned int)(srcLen * 1.01 + 700);

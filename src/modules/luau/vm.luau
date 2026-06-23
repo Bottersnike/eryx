@@ -20,13 +20,13 @@
 local native = require("@eryx/luau/_vm_native")
 
 export type CompileOptions = {
-	--- Optimization level (0–2). Higher levels enable more aggressive inlining and dead-code elimination. Default is 1.
+	--- Optimization level (0-2). Higher levels enable more aggressive inlining and dead-code elimination. Default is 1.
 	optimizationLevel: number?,
-	--- Debug info level (0–2). 0 = none, 1 = line numbers only (default), 2 = line numbers + local/upvalue names.
+	--- Debug info level (0-2). 0 = none, 1 = line numbers only (default), 2 = line numbers + local/upvalue names.
 	debugLevel: number?,
-	--- Coverage instrumentation level (0–2). 0 = none (default), 1 = statement coverage, 2 = expression coverage.
+	--- Coverage instrumentation level (0-2). 0 = none (default), 1 = statement coverage, 2 = expression coverage.
 	coverageLevel: number?,
-	--- Type info annotation level (0–1). When 1, tags locals and upvalues with type info for native codegen. Default is 0.
+	--- Type info annotation level (0-1). When 1, tags locals and upvalues with type info for native codegen. Default is 0.
 	typeInfoLevel: number?,
 	--- Luau fast-flag overrides applied before compilation. Values may be booleans, numbers, or their string representations.
 	flags: { [string]: boolean | number | string }?,
@@ -38,9 +38,9 @@ export type LoadOptions = {
 }
 
 export type DisassembleOptions = {
-	--- Optimization level used when compiling before disassembly (0–2). Default is 1.
+	--- Optimization level used when compiling before disassembly (0-2). Default is 1.
 	optimizationLevel: number?,
-	--- Debug info level used when compiling (0–2). Default is 1.
+	--- Debug info level used when compiling (0-2). Default is 1.
 	debugLevel: number?,
 	--- If true, include local variable liveness ranges in the listing.
 	showLocals: boolean?,
