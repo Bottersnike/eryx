@@ -264,7 +264,8 @@ local function buildSidebarArticleSections(
 	getLink: (article: any) -> string,
 	sectionTitles: { [string]: string }?,
 	folderTitles: { [string]: string }?,
-	folderOrder: { [string]: number }?
+	folderOrder: { [string]: number }?,
+	includeIndex: boolean?
 ): ArticleSidebarResult
 	-- Build the full tree
 	local tree: { [string]: ANode } = {}
@@ -272,7 +273,10 @@ local function buildSidebarArticleSections(
 
 	for _, articleInfo in articles do
 		local localName = (articleInfo :: any).localName or articleInfo.name
-		if localName == "index" then
+		-- The "index" article is a section's landing page. Skip it for the site
+		-- root (it's the homepage, reachable via the logo/header), but surface it
+		-- for nested sections so the landing is reachable from the sidebar.
+		if localName == "index" and not includeIndex then
 			continue
 		end
 		local parts: { string } = {}
@@ -292,6 +296,10 @@ local function buildSidebarArticleSections(
 				cur[part].name = (articleInfo :: any).key or articleInfo.name
 				cur[part].sitePath = getLink(articleInfo.article)
 				cur[part].title = (articleInfo.article :: any).title
+				-- Pin the section landing to the top of the sidebar.
+				if localName == "index" then
+					cur[part].insertionOrder = 0
+				end
 			end
 			cur = cur[part].children
 		end

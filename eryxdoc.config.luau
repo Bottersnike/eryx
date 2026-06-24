@@ -29,20 +29,6 @@ return {
 			label = "Libraries",
 			children = {
 				{
-					id = "http",
-					label = "HTTP",
-					mount = "/http",
-					headerHref = "/http/overview",
-					articles = "./docs/http",
-				},
-				{
-					id = "crypto",
-					label = "Cryptography",
-					mount = "/crypto",
-					headerHref = "/crypto/overview",
-					articles = "./docs/crypto",
-				},
-				{
 					id = "reference",
 					label = "All Libraries",
 					mount = "/api",
@@ -52,6 +38,27 @@ return {
 						title = "All Libraries",
 						description = "Browse all available Eryx libraries.",
 					},
+				},
+				{
+					id = "http",
+					label = "HTTP",
+					mount = "/http",
+					headerHref = "/http/overview",
+					articles = "./docs/libs/http",
+				},
+				{
+					id = "crypto",
+					label = "Cryptography",
+					mount = "/crypto",
+					headerHref = "/crypto/overview",
+					articles = "./docs/libs/crypto",
+				},
+				{
+					id = "ip",
+					label = "IP Addresses",
+					mount = "/ip",
+					headerHref = "/ip",
+					articles = "./docs/libs/ip",
 				},
 			},
 		},
@@ -64,6 +71,7 @@ return {
 					label = "Markdown",
 					mount = "/packages/markdown",
 					modules = "./packages/markdown/src",
+					articles = "./docs/packages/markdown",
 					prefix = "@markdown",
 					landing = {
 						title = "Markdown Package",

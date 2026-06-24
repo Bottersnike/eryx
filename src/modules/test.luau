@@ -419,7 +419,7 @@ function Expecter.toContain(self: Expecter, item: any)
 	local val = self.values[1]
 	if type(val) == "string" then
 		if not string.find(val, tostring(item), 1, true) then
-			error(`Expected string to contain {fmt(item)}`, 2)
+			error(`Expected string to contain {fmt(item)}. Saw {fmt(val)}`, 2)
 		end
 	elseif type(val) == "table" then
 		for _, v in val do
@@ -427,7 +427,7 @@ function Expecter.toContain(self: Expecter, item: any)
 				return
 			end
 		end
-		error(`Expected table to contain {fmt(item)}`, 2)
+		error(`Expected table to contain {fmt(item)}. Saw {fmt(val)}`, 2)
 	else
 		error(`ToContain is not supported for type "{type(val)}"`, 2)
 	end
@@ -648,23 +648,33 @@ end
 -- ── runAll ───────────────────────────────────────────────────────────────────
 
 --[=[
-	Walk `path` recursively for files matching `*.test.luau`.
-	Each such file must `return` a `Suite`.
+	Run a single test-pass over one or more files and/or directories.
+
+	`paths` may be a single path or a list mixing files and directories.
+	Directories are walked recursively for files matching `*.test.luau`;
+	explicitly named files are run as-is (their suffix is not checked).
+	Each test file must `return` a `Suite`. Results across every path are
+	aggregated into one unified summary.
 
 	```luau
-	-- Run all tests:
+	-- Run all tests under a directory:
 	test.runAll("tests/")
+
+	-- Run a mix of directories and individual files in one pass:
+	test.runAll({ "tests/", "src/foo.test.luau" })
 
 	-- Run only tests with "crypto" in the name:
 	test.runAll("tests/", { filter = "crypto" })
 	```
 
-	@param path The directory to search for test files.
+	@param paths A path, or a list of files/directories, to test.
 	@param options Run options (exitOnFail, filter).
 ]=]
-function test.runAll(path: string, options: RunOptions?)
+function test.runAll(paths: string | { string }, options: RunOptions?)
 	local opts: RunOptions = options or {}
 	local exitOnFail = if opts.exitOnFail ~= nil then opts.exitOnFail else true
+
+	local pathList: { string } = if type(paths) == "string" then { paths } else paths
 
 	local totalPassed = 0
 	local totalFailed = 0
@@ -675,7 +685,35 @@ function test.runAll(path: string, options: RunOptions?)
 	type FailEntry = { suite: string, name: string, err: string }
 	local failures: { FailEntry } = {}
 
-	stdio.write(bold(`\nRunning tests in {path}\n`))
+	if #pathList == 1 then
+		stdio.write(bold(`\nRunning tests in {pathList[1]}\n`))
+	else
+		stdio.write(bold(`\nRunning tests in {#pathList} paths\n`))
+	end
+
+	local function runFile(full: string)
+		local ok, suite = pcall(load_test_file, full)
+		if not ok then
+			stdio.write(red(`  Failed to load {full}:\n  {fmtErr(suite)}\n\n`))
+			totalFailed += 1
+			return
+		end
+		if not suite then
+			return
+		end
+
+		local totals = suite:run(opts.filter, true)
+		totalPassed += totals.passed
+		totalFailed += totals.failed
+		totalSkipped += totals.skipped
+		suiteCount += 1
+		for _, r in suite.results do
+			if not r.passed and not r.skipped then
+				local fe: FailEntry = { suite = suite.name, name = r.name, err = (r.err or "") :: string }
+				table.insert(failures, fe)
+			end
+		end
+	end
 
 	local function walk(dir: string)
 		local entries = fs.listDir(dir)
@@ -685,34 +723,21 @@ function test.runAll(path: string, options: RunOptions?)
 			if fs.isDirectory(full) then
 				walk(full)
 			elseif entry:match("%.test%.luau$") then
-				local ok, suite = pcall(function()
-					return load_test_file(full)
-				end)
-				if not ok then
-					stdio.write(red(`  Failed to load {full}:\n  {fmtErr(suite)}\n\n`))
-					totalFailed += 1
-					continue
-				end
-				if not suite then
-					continue
-				end
-
-				local totals = suite:run(opts.filter, true)
-				totalPassed += totals.passed
-				totalFailed += totals.failed
-				totalSkipped += totals.skipped
-				suiteCount += 1
-				for _, r in suite.results do
-					if not r.passed and not r.skipped then
-						local fe: FailEntry = { suite = suite.name, name = r.name, err = (r.err or "") :: string }
-						table.insert(failures, fe)
-					end
-				end
+				runFile(full)
 			end
 		end
 	end
 
-	walk(path)
+	for _, p in pathList do
+		if fs.isDirectory(p) then
+			walk(p)
+		elseif fs.isFile(p) then
+			runFile(p)
+		else
+			stdio.write(red(`  {p}: not a file or directory\n\n`))
+			totalFailed += 1
+		end
+	end
 
 	-- ── Summary ──────────────────────────────────────────────────────────────
 	local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)

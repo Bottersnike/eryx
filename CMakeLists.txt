@@ -528,6 +528,7 @@ endif()
 target_compile_definitions(eryx PRIVATE LUAU_GIT_HASH="${LUAU_GIT_HASH}")
 target_compile_definitions(eryx PRIVATE LUAU_APPROX_VERSION="${LUAU_APPROX_VERSION}")
 target_compile_definitions(eryx PRIVATE ERYX_GIT_HASH="${ERYX_GIT_HASH}")
+target_compile_definitions(eryx PRIVATE ERYX_VERSION_DISPLAY="${ERYX_VERSION_DISPLAY}")
 
 target_link_libraries(eryx PRIVATE
     EryxShared

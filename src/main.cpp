@@ -624,7 +624,7 @@ void
 }
 
 static void print_version() {
-    std::cout << "Eryx (Luau " << LUAU_APPROX_VERSION << ", "
+    std::cout << "Eryx " << ERYX_VERSION_DISPLAY << " (Luau " << LUAU_APPROX_VERSION << ", "
               << std::string(LUAU_GIT_HASH).substr(0, 8) << ")" << std::endl;
 }
 
@@ -918,7 +918,8 @@ int main_repl(const RuntimeExecutionConfig& runtimeConfig) {
     install_repl_hangup_handler();
 #endif
 
-    fprintf(stdout, "Eryx (Luau %s, %.8s)\n", LUAU_APPROX_VERSION, LUAU_GIT_HASH);
+    fprintf(stdout, "Eryx %s (Luau %s, %.8s)\n", ERYX_VERSION_DISPLAY, LUAU_APPROX_VERSION,
+            LUAU_GIT_HASH);
     std::cout << "Type \"help\" for help" << std::endl;
 
     lua_State* GL = eryx_initialise_environment(nullptr);

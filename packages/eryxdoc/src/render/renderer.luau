@@ -1075,6 +1075,10 @@ function Renderer.renderPage(
 	local folderMeta = if currentSection and self.folderMetaBySectionId
 		then self.folderMetaBySectionId[currentSection.id]
 		else nil
+	-- The site root section is mounted at "/"; its index.md is the homepage and
+	-- should stay out of the sidebar. Nested sections surface their index as a
+	-- landing link.
+	local isRootSection = currentSection == nil or currentSection.mount == nil or currentSection.mount == "/"
 	local articleSections = sidebar.buildSidebarArticleSections(
 		filteredArticles,
 		pageName,
@@ -1083,7 +1087,8 @@ function Renderer.renderPage(
 		end,
 		if folderMeta then folderMeta.sectionTitles else nil,
 		if folderMeta then folderMeta.folderTitles else nil,
-		if folderMeta then folderMeta.folderOrder else nil
+		if folderMeta then folderMeta.folderOrder else nil,
+		not isRootSection
 	)
 	local primaryLinks, drawerLinks = buildHeaderNavigation(self, pageContext)
 	local isHomePage = pageContext == nil

@@ -2310,10 +2310,9 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
         lua_setglobal(L, "_FILE");
     }
 
-    // Set _VERSION
-    std::string version = LUAU_APPROX_VERSION;
-    version += "-";
-    version += ERYX_GIT_HASH;
+    // Set _VERSION. This is the Eryx runtime version (e.g. "0.1.0", or
+    // "0.1.0+5.g736ffca" for a build past the tag), not the Luau version.
+    std::string version = ERYX_VERSION_DISPLAY;
     lua_pushstring(L, ("eryx " + version).c_str());
     lua_setglobal(L, "_VERSION");
 
@@ -2326,20 +2325,25 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     lua_newtable(L);  // version
     lua_pushstring(L, version.c_str());
     lua_setfield(L, -2, "display");
-    // We don't have proper semantic versions yet
-    // lua_newtable(L);
-    // lua_pushnumber(L, -1);
-    // lua_setfield(L, -2, "major");
-    // lua_pushnumber(L, -1);
-    // lua_setfield(L, -2, "minor");
-    // lua_pushnumber(L, -1);
-    // lua_setfield(L, -2, "patch");
-    // lua_pushstring(L, "");
-    // lua_setfield(L, -2, "prerelease");
-    // lua_pushstring(L, "");
-    // lua_setfield(L, -2, "build");
-    // lua_setreadonly(L, -1, true);
-    // lua_setfield(L, -2, "semantic");
+    lua_newtable(L);  // semantic
+    lua_pushnumber(L, ERYX_VERSION_MAJOR);
+    lua_setfield(L, -2, "major");
+    lua_pushnumber(L, ERYX_VERSION_MINOR);
+    lua_setfield(L, -2, "minor");
+    lua_pushnumber(L, ERYX_VERSION_PATCH);
+    lua_setfield(L, -2, "patch");
+    // prerelease is always omitted for now (spec: type it as nil).
+    lua_pushnil(L);
+    lua_setfield(L, -2, "prerelease");
+    // build metadata: empty on an exact release, "<distance>.g<hash>" otherwise.
+    if (ERYX_VERSION_BUILD[0] != '\0') {
+        lua_pushstring(L, ERYX_VERSION_BUILD);
+    } else {
+        lua_pushnil(L);
+    }
+    lua_setfield(L, -2, "build");
+    lua_setreadonly(L, -1, true);
+    lua_setfield(L, -2, "semantic");
     lua_newtable(L);  // git
     lua_pushstring(L, "https://github.com/Bottersnike/eryx");
     lua_setfield(L, -2, "url");

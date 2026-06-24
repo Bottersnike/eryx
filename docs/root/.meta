@@ -1,6 +1,6 @@
 children:
   - getting-started
-  - cli
+  - guides
   - writing-code
-  - libs
-  - misc
+  - cli
+  - reference

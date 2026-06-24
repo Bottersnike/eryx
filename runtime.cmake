@@ -73,6 +73,55 @@ if(NOT ERYX_GIT_BRANCH_RESULT EQUAL 0)
     set(ERYX_GIT_BRANCH "unknown")
 endif()
 
+# Inject eryx semantic version.
+#
+# We derive it from `git describe` against version tags only. The `--match
+# "v[0-9]*"` filter is important: CI keeps a moving `nightly` tag on every
+# master commit, and without the filter `git describe` would report that
+# instead of the real release tag. `--long` forces the consistent
+# `vMAJOR.MINOR.PATCH-DISTANCE-gHASH` form even when HEAD is exactly on a tag
+# (distance 0), so we only have one shape to parse.
+execute_process(
+    COMMAND ${GIT_EXECUTABLE} describe --tags --long --match "v[0-9]*"
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    RESULT_VARIABLE ERYX_DESCRIBE_RESULT
+    OUTPUT_VARIABLE ERYX_DESCRIBE
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+
+if(ERYX_DESCRIBE_RESULT EQUAL 0 AND ERYX_DESCRIBE MATCHES "^v([0-9]+)\\.([0-9]+)\\.([0-9]+)-([0-9]+)-g([0-9a-f]+)$")
+    set(ERYX_VERSION_MAJOR ${CMAKE_MATCH_1})
+    set(ERYX_VERSION_MINOR ${CMAKE_MATCH_2})
+    set(ERYX_VERSION_PATCH ${CMAKE_MATCH_3})
+    set(ERYX_VERSION_DISTANCE ${CMAKE_MATCH_4})
+
+    if(ERYX_VERSION_DISTANCE EQUAL 0)
+        # Exactly on a release tag: clean version, no build metadata.
+        set(ERYX_VERSION_IS_RELEASE 1)
+        set(ERYX_VERSION_BUILD "")
+        set(ERYX_VERSION_DISPLAY "${ERYX_VERSION_MAJOR}.${ERYX_VERSION_MINOR}.${ERYX_VERSION_PATCH}")
+    else()
+        # Post-tag dev build: keep the released semver and record the commit
+        # distance + hash as semver build metadata (cf. _RUNTIME spec).
+        set(ERYX_VERSION_IS_RELEASE 0)
+        set(ERYX_VERSION_BUILD "${ERYX_VERSION_DISTANCE}.g${ERYX_GIT_HASH}")
+        set(ERYX_VERSION_DISPLAY "${ERYX_VERSION_MAJOR}.${ERYX_VERSION_MINOR}.${ERYX_VERSION_PATCH}+${ERYX_VERSION_BUILD}")
+    endif()
+else()
+    # No reachable version tag (or no git): we can't know the semantic version,
+    # so report 0.0.0 with the commit hash as build metadata.
+    set(ERYX_VERSION_MAJOR 0)
+    set(ERYX_VERSION_MINOR 0)
+    set(ERYX_VERSION_PATCH 0)
+    set(ERYX_VERSION_DISTANCE 0)
+    set(ERYX_VERSION_IS_RELEASE 0)
+    set(ERYX_VERSION_BUILD "g${ERYX_GIT_HASH}")
+    set(ERYX_VERSION_DISPLAY "0.0.0+${ERYX_VERSION_BUILD}")
+endif()
+
+message(STATUS "Eryx version: ${ERYX_VERSION_DISPLAY} (release=${ERYX_VERSION_IS_RELEASE})")
+
 # In shared mode (normal or hybrid), Luau symbols must be dllexported so
 # EryxShared can re-export them.  In full-embed mode this is unnecessary.
 if(ERYX_EMBED AND NOT ERYX_HYBRID)
@@ -152,6 +201,12 @@ target_compile_definitions(EryxShared PRIVATE
     LUAU_VERSION_MINOR=${LUAU_VERSION_MINOR}
     ERYX_GIT_HASH="${ERYX_GIT_HASH}"
     ERYX_GIT_BRANCH="${ERYX_GIT_BRANCH}"
+    ERYX_VERSION_MAJOR=${ERYX_VERSION_MAJOR}
+    ERYX_VERSION_MINOR=${ERYX_VERSION_MINOR}
+    ERYX_VERSION_PATCH=${ERYX_VERSION_PATCH}
+    ERYX_VERSION_IS_RELEASE=${ERYX_VERSION_IS_RELEASE}
+    ERYX_VERSION_DISPLAY="${ERYX_VERSION_DISPLAY}"
+    ERYX_VERSION_BUILD="${ERYX_VERSION_BUILD}"
 )
 
 if(NOT ERYX_EMBED OR ERYX_HYBRID)

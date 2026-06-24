@@ -2,6 +2,7 @@ title: Writing code with Eryx
 children:
   - intro
   - exceptions
+  - globals
+  - unicode
   - module-resolution
   - vfs-behaviour
-  - style-guide

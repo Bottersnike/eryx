@@ -47,7 +47,7 @@ static void push_entry_info(lua_State* L, mz_zip_file* info) {
     lua_pushinteger(L, (lua_Integer)info->uncompressed_size);
     lua_setfield(L, -2, "size");
     lua_pushinteger(L, (lua_Integer)info->compressed_size);
-    lua_setfield(L, -2, "compressed_size");
+    lua_setfield(L, -2, "compressedSize");
     lua_pushinteger(L, (lua_Integer)info->compression_method);
     lua_setfield(L, -2, "method");
     lua_pushinteger(L, (lua_Integer)info->crc);

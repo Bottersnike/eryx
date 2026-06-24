@@ -5,6 +5,12 @@ summary: Getting starting with Eryx
 
 Welcome to the Eryx documentation. This site contains a collection of high level tutorials and guides, along with a complete API reference for all libraries provided with Eryx.
 
+This site is broken up into four core sections:
+- General Eryx documentation (you are here!);
+- A complete reference for all available libraries, available at [All Libraries](/api);
+- Library-specific documentation for some of the more complex libraries, available under the Libraries tab in the header;
+- Documentation for first-party packages, such as `eryxdoc` which was used to generate this very website.
+
 Eryx's standard library covers a vast array of functions and utilities you are likely to need when writing code. The search bar at the top of this site can be used to quickly find what you are looking for.
 
 ## Installing Eryx
@@ -27,6 +33,4 @@ To run a script, simply use:
 eryx script.luau
 ```
 
-The `run` command (`eryx run script.luau`) is provided as an alias.
-
-Two other commands exist, `eryx compile` and `eryx test`. These will be explored in subsequent sections.
+The `run` command (`eryx run script.luau`) is provided as an alias, but also supports running named scripts either from your local `eryx.toml` or any installed packages.
