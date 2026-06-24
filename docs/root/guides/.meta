@@ -1,7 +1,7 @@
 title: Guides
 children:
   - filesystem
-  - tasks
+  - parallel
   - testing
   - package-management
   - distribution
