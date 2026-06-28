@@ -2123,7 +2123,7 @@ end)
 suite:test("eryx --version prints version information", function()
 	local res = runEryx(WORKSPACE_ROOT, { "--version" })
 	test.expect(res.code):toBe(0)
-	test.expect(normalizeNewlines(res.stdout)):toContain("Eryx (Luau ")
+	test.expect(normalizeNewlines(res.stdout)):toMatch("^Eryx .+ %(Luau ")
 end)
 
 suite:test("eryx run --help prints run usage", function()

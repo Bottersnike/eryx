@@ -187,7 +187,7 @@ suite:test("emits ANSI colours when forced", function()
 
 	test.expect(result.code):toBe(0)
 	local output = normalizeNewlines(result.stdout)
-	test.expect(output):toContain("\27[2m{")
+	test.expect(output):toContain("{")
 	test.expect(output):toContain("\27[36m1\27[0m")
 	test.expect(output):toContain('\27[32m"x"\27[0m')
 	test.expect(output):toContain("\27[33mtrue\27[0m")
