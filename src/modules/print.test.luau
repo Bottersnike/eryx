@@ -58,7 +58,13 @@ end)
 
 suite:test("prints top-level strings plain and nested strings quoted", function()
 	test.expect(runPlain([[print("plain", { message = "hello\nworld", tab = "\t" })]]))
-		:toBe("plain {\n" .. '    message = "hello\\nworld",\n' .. '    tab = "\\t",\n' .. "}\n")
+		:toBe(
+			"plain {\n"
+				.. '    message = "hello\\n" ..\n'
+				.. '              "world",\n'
+				.. '    tab = "\\t",\n'
+				.. "}\n"
+		)
 end)
 
 suite:test("formats arrays and maps deterministically", function()
@@ -137,6 +143,21 @@ print(t)
 	)
 end)
 
+suite:test("marks frozen tables", function()
+	test.expect(runPlain([[
+print(table.freeze({ value = 1 }))
+]])):toBe("{<frozen>\n" .. "    value = 1,\n" .. "}\n")
+end)
+
+suite:test("stdio.configurePrint can hide frozen markers", function()
+	test.expect(runPlain([[
+local stdio = require("@eryx/stdio")
+local config = stdio.configurePrint({ showFrozen = false })
+print(config.showFrozen)
+print(table.freeze({ value = 1 }))
+]])):toBe("false\n" .. "{\n" .. "    value = 1,\n" .. "}\n")
+end)
+
 suite:test("formats named and anonymous functions with pointers", function()
 	local output = runPlain([[
 local function namedPrintTarget() end
@@ -189,6 +210,40 @@ print(setmetatable({}, { tag = "meta" }))
 	local output = normalizeNewlines(result.stdout)
 	test.expect(output):toMatch("\27%[31mfunction namedColorTarget<0x%x+>\27%[0m")
 	test.expect(output):toContain("\27[31m@metatable\27[0m")
+end)
+
+suite:test("stdio.configurePrint controls indentation and compact mode", function()
+	local output = runPlain([[
+local stdio = require("@eryx/stdio")
+local config = stdio.configurePrint({ indentation = 2 })
+print(config.indentation, config.multiline)
+print({ child = { value = 1 } })
+stdio.configurePrint({ multiline = false })
+print({ child = { value = 1 } })
+]])
+
+	test.expect(output):toBe(
+		"2 true\n"
+			.. "{\n"
+			.. "  child = {\n"
+			.. "    value = 1,\n"
+			.. "  },\n"
+			.. "}\n"
+			.. "{ child = { value = 1 } }\n"
+	)
+end)
+
+suite:test("stdio.configurePrint controls entry and depth limits", function()
+	local output = runPlain([[
+local stdio = require("@eryx/stdio")
+stdio.configurePrint({ maxEntries = 2, maxDepth = 2 })
+print({ a = 1, b = 2, c = 3, child = { nested = { value = 4 } } })
+local config = stdio.configurePrint({ maxEntries = -1, maxDepth = -1 })
+print(config.maxEntries, config.maxDepth)
+]])
+
+	test.expect(output)
+		:toBe("{\n" .. "    a = 1,\n" .. "    b = 2,\n" .. "    ... 2 entries omitted,\n" .. "}\n" .. "nil nil\n")
 end)
 
 return suite

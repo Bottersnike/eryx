@@ -37,6 +37,34 @@ export type TerminalSize = {
 	rows: number,
 }
 
+export type PrintColorMode = "auto" | "always" | "never"
+
+export type PrintConfig = {
+	indentation: number,
+	multiline: boolean,
+	multilineStrings: boolean,
+	color: PrintColorMode,
+	maxEntries: number?,
+	maxDepth: number?,
+	showMetatables: boolean,
+	indentGuides: boolean,
+	showFrozen: boolean,
+}
+
+export type PrintConfigOptions = {
+	indentation: number?,
+	multiline: boolean?,
+	multilineStrings: boolean?,
+	color: PrintColorMode?,
+	--- Maximum table entries printed per table. Use -1 to reset to unlimited.
+	maxEntries: number?,
+	--- Maximum child depth printed. Use -1 to reset to unlimited.
+	maxDepth: number?,
+	showMetatables: boolean?,
+	indentGuides: boolean?,
+	showFrozen: boolean?,
+}
+
 -- TODO: Stdio needs flushSync, then we can use StreamThatCanFlush
 
 export type StandardStreamControl = {
@@ -167,6 +195,15 @@ end
 	Returns the visible terminal size for stdout, when available.
 ]=]
 function stdio.terminalSize(): TerminalSize?
+	return nil :: any
+end
+
+--[=[
+	Configures Eryx's global `print` formatter and returns the effective config.
+
+	Passing nil returns the current config without changing it.
+]=]
+function stdio.configurePrint(options: PrintConfigOptions?): PrintConfig
 	return nil :: any
 end
 

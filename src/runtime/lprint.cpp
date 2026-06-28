@@ -3,8 +3,11 @@
 #include <cinttypes>
 #include <cstdint>
 #include <cstdlib>
+#include <mutex>
 #include <optional>
 #include <unordered_set>
+
+#include "_wrapper_lib.hpp"
 
 namespace {
 
@@ -19,8 +22,12 @@ struct StackGuard {
 
 struct FormatContext {
     bool colorsEnabled = false;
+    EryxPrintConfig config;
     std::unordered_set<const void*> activeTables;
 };
+
+static std::mutex g_printConfigMutex;
+static EryxPrintConfig g_printConfig;
 
 struct TableEntry {
     int keyRef = LUA_NOREF;
@@ -43,10 +50,14 @@ enum class Style {
     Yellow,
     Magenta,
     Cyan,
+    Blue,
     Red,
 };
 
-static bool should_use_color() {
+static bool should_use_color(EryxPrintColorMode mode) {
+    if (mode == EryxPrintColorMode::Always) return true;
+    if (mode == EryxPrintColorMode::Never) return false;
+
     if (std::getenv("NO_COLOR")) return false;
     if (std::getenv("FORCE_COLOR")) return true;
     return uv_guess_handle(1) == UV_TTY;
@@ -64,6 +75,8 @@ static const char* style_code(Style style) {
             return "35";
         case Style::Cyan:
             return "36";
+        case Style::Blue:
+            return "34";
         case Style::Red:
             return "31";
     }
@@ -83,7 +96,41 @@ static std::string apply_style(FormatContext& ctx, Style style, std::string text
     return out;
 }
 
-static std::string indent(int depth) { return std::string(static_cast<size_t>(depth) * 4, ' '); }
+static bool can_print_utf8_guides() {
+#ifdef _WIN32
+    if (uv_guess_handle(1) == UV_TTY) {
+        return GetConsoleOutputCP() == CP_UTF8;
+    }
+#endif
+    return true;
+}
+
+static std::string indent(FormatContext& ctx, int depth) {
+    if (depth <= 0 || ctx.config.indentation <= 0) return "";
+    if (!ctx.config.indentGuides || !ctx.config.multiline) {
+        return std::string(static_cast<size_t>(depth * ctx.config.indentation), ' ');
+    }
+
+    static constexpr const char* GLYPHS[] = { "\xE2\x94\x86", "\xE2\x95\x8E" };  // ┆, ╎
+    static constexpr const char* ASCII_GLYPHS[] = { "|", ":" };
+    static constexpr Style COLORS[] = {
+        Style::Cyan, Style::Magenta, Style::Blue, Style::Yellow, Style::Green, Style::Red,
+    };
+
+    const bool useUtf8 = can_print_utf8_guides();
+
+    std::string out;
+    for (int i = 0; i < depth; i++) {
+        Style guideColor =
+            ctx.colorsEnabled ? COLORS[i % (sizeof(COLORS) / sizeof(COLORS[0]))] : Style::Dim;
+        out += apply_style(ctx, guideColor, useUtf8 ? GLYPHS[i % 2] : ASCII_GLYPHS[i % 2]);
+        if (ctx.config.indentation > 1) {
+            out += std::string(static_cast<size_t>(ctx.config.indentation - 1), ' ');
+        }
+    }
+
+    return out;
+}
 
 static bool is_plain_string_key(const std::string& key) {
     if (key.empty()) return false;
@@ -159,7 +206,42 @@ static std::string escaped_string_contents(const char* s, size_t len) {
     return out;
 }
 
-static std::string format_quoted_string(FormatContext& ctx, const char* s, size_t len) {
+static std::string format_quoted_string(FormatContext& ctx, const char* s, size_t len,
+                                        const std::string& continuationIndent) {
+    if (!ctx.config.multiline || !ctx.config.multilineStrings || memchr(s, '\n', len) == nullptr)
+        return apply_style(ctx, Style::Green, "\"" + escaped_string_contents(s, len) + "\"");
+
+    std::vector<std::string> chunks;
+    size_t start = 0;
+
+    for (size_t i = 0; i < len; i++) {
+        if (s[i] != '\n') continue;
+
+        chunks.push_back("\"" + escaped_string_contents(s + start, i - start) + "\\n\"");
+        start = i + 1;
+    }
+
+    if (start < len) {
+        chunks.push_back("\"" + escaped_string_contents(s + start, len - start) + "\"");
+    }
+
+    if (chunks.empty()) {
+        chunks.push_back("\"\"");
+    }
+
+    std::string out = apply_style(ctx, Style::Green, chunks[0]);
+    for (size_t i = 1; i < chunks.size(); i++) {
+        out += " ";
+        out += apply_style(ctx, Style::Dim, "..");
+        out += "\n";
+        out += continuationIndent;
+        out += apply_style(ctx, Style::Green, chunks[i]);
+    }
+
+    return out;
+}
+
+static std::string format_compact_quoted_string(FormatContext& ctx, const char* s, size_t len) {
     return apply_style(ctx, Style::Green, "\"" + escaped_string_contents(s, len) + "\"");
 }
 
@@ -224,7 +306,32 @@ static std::optional<std::string> format_typename_and_tostring(lua_State* L, int
 }
 
 static std::string format_value(lua_State* L, int index, FormatContext& ctx, int depth,
-                                bool preferPlainString);
+                                bool preferPlainString, const std::string& continuationIndent);
+
+struct FormattedKey {
+    std::string text;
+    size_t visibleLength = 0;
+};
+
+static size_t first_line_visible_length(const std::string& text) {
+    size_t len = 0;
+
+    for (size_t i = 0; i < text.size();) {
+        if (text[i] == '\n') break;
+
+        if (text[i] == '\x1b' && i + 1 < text.size() && text[i + 1] == '[') {
+            i += 2;
+            while (i < text.size() && text[i] != 'm') i++;
+            if (i < text.size()) i++;
+            continue;
+        }
+
+        len++;
+        i++;
+    }
+
+    return len;
+}
 
 static std::string format_key(lua_State* L, int index, FormatContext& ctx, int depth) {
     if (lua_type(L, index) == LUA_TSTRING) {
@@ -234,12 +341,22 @@ static std::string format_key(lua_State* L, int index, FormatContext& ctx, int d
 
         if (is_plain_string_key(key)) return key;
 
-        return apply_style(ctx, Style::Dim, "[") + format_quoted_string(ctx, s, len) +
+        return apply_style(ctx, Style::Dim, "[") + format_compact_quoted_string(ctx, s, len) +
                apply_style(ctx, Style::Dim, "]");
     }
 
-    return apply_style(ctx, Style::Dim, "[") + format_value(L, index, ctx, depth, false) +
+    return apply_style(ctx, Style::Dim, "[") +
+           format_value(L, index, ctx, depth, false, indent(ctx, depth + 1)) +
            apply_style(ctx, Style::Dim, "]");
+}
+
+static FormattedKey format_key_with_width(lua_State* L, int index, FormatContext& ctx, int depth) {
+    std::string text = format_key(L, index, ctx, depth);
+
+    return {
+        text,
+        first_line_visible_length(text),
+    };
 }
 
 static void fill_sort_key(lua_State* L, int keyIndex, TableEntry& entry) {
@@ -333,9 +450,12 @@ static std::string format_table(lua_State* L, int index, FormatContext& ctx, int
         return *formatted;
 
     const void* id = lua_topointer(L, index);
-    if (ctx.activeTables.contains(id)) return apply_style(ctx, Style::Dim, "{ ... }");
+    if (ctx.activeTables.contains(id)) return "{ " + apply_style(ctx, Style::Dim, "...") + " }";
+    if (ctx.config.maxDepth >= 0 && depth >= ctx.config.maxDepth)
+        return "{ " + apply_style(ctx, Style::Dim, "... depth limit") + " }";
 
     ctx.activeTables.insert(id);
+    bool frozen = ctx.config.showFrozen && lua_getreadonly(L, index);
 
     std::vector<TableEntry> entries = collect_table_entries(L, index);
     bool isArray = is_array_entries(entries);
@@ -343,7 +463,7 @@ static std::string format_table(lua_State* L, int index, FormatContext& ctx, int
     int metatableRef = LUA_NOREF;
     bool metatableLocked = false;
     ensure_stack(L, 3);
-    if (lua_getmetatable(L, index)) {
+    if (ctx.config.showMetatables && lua_getmetatable(L, index)) {
         lua_getfield(L, -1, "__metatable");
         metatableLocked = !lua_isnil(L, -1);
         lua_pop(L, 1);
@@ -354,58 +474,143 @@ static std::string format_table(lua_State* L, int index, FormatContext& ctx, int
     if (entries.empty() && metatableRef == LUA_NOREF) {
         ctx.activeTables.erase(id);
         release_entries(L, entries);
-        return apply_style(ctx, Style::Dim, "{ }");
+        if (frozen) return "{" + apply_style(ctx, Style::Red, "<frozen>") + " }";
+        return "{ }";
     }
 
-    std::string out = apply_style(ctx, Style::Dim, "{");
+    size_t entryLimit = entries.size();
+    if (ctx.config.maxEntries >= 0 && entryLimit > static_cast<size_t>(ctx.config.maxEntries))
+        entryLimit = static_cast<size_t>(ctx.config.maxEntries);
+
+    size_t omittedEntries = entries.size() - entryLimit;
+
+    if (!ctx.config.multiline) {
+        std::string out = "{";
+        if (frozen) out += apply_style(ctx, Style::Red, "<frozen>");
+        bool first = true;
+
+        for (size_t i = 0; i < entryLimit; i++) {
+            const TableEntry& entry = entries[i];
+            if (!first) out += ",";
+            out += " ";
+            first = false;
+
+            if (isArray) {
+                ensure_stack(L, 1);
+                lua_getref(L, entry.valueRef);
+                out += format_value(L, -1, ctx, depth + 1, false, "");
+                lua_pop(L, 1);
+            } else {
+                ensure_stack(L, 1);
+                lua_getref(L, entry.keyRef);
+                out += format_key(L, -1, ctx, depth + 1);
+                lua_pop(L, 1);
+
+                out += " ";
+                out += "=";
+                out += " ";
+
+                ensure_stack(L, 1);
+                lua_getref(L, entry.valueRef);
+                out += format_value(L, -1, ctx, depth + 1, false, "");
+                lua_pop(L, 1);
+            }
+        }
+
+        if (omittedEntries > 0) {
+            if (!first) out += ",";
+            out += " ";
+            out += apply_style(ctx, Style::Dim,
+                               "... " + std::to_string(omittedEntries) + " entries omitted");
+            first = false;
+        }
+
+        if (metatableRef != LUA_NOREF) {
+            if (!first) out += ",";
+            out += " ";
+            out +=
+                apply_style(ctx, Style::Red, metatableLocked ? "@metatable<locked>" : "@metatable");
+            out += " ";
+            out += "=";
+            out += " ";
+
+            ensure_stack(L, 1);
+            lua_getref(L, metatableRef);
+            out += format_value(L, -1, ctx, depth + 1, false, "");
+            lua_pop(L, 1);
+            first = false;
+        }
+
+        if (!first) out += " ";
+        out += "}";
+
+        ctx.activeTables.erase(id);
+        lua_unref(L, metatableRef);
+        release_entries(L, entries);
+        return out;
+    }
+
+    std::string out = "{";
+    if (frozen) out += apply_style(ctx, Style::Red, "<frozen>");
     out += "\n";
 
-    for (const TableEntry& entry : entries) {
-        out += indent(depth + 1);
+    for (size_t i = 0; i < entryLimit; i++) {
+        const TableEntry& entry = entries[i];
+        out += indent(ctx, depth + 1);
 
         if (isArray) {
             ensure_stack(L, 1);
             lua_getref(L, entry.valueRef);
-            out += format_value(L, -1, ctx, depth + 1, false);
+            out += format_value(L, -1, ctx, depth + 1, false, indent(ctx, depth + 2));
             lua_pop(L, 1);
         } else {
             ensure_stack(L, 1);
             lua_getref(L, entry.keyRef);
-            out += format_key(L, -1, ctx, depth + 1);
+            FormattedKey key = format_key_with_width(L, -1, ctx, depth + 1);
             lua_pop(L, 1);
 
-            out += " ";
-            out += apply_style(ctx, Style::Dim, "=");
-            out += " ";
+            std::string prefix = key.text + " = ";
+            out += prefix;
+
+            std::string continuationIndent =
+                indent(ctx, depth + 1) + std::string(key.visibleLength + 3, ' ');
 
             ensure_stack(L, 1);
             lua_getref(L, entry.valueRef);
-            out += format_value(L, -1, ctx, depth + 1, false);
+            out += format_value(L, -1, ctx, depth + 1, false, continuationIndent);
             lua_pop(L, 1);
         }
 
-        out += apply_style(ctx, Style::Dim, ",");
+        out += ",";
+        out += "\n";
+    }
+
+    if (omittedEntries > 0) {
+        out += indent(ctx, depth + 1);
+        out += apply_style(ctx, Style::Dim,
+                           "... " + std::to_string(omittedEntries) + " entries omitted");
+        out += ",";
         out += "\n";
     }
 
     if (metatableRef != LUA_NOREF) {
-        out += indent(depth + 1);
+        out += indent(ctx, depth + 1);
         out += apply_style(ctx, Style::Red, metatableLocked ? "@metatable<locked>" : "@metatable");
         out += " ";
-        out += apply_style(ctx, Style::Dim, "=");
+        out += "=";
         out += " ";
 
         ensure_stack(L, 1);
         lua_getref(L, metatableRef);
-        out += format_value(L, -1, ctx, depth + 1, false);
+        out += format_value(L, -1, ctx, depth + 1, false, indent(ctx, depth + 2));
         lua_pop(L, 1);
 
-        out += apply_style(ctx, Style::Dim, ",");
+        out += ",";
         out += "\n";
     }
 
-    out += indent(depth);
-    out += apply_style(ctx, Style::Dim, "}");
+    out += indent(ctx, depth);
+    out += "}";
 
     ctx.activeTables.erase(id);
     lua_unref(L, metatableRef);
@@ -487,8 +692,135 @@ static std::string format_buffer_value(lua_State* L, int index, FormatContext& c
     return apply_style(ctx, Style::Magenta, text);
 }
 
+static const char* color_mode_to_string(EryxPrintColorMode mode) {
+    switch (mode) {
+        case EryxPrintColorMode::Auto:
+            return "auto";
+        case EryxPrintColorMode::Always:
+            return "always";
+        case EryxPrintColorMode::Never:
+            return "never";
+    }
+    return "auto";
+}
+
+static std::optional<EryxPrintColorMode> color_mode_from_string(const char* mode) {
+    if (strcmp(mode, "auto") == 0) return EryxPrintColorMode::Auto;
+    if (strcmp(mode, "always") == 0) return EryxPrintColorMode::Always;
+    if (strcmp(mode, "never") == 0) return EryxPrintColorMode::Never;
+    return std::nullopt;
+}
+
+static void push_print_config(lua_State* L, const EryxPrintConfig& config) {
+    lua_createtable(L, 0, 9);
+
+    lua_pushinteger(L, config.indentation);
+    lua_setfield(L, -2, "indentation");
+
+    lua_pushboolean(L, config.multiline);
+    lua_setfield(L, -2, "multiline");
+
+    lua_pushboolean(L, config.multilineStrings);
+    lua_setfield(L, -2, "multilineStrings");
+
+    lua_pushstring(L, color_mode_to_string(config.color));
+    lua_setfield(L, -2, "color");
+
+    if (config.maxEntries >= 0)
+        lua_pushinteger(L, config.maxEntries);
+    else
+        lua_pushnil(L);
+    lua_setfield(L, -2, "maxEntries");
+
+    if (config.maxDepth >= 0)
+        lua_pushinteger(L, config.maxDepth);
+    else
+        lua_pushnil(L);
+    lua_setfield(L, -2, "maxDepth");
+
+    lua_pushboolean(L, config.showMetatables);
+    lua_setfield(L, -2, "showMetatables");
+
+    lua_pushboolean(L, config.indentGuides);
+    lua_setfield(L, -2, "indentGuides");
+
+    lua_pushboolean(L, config.showFrozen);
+    lua_setfield(L, -2, "showFrozen");
+}
+
+static bool get_optional_field(lua_State* L, int tableIndex, const char* field) {
+    lua_getfield(L, tableIndex, field);
+    return !lua_isnil(L, -1);
+}
+
+static void apply_print_config(lua_State* L, int index, EryxPrintConfig& config) {
+    index = lua_absindex(L, index);
+
+    if (get_optional_field(L, index, "indentation")) {
+        if (!lua_isnumber(L, -1)) luaL_error(L, "print indentation must be a number");
+        int value = lua_tointeger(L, -1);
+        if (value < 0 || value > 16) luaL_error(L, "print indentation must be between 0 and 16");
+        config.indentation = value;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "multiline")) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "print multiline must be a boolean");
+        config.multiline = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "multilineStrings")) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "print multilineStrings must be a boolean");
+        config.multilineStrings = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "color")) {
+        if (!lua_isstring(L, -1)) luaL_error(L, "print color must be 'auto', 'always', or 'never'");
+        std::optional<EryxPrintColorMode> color = color_mode_from_string(lua_tostring(L, -1));
+        if (!color) luaL_error(L, "print color must be 'auto', 'always', or 'never'");
+        config.color = *color;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "maxEntries")) {
+        if (!lua_isnumber(L, -1)) luaL_error(L, "print maxEntries must be a number or nil");
+        int value = lua_tointeger(L, -1);
+        if (value < -1) luaL_error(L, "print maxEntries must be non-negative, -1, or nil");
+        config.maxEntries = value;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "maxDepth")) {
+        if (!lua_isnumber(L, -1)) luaL_error(L, "print maxDepth must be a number or nil");
+        int value = lua_tointeger(L, -1);
+        if (value < -1) luaL_error(L, "print maxDepth must be non-negative, -1, or nil");
+        config.maxDepth = value;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "showMetatables")) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "print showMetatables must be a boolean");
+        config.showMetatables = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "indentGuides")) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "print indentGuides must be a boolean");
+        config.indentGuides = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+
+    if (get_optional_field(L, index, "showFrozen")) {
+        if (!lua_isboolean(L, -1)) luaL_error(L, "print showFrozen must be a boolean");
+        config.showFrozen = lua_toboolean(L, -1) != 0;
+    }
+    lua_pop(L, 1);
+}
+
 static std::string format_value(lua_State* L, int index, FormatContext& ctx, int depth,
-                                bool preferPlainString) {
+                                bool preferPlainString, const std::string& continuationIndent) {
     StackGuard guard(L);
     index = lua_absindex(L, index);
 
@@ -506,7 +838,7 @@ static std::string format_value(lua_State* L, int index, FormatContext& ctx, int
             size_t len = 0;
             const char* s = lua_tolstring(L, index, &len);
             if (preferPlainString) return std::string(s, len);
-            return format_quoted_string(ctx, s, len);
+            return format_quoted_string(ctx, s, len, continuationIndent);
         }
 
         case LUA_TTABLE:
@@ -535,17 +867,43 @@ static std::string format_value(lua_State* L, int index, FormatContext& ctx, int
 
 }  // namespace
 
+ERYX_API int eryx_configure_print(lua_State* L) {
+    StackGuard guard(L);
+
+    EryxPrintConfig config;
+    {
+        std::lock_guard<std::mutex> lock(g_printConfigMutex);
+        config = g_printConfig;
+    }
+
+    if (!lua_isnoneornil(L, 1)) {
+        if (!lua_istable(L, 1)) luaL_error(L, "stdio.configurePrint expects a table or nil");
+        apply_print_config(L, 1, config);
+
+        std::lock_guard<std::mutex> lock(g_printConfigMutex);
+        g_printConfig = config;
+    }
+
+    push_print_config(L, config);
+    guard.top++;
+    return 1;
+}
+
 int eryx_lua_print(lua_State* L) {
     StackGuard guard(L);
 
     int n = lua_gettop(L);
     FormatContext ctx;
-    ctx.colorsEnabled = should_use_color();
+    {
+        std::lock_guard<std::mutex> lock(g_printConfigMutex);
+        ctx.config = g_printConfig;
+    }
+    ctx.colorsEnabled = should_use_color(ctx.config.color);
 
     std::string out;
     for (int i = 1; i <= n; i++) {
         if (i > 1) out += " ";
-        out += format_value(L, i, ctx, 0, lua_type(L, i) == LUA_TSTRING);
+        out += format_value(L, i, ctx, 0, lua_type(L, i) == LUA_TSTRING, "");
     }
     out += "\n";
 

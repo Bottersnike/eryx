@@ -52,6 +52,25 @@ typedef struct EryxRuntime {
     EryxDebugFunctionLoadedCallback debugFunctionLoaded = nullptr;
     void* debugFunctionLoadedContext = nullptr;
 } EryxRuntime;
+
+enum class EryxPrintColorMode {
+    Auto,
+    Always,
+    Never,
+};
+
+typedef struct EryxPrintConfig {
+    int indentation = 4;
+    bool multiline = true;
+    bool multilineStrings = true;
+    EryxPrintColorMode color = EryxPrintColorMode::Auto;
+    int maxEntries = -1;  // -1 = unlimited
+    int maxDepth = -1;    // -1 = unlimited
+    bool showMetatables = true;
+    bool indentGuides = false;
+    bool showFrozen = true;
+} EryxPrintConfig;
+
 static EryxRuntime* eryx_get_runtime(lua_State* L) {
     auto rt = (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
     if (!rt) {
@@ -63,6 +82,7 @@ static EryxRuntime* eryx_get_runtime(lua_State* L) {
 ERYX_API bool lua_codegen_isSupported();
 ERYX_API void lua_codegen_create(lua_State* L);
 ERYX_API void eryx_request_process_interrupt();
+ERYX_API int eryx_configure_print(lua_State* L);
 
 ERYX_API Luau::CodeGen::CodeGenCompilationResult lua_codegen_compile(
     lua_State* L, int idx, unsigned int flags, Luau::CodeGen::CompilationStats* stats);

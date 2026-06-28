@@ -823,6 +823,9 @@ static int stdio_terminalSize(lua_State* L) {
     return 1;
 }
 
+// stdio.configurePrint(options?) -> PrintConfig
+static int stdio_configurePrint(lua_State* L) { return eryx_configure_print(L); }
+
 static int stdio_stream_cannot_close(lua_State* L) {
     luaL_error(L, "standard stream handle cannot be closed");
     return 0;
@@ -966,6 +969,8 @@ LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_setfield(L, -2, "isatty");
     lua_pushcfunction(L, stdio_terminalSize, "terminalSize");
     lua_setfield(L, -2, "terminalSize");
+    lua_pushcfunction(L, stdio_configurePrint, "configurePrint");
+    lua_setfield(L, -2, "configurePrint");
 
     // stdin stream handle
     lua_newtable(L);
