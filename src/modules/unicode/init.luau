@@ -310,6 +310,135 @@ local function combiningClass(cp: number): number
 	return getDbRecord(cp)[2]
 end
 
+local GraphemeOther = 0
+local GraphemePrepend = 1
+local GraphemeCr = 2
+local GraphemeLf = 3
+local GraphemeControl = 4
+local GraphemeExtend = 5
+local GraphemeRegionalIndicator = 6
+local GraphemeSpacingMark = 7
+local GraphemeL = 8
+local GraphemeV = 9
+local GraphemeT = 10
+local GraphemeLv = 11
+local GraphemeLvt = 12
+local GraphemeZwj = 13
+
+local IndicLinker = 1
+local IndicConsonant = 2
+local IndicExtend = 3
+
+local function graphemeBreak(cp: number): number
+	return getDbRecord(cp)[7]
+end
+
+local function indicConjunctBreak(cp: number): number
+	return getDbRecord(cp)[8]
+end
+
+local function isExtendedPictographic(cp: number): boolean
+	return getDbRecord(cp)[9] ~= 0
+end
+
+local function decodeCodepoints(source: string): ({ number }, { number })
+	local codepoints: { number } = {}
+	local byteOffsets: { number } = {}
+	for byteOffset, cp in utf8.codes(source) do
+		table.insert(codepoints, cp)
+		table.insert(byteOffsets, byteOffset)
+	end
+	return codepoints, byteOffsets
+end
+
+local function isControlGraphemeBreak(kind: number): boolean
+	return kind == GraphemeCr or kind == GraphemeLf or kind == GraphemeControl
+end
+
+local function hasExtendedPictographicZwjPrefix(codepoints: { number }, index: number): boolean
+	if index < 3 or graphemeBreak(codepoints[index - 1]) ~= GraphemeZwj then
+		return false
+	end
+
+	local cursor = index - 1
+	while cursor > 1 and graphemeBreak(codepoints[cursor - 1]) == GraphemeExtend do
+		cursor -= 1
+	end
+
+	return cursor > 1 and isExtendedPictographic(codepoints[cursor - 1])
+end
+
+local function hasIndicConjunctPrefix(codepoints: { number }, index: number): boolean
+	if indicConjunctBreak(codepoints[index]) ~= IndicConsonant then
+		return false
+	end
+
+	local linkerSeen = false
+	local cursor = index
+	while cursor > 1 do
+		local property = indicConjunctBreak(codepoints[cursor - 1])
+		if property == IndicLinker then
+			linkerSeen = true
+			cursor -= 1
+		elseif property == IndicExtend then
+			cursor -= 1
+		else
+			return linkerSeen and property == IndicConsonant
+		end
+	end
+
+	return false
+end
+
+local function isGraphemeBoundary(codepoints: { number }, index: number): boolean
+	local left = graphemeBreak(codepoints[index - 1])
+	local right = graphemeBreak(codepoints[index])
+
+	if left == GraphemeCr and right == GraphemeLf then
+		return false
+	end
+	if isControlGraphemeBreak(left) or isControlGraphemeBreak(right) then
+		return true
+	end
+	if
+		left == GraphemeL and (right == GraphemeL or right == GraphemeV or right == GraphemeLv or right == GraphemeLvt)
+	then
+		return false
+	end
+	if (left == GraphemeLv or left == GraphemeV) and (right == GraphemeV or right == GraphemeT) then
+		return false
+	end
+	if (left == GraphemeLvt or left == GraphemeT) and right == GraphemeT then
+		return false
+	end
+	if right == GraphemeExtend or right == GraphemeZwj or right == GraphemeSpacingMark then
+		return false
+	end
+	if left == GraphemePrepend then
+		return false
+	end
+	if hasIndicConjunctPrefix(codepoints, index) then
+		return false
+	end
+	if isExtendedPictographic(codepoints[index]) and hasExtendedPictographicZwjPrefix(codepoints, index) then
+		return false
+	end
+	if left == GraphemeRegionalIndicator and right == GraphemeRegionalIndicator then
+		local regionalIndicators = 0
+		for cursor = index - 1, 1, -1 do
+			if graphemeBreak(codepoints[cursor]) ~= GraphemeRegionalIndicator then
+				break
+			end
+			regionalIndicators += 1
+		end
+		if regionalIndicators % 2 == 1 then
+			return false
+		end
+	end
+
+	return true
+end
+
 local function findNfcIndex(ranges: { { number } }, cp: number): number?
 	local lo = 1
 	local hi = #ranges
@@ -751,20 +880,23 @@ Returns an iterator over all graphemes in a UTF-8 string
 @return An iterator that yields each grapheme in turn
 ]=]
 function unicode.graphemes(source: string): () -> string?
-	local i = 1
+	local codepoints, byteOffsets = decodeCodepoints(source)
+	local clusterStarts: { number } = { 1 }
+	for index = 2, #codepoints do
+		if isGraphemeBoundary(codepoints, index) then
+			table.insert(clusterStarts, byteOffsets[index])
+		end
+	end
+
+	local clusterIndex = 1
 	return function(): string?
-		if i > #source then
+		if clusterIndex > #clusterStarts then
 			return nil
 		end
-		local nextPos = utf8.offset(source, 2, i)
-		local result: string
-		if nextPos == nil then
-			result = string.sub(source, i)
-			i = #source + 1
-		else
-			result = string.sub(source, i, nextPos - 1)
-			i = nextPos
-		end
+		local startByte = clusterStarts[clusterIndex]
+		local endByte = if clusterIndex < #clusterStarts then clusterStarts[clusterIndex + 1] - 1 else #source
+		local result = string.sub(source, startByte, endByte)
+		clusterIndex += 1
 		return result
 	end
 end

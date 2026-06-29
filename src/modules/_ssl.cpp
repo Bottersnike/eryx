@@ -911,11 +911,12 @@ static void cleanup_ssl_pending_op(SSLPendingOp* op) {
             }
 }
 
-static void ssl_resume_error(SSLPendingOp* op, const std::string& message) {
+static void ssl_resume_failure(SSLPendingOp* op, const std::string& message) {
+    lua_pushnil(op->thread);
     lua_pushlstring(op->thread, message.data(), message.size());
     int ref = op->threadRef;
     op->threadRef = LUA_NOREF;
-    eryx_push_thread(op->runtime, ref, 1, true);
+    eryx_push_thread(op->runtime, ref, 2, false);
     cleanup_ssl_pending_op(op);
 }
 
@@ -981,8 +982,14 @@ static void cancel_sslsocket_pending_ops(lua_State* L, LuaSSLSocket* ss) {
     }
 }
 
+static void ssl_timeout_cb(uv_timer_t* handle);
+
 static void ssl_rearm_poll(SSLPendingOp* op, int events) {
     op->finished = false;
+    if (op->has_timer && op->timeout > 0 && !uv_is_closing((uv_handle_t*)&op->timer)) {
+        uv_timer_stop(&op->timer);
+        uv_timer_start(&op->timer, ssl_timeout_cb, (uint64_t)(op->timeout * 1000.0), 0);
+    }
     uv_poll_start(&op->poll, events, [](uv_poll_t* handle, int status, int events) {
         SSLPendingOp* op = (SSLPendingOp*)handle->data;
         if (!op || op->finished) return;
@@ -992,7 +999,7 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
         if (op->has_timer && !uv_is_closing((uv_handle_t*)&op->timer)) uv_timer_stop(&op->timer);
 
         if (status < 0) {
-            ssl_resume_error(op, uv_strerror(status));
+            ssl_resume_failure(op, uv_strerror(status));
             return;
         }
 
@@ -1003,7 +1010,7 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
                     if (op->verify_system) {
                         std::string verify_error;
                         if (!verify_cert_system_impl(op->ssl, op->hostname.c_str(), verify_error)) {
-                            ssl_resume_error(op, verify_error);
+                            ssl_resume_failure(op, verify_error);
                             return;
                         }
                     }
@@ -1038,7 +1045,7 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
                     return;
                 }
 
-                ssl_resume_error(op, ssl_error_message("ssl_handshake", ssl_err));
+                ssl_resume_failure(op, ssl_error_message("ssl_handshake", ssl_err));
                 return;
             }
 
@@ -1075,7 +1082,7 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
                 }
 
                 if (tmp != stackbuf) delete[] tmp;
-                ssl_resume_error(op, ssl_error_message("ssl_read", ssl_err));
+                ssl_resume_failure(op, ssl_error_message("ssl_read", ssl_err));
                 return;
             }
 
@@ -1103,7 +1110,7 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
                         return;
                     }
 
-                    ssl_resume_error(op, ssl_error_message("ssl_write", ssl_err));
+                    ssl_resume_failure(op, ssl_error_message("ssl_write", ssl_err));
                     return;
                 }
 
@@ -1137,7 +1144,7 @@ static void ssl_timeout_cb(uv_timer_t* handle) {
             break;
     }
 
-    ssl_resume_error(op, format_string("%s timed out", opname));
+    ssl_resume_failure(op, format_string("%s timed out", opname));
 }
 
 static int schedule_ssl_pending_op(lua_State* L, SSLPendingOp* op, int events) {
@@ -1417,6 +1424,10 @@ static int sslsock_send(lua_State* L) {
 
     int ssl_err = SSL_get_error(ss->ssl, ret);
     if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+        if (ss->timeout == 0) {
+            lua_pushnil(L);
+            return 1;
+        }
         SSLPendingOp* op = new SSLPendingOp();
         op->thread = L;
         op->op = SSLOpType::Write;
@@ -1456,6 +1467,10 @@ static int sslsock_sendall(lua_State* L) {
 
         int ssl_err = SSL_get_error(ss->ssl, ret);
         if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
+            if (total == 0 && ss->timeout == 0) {
+                lua_pushboolean(L, false);
+                return 1;
+            }
             SSLPendingOp* op = new SSLPendingOp();
             op->thread = L;
             op->op = SSLOpType::WriteAll;
@@ -1499,6 +1514,10 @@ static int sslsock_recv(lua_State* L) {
     int ssl_err = SSL_get_error(ss->ssl, ret);
     if (ssl_err == SSL_ERROR_WANT_READ || ssl_err == SSL_ERROR_WANT_WRITE) {
         if (tmp != stackbuf) delete[] tmp;
+        if (ss->timeout == 0) {
+            lua_pushnil(L);
+            return 1;
+        }
         SSLPendingOp* op = new SSLPendingOp();
         op->thread = L;
         op->op = SSLOpType::Read;
@@ -1528,6 +1547,24 @@ static int sslsock_recv(lua_State* L) {
 static int sslsock_close(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
     sslsock_close_impl(ss);
+    return 0;
+}
+
+static int sslsock_setblocking(lua_State* L) {
+    LuaSSLSocket* ss = check_sslsocket(L, 1);
+    luaL_checktype(L, 2, LUA_TBOOLEAN);
+    bool blocking = lua_toboolean(L, 2);
+    ss->timeout = blocking ? -1.0 : 0.0;
+    return 0;
+}
+
+static int sslsock_settimeout(lua_State* L) {
+    LuaSSLSocket* ss = check_sslsocket(L, 1);
+    if (lua_isnoneornil(L, 2)) {
+        ss->timeout = -1.0;
+    } else {
+        ss->timeout = luaL_checknumber(L, 2);
+    }
     return 0;
 }
 
@@ -1983,6 +2020,10 @@ static void register_sslsocket_metatable(lua_State* L) {
     lua_setfield(L, -2, "close");
     lua_pushcfunction(L, sslsock_close, "closeSync");
     lua_setfield(L, -2, "closeSync");
+    lua_pushcfunction(L, sslsock_setblocking, "setBlocking");
+    lua_setfield(L, -2, "setBlocking");
+    lua_pushcfunction(L, sslsock_settimeout, "setTimeout");
+    lua_setfield(L, -2, "setTimeout");
     lua_pushcfunction(L, sslsock_getpeername, "getPeerName");
     lua_setfield(L, -2, "getPeerName");
     lua_pushcfunction(L, sslsock_getsockname, "getSockName");

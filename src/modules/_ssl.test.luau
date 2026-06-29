@@ -170,4 +170,109 @@ suite:test("client and server contexts can complete a local TLS round-trip", fun
 	end)
 end)
 
+local function withLocalTlsPair(fn: (tlsSock: any) -> ())
+	local _ssl = requireSsl()
+	local fixture = makeFixture(true)
+	local port = reservePort()
+
+	tempfile.withTempDir(function(dir)
+		local caPath = path.join(dir, "ca.pem")
+		local caFile = fs.openSync(caPath, "w")
+		caFile:writeSync(fixture.cert)
+		caFile:close()
+
+		local serverCtx = _ssl.createServerContextPem(fixture.cert, fixture.key)
+		local serverDone = false
+		local serverErr: any = nil
+
+		task.spawn(function()
+			local ok, err = pcall(function()
+				local listener = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+				listener:setSockOpt(_socket.SOL_SOCKET, _socket.SO_REUSEADDR, true)
+				listener:bind("127.0.0.1", port)
+				listener:listen(1)
+
+				local clientSock = select(1, listener:accept())
+				local tlsSock = serverCtx:wrapSocket(clientSock)
+				if tlsSock == nil then
+					listener:close()
+					return
+				end
+
+				local serverSock = tlsSock :: any
+				serverSock:setTimeout(1)
+				local release, recvErr = serverSock:recv(16)
+				if release ~= nil then
+					test.expect(buffer.tostring(release)):toBe("done")
+				else
+					test.expect(type(recvErr)):toBe("string")
+					test.expect((recvErr :: string):lower()):toContain("timed out")
+				end
+				serverSock:close()
+				listener:close()
+			end)
+
+			if not ok then
+				serverErr = err
+			end
+			serverDone = true
+		end)
+
+		task.wait(0.05)
+
+		local clientSock = _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM)
+		clientSock:connect("127.0.0.1", port)
+
+		local clientCtx = _ssl.createDefaultContext()
+		clientCtx:loadVerifyLocations(caPath)
+		local tlsSock = clientCtx:wrapSocket(clientSock, "localhost")
+		test.expect(tlsSock):toNotBeNil()
+
+		local clientTlsSock = tlsSock :: any
+		local ok, runErr = pcall(fn, clientTlsSock)
+
+		clientTlsSock:setBlocking(true)
+		clientTlsSock:setTimeout(1)
+		pcall(function()
+			clientTlsSock:sendAll("done")
+		end)
+		clientTlsSock:close()
+
+		if not ok then
+			error(runErr, 0)
+		end
+
+		local deadline = os.clock() + 2
+		while not serverDone and os.clock() < deadline do
+			task.wait(0.01)
+		end
+
+		if not serverDone then
+			error("local TLS test server did not finish", 0)
+		end
+
+		if serverErr ~= nil then
+			error(serverErr, 0)
+		end
+	end)
+end
+
+suite:test("SSL sockets return nil immediately in non-blocking mode", function()
+	withLocalTlsPair(function(tlsSock)
+		tlsSock:setBlocking(false)
+		local data = tlsSock:recv(16)
+		test.expect(data):toBeNil()
+	end)
+end)
+
+suite:test("SSL sockets return nil,error on blocking timeout", function()
+	withLocalTlsPair(function(tlsSock)
+		tlsSock:setTimeout(0.05)
+		local timedOutData, timedOutErr = tlsSock:recv(16)
+		test.expect(timedOutData):toBeNil()
+		test.expect(type(timedOutErr)):toBe("string")
+		test.expect((timedOutErr :: string):lower()):toContain("timed out")
+	end)
+end)
+
 return suite

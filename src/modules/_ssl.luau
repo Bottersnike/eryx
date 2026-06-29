@@ -49,10 +49,10 @@ export type SslContext = setmetatable<{}, {
 
 			@param sock A connected `_socket.Socket`.
 			@param serverHostname Hostname for SNI and certificate verification.
-			@return SslSocket -- The wrapped TLS socket.
+			@return SslSocket? -- The wrapped TLS socket, or `nil` on timeout.
 			@yields
 		]=]
-		wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket,
+		wrapSocket: (self: SslContext, sock: any, serverHostname: string?) -> SslSocket?,
 
 		--[=[
 			Loads a PEM-encoded CA certificate file for server certificate
@@ -102,10 +102,10 @@ export type SslSocket = setmetatable<
 				bytes actually written, which may be less than the full buffer.
 
 				@param data The data to send.
-				@return number -- Number of bytes sent.
+				@return number? -- Number of bytes sent, or `nil` if the operation would block.
 				@yields
 			]=]
-			send: (self: SslSocket, data: string | buffer) -> number,
+			send: (self: SslSocket, data: string | buffer) -> number?,
 
 			--[=[
 				Sends all data in the buffer, retrying internally until every byte
@@ -114,7 +114,7 @@ export type SslSocket = setmetatable<
 				@param data The data to send.
 				@yields
 			]=]
-			sendAll: (self: SslSocket, data: string | buffer) -> (),
+			sendAll: (self: SslSocket, data: string | buffer) -> boolean,
 
 			--[=[
 				Receives up to `bufsize` bytes from the encrypted connection.
@@ -123,16 +123,33 @@ export type SslSocket = setmetatable<
 				(length 0) indicates the remote end has closed the connection.
 
 				@param bufsize Maximum number of bytes to receive.
-				@return buffer -- The received data.
+				@return buffer? -- The received data, or `nil` if the operation would block.
 				@yields
 			]=]
-			recv: (self: SslSocket, bufsize: number) -> buffer,
+			recv: (self: SslSocket, bufsize: number) -> buffer?,
 
 			--[=[
 				Performs a TLS shutdown and closes the underlying socket, releasing
 				all associated resources.
 			]=]
 			close: (self: SslSocket) -> (),
+
+			--[=[
+				Switches the socket between blocking and non-blocking mode.
+
+				In non-blocking mode, operations like [[SslSocket.recv]] and
+				[[SslSocket.send]] return immediately when they would block.
+
+				@param flag `true` for blocking, `false` for non-blocking.
+			]=]
+			setBlocking: (self: SslSocket, flag: boolean) -> (),
+
+			--[=[
+				Sets a timeout in seconds for blocking-style operations.
+
+				Use `nil` to wait indefinitely.
+			]=]
+			setTimeout: (self: SslSocket, seconds: number?) -> (),
 
 			--[=[
 				Returns the remote address and port of the connected peer.
@@ -159,12 +176,12 @@ export type SslSocket = setmetatable<
 			fileNo: (self: SslSocket) -> number,
 
 			-- Stream-compatible aliases
-			read: (self: SslSocket, size: number) -> buffer,
-			readSync: (self: SslSocket, size: number) -> buffer,
-			readBuffer: (self: SslSocket, size: number) -> buffer,
-			readBufferSync: (self: SslSocket, size: number) -> buffer,
-			write: (self: SslSocket, data: string | buffer) -> number,
-			writeSync: (self: SslSocket, data: string | buffer) -> number,
+			read: (self: SslSocket, size: number) -> buffer?,
+			readSync: (self: SslSocket, size: number) -> buffer?,
+			readBuffer: (self: SslSocket, size: number) -> buffer?,
+			readBufferSync: (self: SslSocket, size: number) -> buffer?,
+			write: (self: SslSocket, data: string | buffer) -> number?,
+			writeSync: (self: SslSocket, data: string | buffer) -> number?,
 			closeSync: (self: SslSocket) -> (),
 		},
 	}
@@ -248,10 +265,10 @@ end
 	@param sock A connected `_socket.Socket`.
 	@param hostname Hostname for SNI and certificate verification.
 		Required when verification is enabled.
-	@return SslSocket -- The wrapped TLS socket.
+	@return SslSocket? -- The wrapped TLS socket, or `nil` on timeout.
 	@yields
 ]=]
-function _ssl.wrapSocket(sock: any, hostname: string?): SslSocket
+function _ssl.wrapSocket(sock: any, hostname: string?): SslSocket?
 	return nil :: any
 end
 

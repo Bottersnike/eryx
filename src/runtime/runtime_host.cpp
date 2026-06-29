@@ -1,12 +1,23 @@
 #include "runtime_host.hpp"
 
 #include <csignal>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 
 #include "../LuaUtil.hpp"
 #include "lexception.hpp"
 #include "lrequire.hpp"
+
+namespace fs = std::filesystem;
+
+static fs::path eryx_runtime_fs_path(const std::string& path) {
+#ifdef _WIN32
+    return fs::u8path(path);
+#else
+    return fs::path(path);
+#endif
+}
 
 static int eryx_runtime_find_exception_index(lua_State* L) {
     for (int index = lua_gettop(L); index >= 1; --index) {
@@ -20,7 +31,7 @@ static int eryx_runtime_find_exception_index(lua_State* L) {
 
 static bool eryx_runtime_read_file(const std::string& path, std::string& source,
                                    std::string& error) {
-    std::ifstream scriptFile(path, std::ios::binary);
+    std::ifstream scriptFile(eryx_runtime_fs_path(path), std::ios::binary);
     if (!scriptFile.is_open()) {
         error = "failed to open file \"" + path + "\"";
         return false;
@@ -117,13 +128,25 @@ ERYX_API void eryx_runtime_host_close(EryxRuntimeHost* host) {
 
     eryx_shutdown_runtime(host->rt);
 
+    if (host->loopInitialized) {
+        while (uv_loop_alive(&host->loop)) {
+            uv_run(&host->loop, UV_RUN_DEFAULT);
+        }
+    }
+
     if (host->GL) {
         lua_close(host->GL);
     }
 
     if (host->loopInitialized) {
-        uv_run(&host->loop, UV_RUN_NOWAIT);
-        uv_loop_close(&host->loop);
+        int closeStatus = uv_loop_close(&host->loop);
+        if (closeStatus != 0) {
+            while (uv_loop_alive(&host->loop)) {
+                uv_run(&host->loop, UV_RUN_DEFAULT);
+            }
+            closeStatus = uv_loop_close(&host->loop);
+            (void)closeStatus;
+        }
     }
 
     delete host->rt;

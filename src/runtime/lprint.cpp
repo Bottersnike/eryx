@@ -452,7 +452,7 @@ static std::string format_table(lua_State* L, int index, FormatContext& ctx, int
     const void* id = lua_topointer(L, index);
     if (ctx.activeTables.contains(id)) return "{ " + apply_style(ctx, Style::Dim, "...") + " }";
     if (ctx.config.maxDepth >= 0 && depth >= ctx.config.maxDepth)
-        return "{ " + apply_style(ctx, Style::Dim, "... depth limit") + " }";
+        return "{ " + apply_style(ctx, Style::Dim, "... (depth limit)") + " }";
 
     ctx.activeTables.insert(id);
     bool frozen = ctx.config.showFrozen && lua_getreadonly(L, index);

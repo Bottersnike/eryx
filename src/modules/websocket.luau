@@ -967,7 +967,12 @@ local function connect(url: string, options: ConnectOptions?): WebSocket
 	local connSock: any = sock
 	if parsed.scheme == "wss" then
 		local ctx = requireSsl().createDefaultContext()
-		connSock = ctx:wrapSocket(sock, parsed.host)
+		local wrapped, err = ctx:wrapSocket(sock, parsed.host)
+		if not wrapped then
+			pcall(sock.close, sock)
+			error("WebSocket handshake failed: TLS handshake failed: " .. tostring(err))
+		end
+		connSock = wrapped
 	end
 
 	-- Build the upgrade request

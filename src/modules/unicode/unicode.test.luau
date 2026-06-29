@@ -307,7 +307,26 @@ suite:test("case mapping: Greek sigma fold", function()
 	test.expect(unicode.foldCase("Σίσυφος")):toBe("σίσυφοσ")
 end)
 
-suite:test("graphemes/len/sub: UTF-8 codepoint slicing helpers", function()
+suite:test("graphemes/len/sub: grapheme-aware slicing helpers", function()
+	local s = "e\u{0301}\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{1F1EC}\u{1F1E7}\r\n"
+	local parts: { string } = {}
+	for g in unicode.graphemes(s) do
+		table.insert(parts, g)
+	end
+
+	test.expect(#parts):toBe(4)
+	test.expect(parts[1]):toBe("e\u{0301}")
+	test.expect(parts[2]):toBe("\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}")
+	test.expect(parts[3]):toBe("\u{1F1EC}\u{1F1E7}")
+	test.expect(parts[4]):toBe("\r\n")
+
+	test.expect(unicode.len(s)):toBe(4)
+	test.expect(unicode.sub(s, 2, 3)):toBe("\u{1F469}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{1F1EC}\u{1F1E7}")
+	test.expect(unicode.sub(s, -2, -1)):toBe("\u{1F1EC}\u{1F1E7}\r\n")
+	test.expect(unicode.sub(s, 10, 20)):toBe("")
+end)
+
+suite:test("graphemes/len/sub: simple multi-codepoint characters", function()
 	local s = "Aé𝄞🙂"
 	local parts: { string } = {}
 	for g in unicode.graphemes(s) do

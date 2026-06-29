@@ -16,6 +16,23 @@
 
 namespace fs = std::filesystem;
 
+static fs::path eryx_fs_path_from_utf8(const std::string& path) {
+#ifdef _WIN32
+    return fs::u8path(path);
+#else
+    return fs::path(path);
+#endif
+}
+
+static std::string eryx_fs_path_to_utf8(const fs::path& path) {
+#ifdef _WIN32
+    auto utf8 = path.u8string();
+    return std::string(utf8.begin(), utf8.end());
+#else
+    return path.string();
+#endif
+}
+
 // Cache status values stored in a parallel registry table named "_LOADED_STATUS".
 static const int CACHE_STATUS_UNSEEN = 0;
 static const int CACHE_STATUS_LOADING = 1;
@@ -806,7 +823,8 @@ static int eryx_require_native(lua_State* L, const char* szLibrary) {
 #else
 static int eryx_require_native(lua_State* L, const char* szLibrary) {
 #ifdef _WIN32
-    HMODULE hLib = LoadLibraryA(szLibrary);
+    fs::path libraryPath = eryx_fs_path_from_utf8(szLibrary);
+    HMODULE hLib = LoadLibraryW(libraryPath.c_str());
     if (hLib == NULL) {
         luaL_error(L, "Unable to load %s (%d)\n", szLibrary, GetLastError());
         return 0;
@@ -907,10 +925,10 @@ static int eryx_lua_require_resolved(lua_State* L) {
         case LocatedModule::TYPE_FILE: {
             // Native modules silently shadow a lua script.
             // Windows: [module].dll, Linux: lib[module].so, macOS: lib[module].dylib
-            fs::path basePath = fs::path(modulePath);
+            fs::path basePath = eryx_fs_path_from_utf8(modulePath);
             fs::path nativePath;
 #if defined(_WIN32)
-            nativePath = basePath.parent_path() / (basePath.stem().string() + ".dll");
+            nativePath = basePath.parent_path() / (basePath.stem().wstring() + L".dll");
 #elif defined(__APPLE__)
             nativePath = basePath.parent_path() / ("lib" + basePath.stem().string() + ".dylib");
 #else
@@ -918,10 +936,11 @@ static int eryx_lua_require_resolved(lua_State* L) {
 #endif
 
             if (fs::exists(nativePath)) {
-                chunkName = "@" + nativePath.string();
-                nret = eryx_require_native(L, nativePath.string().c_str());
+                std::string nativePathUtf8 = eryx_fs_path_to_utf8(nativePath);
+                chunkName = "@" + nativePathUtf8;
+                nret = eryx_require_native(L, nativePathUtf8.c_str());
             } else {
-                std::ifstream f(modulePath, std::ios::binary);
+                std::ifstream f(basePath, std::ios::binary);
                 if (!f) {
                     luaL_error(L, "Failed to read %s", modulePath.c_str());
                 }

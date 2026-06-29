@@ -538,7 +538,7 @@ function HttpServer.listen(self: HttpServer, callback: ((host: string, port: num
 				local wrap_ok, ssl_sock = pcall(function()
 					return self._sslCtx:wrapSocket(client_sock)
 				end)
-				if not wrap_ok then
+				if not wrap_ok or not ssl_sock then
 					pcall(function()
 						client_sock:close()
 					end)

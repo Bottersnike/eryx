@@ -213,7 +213,13 @@ function HttpConnection.connect(self: HttpConnection)
 		if not self._verifySsl then
 			ctx:setVerify(_ssl.VERIFY_NONE)
 		end
-		local ssock = ctx:wrapSocket(sock, self.host)
+		local ssock, err = ctx:wrapSocket(sock, self.host)
+		if not ssock then
+			pcall(function()
+				sock:close()
+			end)
+			error(err or "TLS handshake failed")
+		end
 		self._sock = ssock
 	else
 		self._sock = sock

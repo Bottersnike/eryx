@@ -221,6 +221,8 @@ add_luau_script_module(caching src/modules/caching.luau)
 add_luau_script_module(uri src/modules/uri.luau)
 add_luau_script_module(archive/tar src/modules/archive/tar.luau)
 add_luau_script_module(glob src/modules/glob.luau)
+add_luau_script_module(dns src/modules/dns.luau)
+add_luau_script_module(bufferBuilder src/modules/bufferBuilder.luau)
 
 add_luau_script_module(ip/
     src/modules/ip/address4.luau

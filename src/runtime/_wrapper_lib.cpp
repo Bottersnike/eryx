@@ -733,6 +733,28 @@ ERYX_API int eryx_pcall(lua_State* L, int nargs, int nresults, int errfunc) {
     return status;
 }
 
+static void eryx_close_timer_handle(uv_timer_t* timer) {
+    if (!timer || uv_is_closing((uv_handle_t*)timer)) return;
+
+    uv_timer_stop(timer);
+    uv_close((uv_handle_t*)timer, [](uv_handle_t* h) {
+        delete (char*)h->data;
+        delete (uv_timer_t*)h;
+    });
+}
+
+static void eryx_close_signal_handle(uv_signal_t* sigint) {
+    if (!sigint || uv_is_closing((uv_handle_t*)sigint)) return;
+
+    uv_close((uv_handle_t*)sigint, [](uv_handle_t* h) { delete (uv_signal_t*)h; });
+}
+
+static void eryx_close_async_handle(uv_async_t* async) {
+    if (!async || uv_is_closing((uv_handle_t*)async)) return;
+
+    uv_close((uv_handle_t*)async, [](uv_handle_t* h) { delete (uv_async_t*)h; });
+}
+
 ERYX_API EryxRuntime* eryx_setup_runtime(uv_loop_t* loop, lua_State* GL) {
     EryxRuntime* rt = new EryxRuntime;
     rt->GL = GL;
@@ -777,11 +799,7 @@ ERYX_API bool eryx_cancel_thread(EryxRuntime* rt, lua_State* GL, lua_State* targ
         lua_State* th = lua_tothread(GL, -1);
         lua_pop(GL, 1);
         if (th == target) {
-            uv_timer_stop(it->second);
-            uv_close((uv_handle_t*)it->second, [](uv_handle_t* h) {
-                delete (char*)h->data;  // free the timer payload
-                delete (uv_timer_t*)h;
-            });
+            eryx_close_timer_handle(it->second);
             lua_unref(GL, it->first);
             rt->pendingTimers.erase(it);
             return true;
@@ -823,10 +841,7 @@ ERYX_API void eryx_interrupt_runtime(EryxRuntime* rt) {
         // Queue the thread with inError = true and 1 arg (the error)
         eryx_push_thread(rt, ref, 1, true);
 
-        if (timer && !uv_is_closing((uv_handle_t*)timer)) {
-            uv_timer_stop(timer);
-            uv_close((uv_handle_t*)timer, [](uv_handle_t* h) { delete (uv_timer_t*)h; });
-        }
+        eryx_close_timer_handle(timer);
     }
 
     // Interrupt pending socket operations (poll-based)
@@ -853,9 +868,7 @@ ERYX_API void eryx_interrupt_runtime(EryxRuntime* rt) {
 
     // Close signal handle if we own one
     if (rt->sigint) {
-        if (!uv_is_closing((uv_handle_t*)rt->sigint)) {
-            uv_close((uv_handle_t*)rt->sigint, [](uv_handle_t* h) { delete (uv_signal_t*)h; });
-        }
+        eryx_close_signal_handle(rt->sigint);
         rt->sigint = nullptr;
     }
 }
@@ -863,11 +876,32 @@ ERYX_API void eryx_interrupt_runtime(EryxRuntime* rt) {
 ERYX_API void eryx_shutdown_runtime(EryxRuntime* rt) {
     if (!rt) return;
 
+    for (auto it = rt->pendingTimers.begin(); it != rt->pendingTimers.end(); ++it) {
+        if (rt->GL) {
+            lua_unref(rt->GL, it->first);
+        }
+        eryx_close_timer_handle(it->second);
+    }
+    rt->pendingTimers.clear();
+
+    if (rt->GL) {
+        for (const EryxThreadInfo& thread : rt->threads) {
+            lua_unref(rt->GL, thread.threadRef);
+        }
+    }
+    rt->threads.clear();
+
+    if (rt->sigint) {
+        eryx_close_signal_handle(rt->sigint);
+        rt->sigint = nullptr;
+    }
+
     if (rt->interruptAsync) {
         uv_async_t* expected = rt->interruptAsync;
         g_process_interrupt_async.compare_exchange_strong(expected, nullptr,
                                                           std::memory_order_acq_rel);
         rt->interruptAsync->data = nullptr;
+        eryx_close_async_handle(rt->interruptAsync);
         rt->interruptAsync = nullptr;
     }
 }
