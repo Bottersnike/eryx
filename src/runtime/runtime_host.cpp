@@ -8,6 +8,7 @@
 #include "../LuaUtil.hpp"
 #include "lexception.hpp"
 #include "lrequire.hpp"
+#include "userdata.hpp"
 
 namespace fs = std::filesystem;
 
@@ -113,7 +114,7 @@ ERYX_API bool eryx_runtime_host_init(EryxRuntimeHost* host, const char* sourceFi
     }
 
     if (uv_loop_init(&host->loop) != 0) {
-        lua_close(host->GL);
+        eryx_destroy_environment(host->GL);
         host->GL = nullptr;
         return false;
     }
@@ -135,7 +136,7 @@ ERYX_API void eryx_runtime_host_close(EryxRuntimeHost* host) {
     }
 
     if (host->GL) {
-        lua_close(host->GL);
+        eryx_destroy_environment(host->GL);
     }
 
     if (host->loopInitialized) {

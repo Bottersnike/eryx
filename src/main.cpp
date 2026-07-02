@@ -42,6 +42,7 @@
 #include "runtime/lexception.hpp"
 #include "runtime/lrequire.hpp"
 #include "runtime/runtime_host.hpp"
+#include "runtime/userdata.hpp"
 #include "vfs.hpp"
 
 #ifdef ERYX_EMBED
@@ -1011,7 +1012,7 @@ int main_repl(const RuntimeExecutionConfig& runtimeConfig) {
         buffer.clear();
     }
 
-    lua_close(GL);
+    eryx_destroy_environment(GL);
 
     return exitCode;
 }

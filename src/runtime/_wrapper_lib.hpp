@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "../pch.hpp"
+#include "./userdata.hpp"
 #include "Luau/CodeGen.h"
 #include "Luau/ExperimentalFlags.h"
 #include "lua.h"
@@ -106,6 +107,7 @@ ERYX_API int eryx_luau_autocomplete(lua_State* L);
 ERYX_API int eryx_luau_typeofModule(lua_State* L);
 
 ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename);
+ERYX_API void eryx_destroy_environment(lua_State* L);
 
 // Debug helpers that need VM-private stack/proto access. Native modules call
 // these through EryxShared instead of including VM internals directly.

@@ -163,6 +163,7 @@ add_library(EryxShared ${_ERYX_LIB_TYPE}
     src/runtime/lprint.cpp
     src/runtime/lmarshall.cpp
     src/runtime/embedded_registry.cpp
+    src/runtime/userdata.cpp
 
     src/vfs.cpp  # So lexception can resolve VFS files
 )

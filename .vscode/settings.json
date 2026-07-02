@@ -26,5 +26,21 @@
         "LuauCheckRecursionLimit": "600",
         "LuauConstraintGeneratorRecursionLimit": "600",
         "LuauVisitRecursionLimit": "1000"
+    },
+
+    "luau-lsp.fflags.override": {
+        "LuauSubtypingIterationLimit": "40000",
+        "LuauSubtypingRecursionLimit": "200",
+        "LuauTypeInferIterationLimit": "40000",
+        "LuauTypeInferRecursionLimit": "330",
+        "LuauTypeInferTypePackLoopLimit": "10000",
+        "LuauSolverConstraintLimit": "2000",
+        "LuauSolverRecursionLimit": "1000",
+        "LuauSimplificationComplexityLimit": "16",
+        "LuauTypeSimplificationIterationLimit": "256",
+        "LuauUnifierRecursionLimit": "200",
+        "LuauCheckRecursionLimit": "600",
+        "LuauConstraintGeneratorRecursionLimit": "600",
+        "LuauVisitRecursionLimit": "1000"
     }
 }

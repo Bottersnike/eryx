@@ -6,6 +6,7 @@
 #include "lconfig.hpp"
 #include "lexception.hpp"
 #include "lunicode.hpp"
+#include "userdata.hpp"
 
 // Analysis headers (available because LuauShared links Luau.Analysis)
 #include <algorithm>
@@ -1443,7 +1444,9 @@ struct EryxFileResolver : Luau::FileResolver {
     mutable lua_State* helperState = nullptr;
 
     ~EryxFileResolver() {
-        if (helperState) lua_close(helperState);
+        if (helperState) {
+            eryx_destroy_environment(helperState);
+        }
     }
 
     lua_State* getHelperState() const {
@@ -1619,7 +1622,9 @@ struct EryxConfigResolver : Luau::ConfigResolver {
     mutable lua_State* helperState = nullptr;
 
     ~EryxConfigResolver() {
-        if (helperState) lua_close(helperState);
+        if (helperState) {
+            eryx_destroy_environment(helperState);
+        }
     }
 
     lua_State* getHelperState() const {
@@ -2312,6 +2317,7 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     // Exceptions are going to overwrite pcall and xpcall
     exception_lib_register(L);
     unicode_string_lib_register(L);
+    eryxUdata_initialiseEnvironment(L);
 
     // Register our custom print
     // TODO: Bring this back once it's not bugged to all hell
@@ -2413,4 +2419,13 @@ ERYX_API lua_State* eryx_initialise_environment(const char* sourceFilename) {
     luaL_sandbox(L);
 
     return L;
+}
+
+ERYX_API void eryx_destroy_environment(lua_State* L) {
+    if (!L) {
+        return;
+    }
+
+    eryxUdata_destroyEnvironment(L);
+    lua_close(L);
 }

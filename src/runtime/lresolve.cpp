@@ -16,6 +16,7 @@
 #include "lconfig.hpp"
 #include "lexception.hpp"
 #include "lua.h"
+#include "userdata.hpp"
 
 namespace fs = std::filesystem;
 
@@ -590,7 +591,7 @@ std::vector<LocatedModule> eryx_resolve_modules(lua_State* L, RequireContext& ct
 std::vector<LocatedModule> eryx_resolve_modules(RequireContext& ctx, const std::string path) {
     lua_State* L = eryx_initialise_environment(nullptr);
     auto modules = eryx_resolve_modules(L, ctx, path);
-    lua_close(L);
+    eryx_destroy_environment(L);
     return modules;
 }
 
