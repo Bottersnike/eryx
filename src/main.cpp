@@ -930,6 +930,13 @@ int main_repl(const RuntimeExecutionConfig& runtimeConfig) {
     lua_State* L = lua_newthread(GL);
     luaL_sandboxthread(L);
 
+    lua_pushliteral(L,
+                    "View the complete documentation online at https://eryx.bsnk.me/\n"
+                    "Note: Every line in this REPL runs in its own scope.\n"
+                    "      Locals will only persist for one line; use globals when persistent "
+                    "variables are desired.");
+    lua_setglobal(L, "help");
+
     // We could yoink this from the Luau Repl later, but for now we won't
     // ic_set_default_completer(completeRepl, L);
 
