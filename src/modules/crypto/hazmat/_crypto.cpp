@@ -13,6 +13,7 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -369,12 +370,12 @@ static std::string get_ec_group_name(lua_State* L, EVP_PKEY* pkey, const char* o
     return normalize_ec_group_name(group_name);
 }
 
-static const char* HASH_CTX_METATABLE = "crypto.hash.ctx";
-static const char* HMAC_CTX_METATABLE = "crypto.hmac.ctx";
-static const char* AES_CTX_METATABLE = "crypto.aes.ctx";
-static const char* CAMELLIA_CTX_METATABLE = "crypto.camellia.ctx";
-static const char* DES_CTX_METATABLE = "crypto.des.ctx";
-static const char* CHACHA20_CTX_METATABLE = "crypto.chacha20.ctx";
+udataRef* hashCtxRef;
+udataRef* hmacCtxRef;
+udataRef* aesCtxRef;
+udataRef* camelliaCtxRef;
+udataRef* desCtxRef;
+udataRef* chacha20CtxRef;
 
 struct LuaHashCtx {
     EVP_MD_CTX* ctx;
@@ -382,17 +383,18 @@ struct LuaHashCtx {
     bool finalized;
 };
 
-static void hash_ctx_dtor(void* ud) {
+static void hash_ctx_dtor(lua_State* L, void* ud) {
     auto* ctx = (LuaHashCtx*)ud;
     if (ctx->ctx) {
-        EVP_MD_CTX_free(ctx->ctx);
+        EVP_MD_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        EVP_MD_CTX_free(native);
     }
     ctx->closed = true;
 }
 
 static LuaHashCtx* check_hash_ctx(lua_State* L) {
-    auto* ctx = (LuaHashCtx*)luaL_checkudata(L, 1, HASH_CTX_METATABLE);
+    auto* ctx = (LuaHashCtx*)eryxUdata_checkudata(L, hashCtxRef, 1);
     if (ctx->closed || !ctx->ctx) luaL_error(L, "hash context is closed");
     return ctx;
 }
@@ -422,22 +424,26 @@ static int hash_ctx_final(lua_State* L) {
     }
 
     ctx->finalized = true;
+    EVP_MD_CTX* native = ctx->ctx;
+    ctx->ctx = nullptr;
+    EVP_MD_CTX_free(native);
     resize_top_buffer(L, digest_size);
     return 1;
 }
 
 static int hash_ctx_close(lua_State* L) {
-    auto* ctx = (LuaHashCtx*)luaL_checkudata(L, 1, HASH_CTX_METATABLE);
+    auto* ctx = (LuaHashCtx*)eryxUdata_checkudata(L, hashCtxRef, 1);
     if (ctx->ctx) {
-        EVP_MD_CTX_free(ctx->ctx);
+        EVP_MD_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        EVP_MD_CTX_free(native);
     }
     ctx->closed = true;
     return 0;
 }
 
 static int hash_ctx_tostring(lua_State* L) {
-    auto* ctx = (LuaHashCtx*)luaL_checkudata(L, 1, HASH_CTX_METATABLE);
+    auto* ctx = (LuaHashCtx*)eryxUdata_checkudata(L, hashCtxRef, 1);
     const char* state = ctx->closed ? "closed" : (ctx->finalized ? "finalized" : "open");
     lua_pushfstring(L, "crypto.hash(%s)", state);
     return 1;
@@ -447,19 +453,17 @@ static int hash_new(lua_State* L) {
     const char* hash_name = luaL_checkstring(L, 1);
     const EVP_MD* md = openssl_md_from_name(L, hash_name);
 
-    auto* ctx = (LuaHashCtx*)lua_newuserdatadtor(L, sizeof(LuaHashCtx), hash_ctx_dtor);
+    auto* ctx = (LuaHashCtx*)eryxUdata_pushudata(L, hashCtxRef);
+    new (ctx) LuaHashCtx{};
     ctx->ctx = EVP_MD_CTX_new();
     ctx->closed = false;
     ctx->finalized = false;
     if (!ctx->ctx) push_openssl_error(L, "hash.new");
 
     if (EVP_DigestInit_ex(ctx->ctx, md, nullptr) != 1) {
-        hash_ctx_dtor(ctx);
+        hash_ctx_dtor(L, ctx);
         push_openssl_error(L, "hash.new");
     }
-
-    luaL_getmetatable(L, HASH_CTX_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -489,32 +493,34 @@ struct LuaCipherCtx {
     bool tagSet;
 };
 
-static void hmac_ctx_dtor(void* ud) {
+static void hmac_ctx_dtor(lua_State* L, void* ud) {
     auto* ctx = (LuaHmacCtx*)ud;
     if (ctx->ctx) {
-        HMAC_CTX_free(ctx->ctx);
+        HMAC_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        HMAC_CTX_free(native);
     }
     ctx->closed = true;
 }
 
 static LuaHmacCtx* check_hmac_ctx(lua_State* L) {
-    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    auto* ctx = (LuaHmacCtx*)eryxUdata_checkudata(L, hmacCtxRef, 1);
     if (ctx->closed || !ctx->ctx) luaL_error(L, "hmac context is closed");
     return ctx;
 }
 
-static void cipher_ctx_dtor(void* ud) {
+static void cipher_ctx_dtor(lua_State* L, void* ud) {
     auto* ctx = (LuaCipherCtx*)ud;
     if (ctx->ctx) {
-        EVP_CIPHER_CTX_free(ctx->ctx);
+        EVP_CIPHER_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        EVP_CIPHER_CTX_free(native);
     }
     ctx->closed = true;
 }
 
-static LuaCipherCtx* check_cipher_ctx(lua_State* L, const char* metatable) {
-    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
+static LuaCipherCtx* check_cipher_ctx(lua_State* L, udataRef* ref) {
+    auto* ctx = (LuaCipherCtx*)eryxUdata_checkudata(L, ref, 1);
     if (ctx->closed || !ctx->ctx) luaL_error(L, "%s context is closed", ctx->family);
     return ctx;
 }
@@ -523,8 +529,8 @@ static bool cipher_mode_is_aead(EvpCipherStreamMode mode) {
     return mode == EvpCipherStreamMode::GCM;
 }
 
-static int cipher_ctx_update(lua_State* L, const char* metatable) {
-    auto* ctx = check_cipher_ctx(L, metatable);
+static int cipher_ctx_update(lua_State* L, udataRef* ref) {
+    auto* ctx = check_cipher_ctx(L, ref);
     if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
 
     size_t inputLen = 0;
@@ -549,8 +555,8 @@ static int cipher_ctx_update(lua_State* L, const char* metatable) {
     return 1;
 }
 
-static int cipher_ctx_update_aad(lua_State* L, const char* metatable) {
-    auto* ctx = check_cipher_ctx(L, metatable);
+static int cipher_ctx_update_aad(lua_State* L, udataRef* ref) {
+    auto* ctx = check_cipher_ctx(L, ref);
     if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
     if (!cipher_mode_is_aead(ctx->mode))
         luaL_error(L, "%s.updateAAD is only supported for GCM mode", ctx->family);
@@ -572,8 +578,8 @@ static int cipher_ctx_update_aad(lua_State* L, const char* metatable) {
     return 0;
 }
 
-static int cipher_ctx_set_tag(lua_State* L, const char* metatable) {
-    auto* ctx = check_cipher_ctx(L, metatable);
+static int cipher_ctx_set_tag(lua_State* L, udataRef* ref) {
+    auto* ctx = check_cipher_ctx(L, ref);
     if (ctx->encrypt) luaL_error(L, "%s.setTag is only supported on decrypt contexts", ctx->family);
     if (!cipher_mode_is_aead(ctx->mode))
         luaL_error(L, "%s.setTag is only supported for GCM mode", ctx->family);
@@ -593,8 +599,8 @@ static int cipher_ctx_set_tag(lua_State* L, const char* metatable) {
     return 0;
 }
 
-static int cipher_ctx_get_tag(lua_State* L, const char* metatable) {
-    auto* ctx = check_cipher_ctx(L, metatable);
+static int cipher_ctx_get_tag(lua_State* L, udataRef* ref) {
+    auto* ctx = check_cipher_ctx(L, ref);
     if (!ctx->encrypt)
         luaL_error(L, "%s.getTag is only supported on encrypt contexts", ctx->family);
     if (!cipher_mode_is_aead(ctx->mode))
@@ -611,8 +617,8 @@ static int cipher_ctx_get_tag(lua_State* L, const char* metatable) {
     return 1;
 }
 
-static int cipher_ctx_final(lua_State* L, const char* metatable) {
-    auto* ctx = check_cipher_ctx(L, metatable);
+static int cipher_ctx_final(lua_State* L, udataRef* ref) {
+    auto* ctx = check_cipher_ctx(L, ref);
     if (ctx->finalized) luaL_error(L, "%s context is already finalized", ctx->family);
     if (!ctx->encrypt && cipher_mode_is_aead(ctx->mode) && !ctx->tagSet) {
         luaL_error(L, "%s.final requires setTag to be called first for GCM decryption",
@@ -638,32 +644,34 @@ static int cipher_ctx_final(lua_State* L, const char* metatable) {
     return 1;
 }
 
-static int cipher_ctx_close(lua_State* L, const char* metatable) {
-    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
+static int cipher_ctx_close(lua_State* L, udataRef* ref) {
+    auto* ctx = (LuaCipherCtx*)eryxUdata_checkudata(L, ref, 1);
     if (ctx->ctx) {
-        EVP_CIPHER_CTX_free(ctx->ctx);
+        EVP_CIPHER_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        EVP_CIPHER_CTX_free(native);
     }
     ctx->closed = true;
     return 0;
 }
 
-static int cipher_ctx_tostring(lua_State* L, const char* metatable) {
-    auto* ctx = (LuaCipherCtx*)luaL_checkudata(L, 1, metatable);
+static int cipher_ctx_tostring(lua_State* L, udataRef* ref) {
+    auto* ctx = (LuaCipherCtx*)eryxUdata_checkudata(L, ref, 1);
     const char* state = ctx->closed ? "closed" : (ctx->finalized ? "finalized" : "open");
     const char* op = ctx->encrypt ? "encrypt" : "decrypt";
     lua_pushfstring(L, "crypto.%s(%s,%s)", ctx->family, op, state);
     return 1;
 }
 
-static int push_cipher_ctx(lua_State* L, const char* metatable, const char* family,
+static int push_cipher_ctx(lua_State* L, udataRef* ref, const char* family,
                            const EVP_CIPHER* cipher, EvpCipherStreamMode mode, bool encrypt,
                            const void* key, const void* iv, size_t ivLen) {
     if ((size_t)EVP_CIPHER_iv_length(cipher) != ivLen && mode != EvpCipherStreamMode::GCM) {
         luaL_error(L, "invalid IV length");
     }
 
-    auto* ctx = (LuaCipherCtx*)lua_newuserdatadtor(L, sizeof(LuaCipherCtx), cipher_ctx_dtor);
+    auto* ctx = (LuaCipherCtx*)eryxUdata_pushudata(L, ref);
+    new (ctx) LuaCipherCtx{};
     ctx->ctx = EVP_CIPHER_CTX_new();
     ctx->mode = mode;
     ctx->family = family;
@@ -699,13 +707,10 @@ static int push_cipher_ctx(lua_State* L, const char* metatable, const char* fami
     }
 
     if (ok != 1) {
-        cipher_ctx_dtor(ctx);
+        cipher_ctx_dtor(L, ctx);
         std::string op = std::string(family) + ".new";
         push_openssl_error(L, op.c_str());
     }
-
-    luaL_getmetatable(L, metatable);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -758,7 +763,7 @@ static int aes_new(lua_State* L) {
         luaL_error(L, "unsupported AES mode '%s'", mode_name);
     }
 
-    return push_cipher_ctx(L, AES_CTX_METATABLE, "aes", cipher, mode, encrypt, key, iv, ivLen);
+    return push_cipher_ctx(L, aesCtxRef, "aes", cipher, mode, encrypt, key, iv, ivLen);
 }
 
 static int camellia_new(lua_State* L) {
@@ -796,8 +801,7 @@ static int camellia_new(lua_State* L) {
         luaL_error(L, "unsupported Camellia mode '%s'", mode_name);
     }
 
-    return push_cipher_ctx(L, CAMELLIA_CTX_METATABLE, "camellia", cipher, mode, encrypt, key, iv,
-                           ivLen);
+    return push_cipher_ctx(L, camelliaCtxRef, "camellia", cipher, mode, encrypt, key, iv, ivLen);
 }
 
 static int des_new(lua_State* L) {
@@ -821,7 +825,7 @@ static int des_new(lua_State* L) {
         luaL_error(L, "unsupported 3DES mode '%s'", mode_name);
     }
 
-    return push_cipher_ctx(L, DES_CTX_METATABLE, "des", des3_cbc_cipher_for_key_len(L, keyLen),
+    return push_cipher_ctx(L, desCtxRef, "des", des3_cbc_cipher_for_key_len(L, keyLen),
                            EvpCipherStreamMode::CBC, encrypt, key, iv, ivLen);
 }
 
@@ -847,14 +851,14 @@ static int chacha20_new(lua_State* L) {
 
         unsigned char iv[16] = { 0 };
         memcpy(iv + 4, nonce, nonceLen);
-        return push_cipher_ctx(L, CHACHA20_CTX_METATABLE, "chacha20",
+        return push_cipher_ctx(L, chacha20CtxRef, "chacha20",
                                chacha20_cipher_for_key_len(L, keyLen), EvpCipherStreamMode::CTR,
                                encrypt, key, iv, sizeof(iv));
     }
 
     if (strcmp(mode_name, "poly1305") == 0) {
         if (nonceLen != 12) luaL_error(L, "ChaCha20-Poly1305 nonce must be 12 bytes");
-        return push_cipher_ctx(L, CHACHA20_CTX_METATABLE, "chacha20",
+        return push_cipher_ctx(L, chacha20CtxRef, "chacha20",
                                chacha20_poly1305_cipher_for_key_len(L, keyLen),
                                EvpCipherStreamMode::GCM, encrypt, key, nonce, nonceLen);
     }
@@ -893,22 +897,26 @@ static int hmac_ctx_final(lua_State* L) {
     }
 
     ctx->finalized = true;
+    HMAC_CTX* native = ctx->ctx;
+    ctx->ctx = nullptr;
+    HMAC_CTX_free(native);
     resize_top_buffer(L, macLen);
     return 1;
 }
 
 static int hmac_ctx_close(lua_State* L) {
-    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    auto* ctx = (LuaHmacCtx*)eryxUdata_checkudata(L, hmacCtxRef, 1);
     if (ctx->ctx) {
-        HMAC_CTX_free(ctx->ctx);
+        HMAC_CTX* native = ctx->ctx;
         ctx->ctx = nullptr;
+        HMAC_CTX_free(native);
     }
     ctx->closed = true;
     return 0;
 }
 
 static int hmac_ctx_tostring(lua_State* L) {
-    auto* ctx = (LuaHmacCtx*)luaL_checkudata(L, 1, HMAC_CTX_METATABLE);
+    auto* ctx = (LuaHmacCtx*)eryxUdata_checkudata(L, hmacCtxRef, 1);
     const char* state = ctx->closed ? "closed" : (ctx->finalized ? "finalized" : "open");
     lua_pushfstring(L, "crypto.hmac(%s)", state);
     return 1;
@@ -921,73 +929,55 @@ static int hmac_new(lua_State* L) {
     const EVP_MD* md = openssl_md_from_name(L, hash_name);
     check_openssl_input_len(L, keyLen, "key");
 
-    auto* ctx = (LuaHmacCtx*)lua_newuserdatadtor(L, sizeof(LuaHmacCtx), hmac_ctx_dtor);
+    auto* ctx = (LuaHmacCtx*)eryxUdata_pushudata(L, hmacCtxRef);
+    new (ctx) LuaHmacCtx{};
     ctx->ctx = HMAC_CTX_new();
     ctx->closed = false;
     ctx->finalized = false;
     if (!ctx->ctx) push_openssl_error(L, "hmac.new");
 
     if (HMAC_Init_ex(ctx->ctx, key, (int)keyLen, md, nullptr) != 1) {
-        hmac_ctx_dtor(ctx);
+        hmac_ctx_dtor(L, ctx);
         push_openssl_error(L, "hmac.new");
     }
-
-    luaL_getmetatable(L, HMAC_CTX_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-static int aes_ctx_update(lua_State* L) { return cipher_ctx_update(L, AES_CTX_METATABLE); }
-static int aes_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, AES_CTX_METATABLE); }
-static int aes_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, AES_CTX_METATABLE); }
-static int aes_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, AES_CTX_METATABLE); }
-static int aes_ctx_final(lua_State* L) { return cipher_ctx_final(L, AES_CTX_METATABLE); }
-static int aes_ctx_close(lua_State* L) { return cipher_ctx_close(L, AES_CTX_METATABLE); }
-static int aes_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, AES_CTX_METATABLE); }
+static int aes_ctx_update(lua_State* L) { return cipher_ctx_update(L, aesCtxRef); }
+static int aes_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, aesCtxRef); }
+static int aes_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, aesCtxRef); }
+static int aes_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, aesCtxRef); }
+static int aes_ctx_final(lua_State* L) { return cipher_ctx_final(L, aesCtxRef); }
+static int aes_ctx_close(lua_State* L) { return cipher_ctx_close(L, aesCtxRef); }
+static int aes_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, aesCtxRef); }
 
-static int camellia_ctx_update(lua_State* L) {
-    return cipher_ctx_update(L, CAMELLIA_CTX_METATABLE);
-}
+static int camellia_ctx_update(lua_State* L) { return cipher_ctx_update(L, camelliaCtxRef); }
 static int camellia_ctx_update_aad(lua_State* L) {
-    return cipher_ctx_update_aad(L, CAMELLIA_CTX_METATABLE);
+    return cipher_ctx_update_aad(L, camelliaCtxRef);
 }
-static int camellia_ctx_set_tag(lua_State* L) {
-    return cipher_ctx_set_tag(L, CAMELLIA_CTX_METATABLE);
-}
-static int camellia_ctx_get_tag(lua_State* L) {
-    return cipher_ctx_get_tag(L, CAMELLIA_CTX_METATABLE);
-}
-static int camellia_ctx_final(lua_State* L) { return cipher_ctx_final(L, CAMELLIA_CTX_METATABLE); }
-static int camellia_ctx_close(lua_State* L) { return cipher_ctx_close(L, CAMELLIA_CTX_METATABLE); }
-static int camellia_ctx_tostring(lua_State* L) {
-    return cipher_ctx_tostring(L, CAMELLIA_CTX_METATABLE);
-}
+static int camellia_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, camelliaCtxRef); }
+static int camellia_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, camelliaCtxRef); }
+static int camellia_ctx_final(lua_State* L) { return cipher_ctx_final(L, camelliaCtxRef); }
+static int camellia_ctx_close(lua_State* L) { return cipher_ctx_close(L, camelliaCtxRef); }
+static int camellia_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, camelliaCtxRef); }
 
-static int des_ctx_update(lua_State* L) { return cipher_ctx_update(L, DES_CTX_METATABLE); }
-static int des_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, DES_CTX_METATABLE); }
-static int des_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, DES_CTX_METATABLE); }
-static int des_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, DES_CTX_METATABLE); }
-static int des_ctx_final(lua_State* L) { return cipher_ctx_final(L, DES_CTX_METATABLE); }
-static int des_ctx_close(lua_State* L) { return cipher_ctx_close(L, DES_CTX_METATABLE); }
-static int des_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, DES_CTX_METATABLE); }
+static int des_ctx_update(lua_State* L) { return cipher_ctx_update(L, desCtxRef); }
+static int des_ctx_update_aad(lua_State* L) { return cipher_ctx_update_aad(L, desCtxRef); }
+static int des_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, desCtxRef); }
+static int des_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, desCtxRef); }
+static int des_ctx_final(lua_State* L) { return cipher_ctx_final(L, desCtxRef); }
+static int des_ctx_close(lua_State* L) { return cipher_ctx_close(L, desCtxRef); }
+static int des_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, desCtxRef); }
 
-static int chacha20_ctx_update(lua_State* L) {
-    return cipher_ctx_update(L, CHACHA20_CTX_METATABLE);
-}
+static int chacha20_ctx_update(lua_State* L) { return cipher_ctx_update(L, chacha20CtxRef); }
 static int chacha20_ctx_update_aad(lua_State* L) {
-    return cipher_ctx_update_aad(L, CHACHA20_CTX_METATABLE);
+    return cipher_ctx_update_aad(L, chacha20CtxRef);
 }
-static int chacha20_ctx_set_tag(lua_State* L) {
-    return cipher_ctx_set_tag(L, CHACHA20_CTX_METATABLE);
-}
-static int chacha20_ctx_get_tag(lua_State* L) {
-    return cipher_ctx_get_tag(L, CHACHA20_CTX_METATABLE);
-}
-static int chacha20_ctx_final(lua_State* L) { return cipher_ctx_final(L, CHACHA20_CTX_METATABLE); }
-static int chacha20_ctx_close(lua_State* L) { return cipher_ctx_close(L, CHACHA20_CTX_METATABLE); }
-static int chacha20_ctx_tostring(lua_State* L) {
-    return cipher_ctx_tostring(L, CHACHA20_CTX_METATABLE);
-}
+static int chacha20_ctx_set_tag(lua_State* L) { return cipher_ctx_set_tag(L, chacha20CtxRef); }
+static int chacha20_ctx_get_tag(lua_State* L) { return cipher_ctx_get_tag(L, chacha20CtxRef); }
+static int chacha20_ctx_final(lua_State* L) { return cipher_ctx_final(L, chacha20CtxRef); }
+static int chacha20_ctx_close(lua_State* L) { return cipher_ctx_close(L, chacha20CtxRef); }
+static int chacha20_ctx_tostring(lua_State* L) { return cipher_ctx_tostring(L, chacha20CtxRef); }
 
 // ---------------------------------------------------------------------------
 // Symmetric cipher helpers (AES, Camellia, 3DES, ChaCha20)
@@ -2469,142 +2459,173 @@ static void push_random_table(lua_State* L) {
     lua_setfield(L, -2, "hex");
 }
 
+luaL_Reg hashCtxMethods[] = {
+    { "update", hash_ctx_update },
+    { "final", hash_ctx_final },
+    { "close", hash_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg hashCtxMetamethods[] = {
+    { "__tostring", hash_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef hashCtxDef = {
+    .name = "crypto.hash.ctx",
+    .size = sizeof(LuaHashCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = hashCtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = hashCtxMethods,
+    .destructor = hash_ctx_dtor,
+};
+
+luaL_Reg hmacCtxMethods[] = {
+    { "update", hmac_ctx_update },
+    { "final", hmac_ctx_final },
+    { "close", hmac_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg hmacCtxMetamethods[] = {
+    { "__tostring", hmac_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef hmacCtxDef = {
+    .name = "crypto.hmac.ctx",
+    .size = sizeof(LuaHmacCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = hmacCtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = hmacCtxMethods,
+    .destructor = hmac_ctx_dtor,
+};
+
+luaL_Reg aesCtxMethods[] = {
+    { "update", aes_ctx_update },  { "updateAAD", aes_ctx_update_aad },
+    { "setTag", aes_ctx_set_tag }, { "getTag", aes_ctx_get_tag },
+    { "final", aes_ctx_final },    { "close", aes_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg aesCtxMetamethods[] = {
+    { "__tostring", aes_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef aesCtxDef = {
+    .name = "crypto.aes.ctx",
+    .size = sizeof(LuaCipherCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = aesCtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = aesCtxMethods,
+    .destructor = cipher_ctx_dtor,
+};
+
+luaL_Reg camelliaCtxMethods[] = {
+    { "update", camellia_ctx_update },
+    { "updateAAD", camellia_ctx_update_aad },
+    { "setTag", camellia_ctx_set_tag },
+    { "getTag", camellia_ctx_get_tag },
+    { "final", camellia_ctx_final },
+    { "close", camellia_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg camelliaCtxMetamethods[] = {
+    { "__tostring", camellia_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef camelliaCtxDef = {
+    .name = "crypto.camellia.ctx",
+    .size = sizeof(LuaCipherCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = camelliaCtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = camelliaCtxMethods,
+    .destructor = cipher_ctx_dtor,
+};
+
+luaL_Reg desCtxMethods[] = {
+    { "update", des_ctx_update },  { "updateAAD", des_ctx_update_aad },
+    { "setTag", des_ctx_set_tag }, { "getTag", des_ctx_get_tag },
+    { "final", des_ctx_final },    { "close", des_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg desCtxMetamethods[] = {
+    { "__tostring", des_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef desCtxDef = {
+    .name = "crypto.des.ctx",
+    .size = sizeof(LuaCipherCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = desCtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = desCtxMethods,
+    .destructor = cipher_ctx_dtor,
+};
+
+luaL_Reg chacha20CtxMethods[] = {
+    { "update", chacha20_ctx_update },
+    { "updateAAD", chacha20_ctx_update_aad },
+    { "setTag", chacha20_ctx_set_tag },
+    { "getTag", chacha20_ctx_get_tag },
+    { "final", chacha20_ctx_final },
+    { "close", chacha20_ctx_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg chacha20CtxMetamethods[] = {
+    { "__tostring", chacha20_ctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef chacha20CtxDef = {
+    .name = "crypto.chacha20.ctx",
+    .size = sizeof(LuaCipherCtx),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = chacha20CtxMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = chacha20CtxMethods,
+    .destructor = cipher_ctx_dtor,
+};
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen__crypto(lua_State* L) {
-    luaL_newmetatable(L, HASH_CTX_METATABLE);
-    {
-        static const luaL_Reg hash_methods[] = {
-            { "update", hash_ctx_update },
-            { "final", hash_ctx_final },
-            { "close", hash_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = hash_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, hash_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, hash_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, HMAC_CTX_METATABLE);
-    {
-        static const luaL_Reg hmac_methods[] = {
-            { "update", hmac_ctx_update },
-            { "final", hmac_ctx_final },
-            { "close", hmac_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = hmac_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, hmac_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, hmac_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, AES_CTX_METATABLE);
-    {
-        static const luaL_Reg aes_methods[] = {
-            { "update", aes_ctx_update },  { "updateAAD", aes_ctx_update_aad },
-            { "setTag", aes_ctx_set_tag }, { "getTag", aes_ctx_get_tag },
-            { "final", aes_ctx_final },    { "close", aes_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = aes_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, aes_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, aes_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, CAMELLIA_CTX_METATABLE);
-    {
-        static const luaL_Reg camellia_methods[] = {
-            { "update", camellia_ctx_update },
-            { "updateAAD", camellia_ctx_update_aad },
-            { "setTag", camellia_ctx_set_tag },
-            { "getTag", camellia_ctx_get_tag },
-            { "final", camellia_ctx_final },
-            { "close", camellia_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = camellia_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, camellia_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, camellia_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, DES_CTX_METATABLE);
-    {
-        static const luaL_Reg des_methods[] = {
-            { "update", des_ctx_update },  { "updateAAD", des_ctx_update_aad },
-            { "setTag", des_ctx_set_tag }, { "getTag", des_ctx_get_tag },
-            { "final", des_ctx_final },    { "close", des_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = des_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, des_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, des_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, CHACHA20_CTX_METATABLE);
-    {
-        static const luaL_Reg chacha20_methods[] = {
-            { "update", chacha20_ctx_update },
-            { "updateAAD", chacha20_ctx_update_aad },
-            { "setTag", chacha20_ctx_set_tag },
-            { "getTag", chacha20_ctx_get_tag },
-            { "final", chacha20_ctx_final },
-            { "close", chacha20_ctx_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = chacha20_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, chacha20_ctx_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, chacha20_ctx_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+    hashCtxRef = eryxUdata_registerudata(L, &hashCtxDef);
+    hmacCtxRef = eryxUdata_registerudata(L, &hmacCtxDef);
+    aesCtxRef = eryxUdata_registerudata(L, &aesCtxDef);
+    camelliaCtxRef = eryxUdata_registerudata(L, &camelliaCtxDef);
+    desCtxRef = eryxUdata_registerudata(L, &desCtxDef);
+    chacha20CtxRef = eryxUdata_registerudata(L, &chacha20CtxDef);
 
     lua_newtable(L);
 

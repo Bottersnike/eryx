@@ -1,6 +1,7 @@
 // xml.cpp - XML module for Luau (element tree + XPath)
 // Wraps pugixml to provide DOM parsing, manipulation, serialisation and XPath queries.
 
+#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -9,7 +10,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "module_helpers.hpp"
 #include "pugixml.hpp"
 
 static const LuauModuleInfo INFO = {
@@ -19,12 +19,12 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-// ── Metatable names ───────────────────────────────────────────────────────────
+// -- Userdata refs -------------------------------------------------------------
 
-static const char* MT_DOCUMENT = "XmlDocument";
-static const char* MT_NODE = "XmlNode";
+static udataRef* documentRef;
+static udataRef* nodeRef;
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 // The xml_document owns all memory. We store it as a shared_ptr so that
 // XmlNode handles can prevent premature collection while they still
@@ -70,25 +70,24 @@ static void push_xml_node(lua_State* L, pugi::xml_node node, DocRef* ref) {
         lua_pushnil(L);
         return;
     }
-    LuaXmlNode* ud = (LuaXmlNode*)lua_newuserdata(L, sizeof(LuaXmlNode));
+    LuaXmlNode* ud = (LuaXmlNode*)eryxUdata_pushudata(L, nodeRef);
+    new (ud) LuaXmlNode();
     ud->node = node;
     ud->ref = ref;
     docref_retain(ref);
-    luaL_getmetatable(L, MT_NODE);
-    lua_setmetatable(L, -2);
 }
 
 // Check that argument is an XmlNode and return the handle.
 static LuaXmlNode* check_node(lua_State* L, int idx) {
-    return (LuaXmlNode*)luaL_checkudata(L, idx, MT_NODE);
+    return (LuaXmlNode*)eryxUdata_checkudata(L, nodeRef, idx);
 }
 
 // Check that argument is an XmlDocument and return the handle.
 static LuaXmlDocument* check_doc(lua_State* L, int idx) {
-    return (LuaXmlDocument*)luaL_checkudata(L, idx, MT_DOCUMENT);
+    return (LuaXmlDocument*)eryxUdata_checkudata(L, documentRef, idx);
 }
 
-// ── Node type name helper ─────────────────────────────────────────────────────
+// -- Node type name helper -----------------------------------------------------
 
 static const char* node_type_name(pugi::xml_node_type t) {
     switch (t) {
@@ -115,13 +114,13 @@ static const char* node_type_name(pugi::xml_node_type t) {
     }
 }
 
-// ── xml.parse(str) -> XmlDocument ─────────────────────────────────────────────
+// -- xml.parse(str) -> XmlDocument ---------------------------------------------
 
 static int xml_parse(lua_State* L) {
     size_t len;
     const char* str = luaL_checklstring(L, 1, &len);
 
-    LuaXmlDocument* ud = (LuaXmlDocument*)lua_newuserdata(L, sizeof(LuaXmlDocument));
+    LuaXmlDocument* ud = (LuaXmlDocument*)eryxUdata_pushudata(L, documentRef);
     ud->ref = docref_new();
 
     pugi::xml_parse_result result = ud->ref->doc->load_buffer(str, len);
@@ -133,17 +132,15 @@ static int xml_parse(lua_State* L) {
         luaL_error(L, "%s", err.c_str());
     }
 
-    luaL_getmetatable(L, MT_DOCUMENT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-// ── xml.load(path) -> XmlDocument ─────────────────────────────────────────────
+// -- xml.load(path) -> XmlDocument ---------------------------------------------
 
 static int xml_load(lua_State* L) {
     std::string path = luaL_checkpathlike(L, 1);
 
-    LuaXmlDocument* ud = (LuaXmlDocument*)lua_newuserdata(L, sizeof(LuaXmlDocument));
+    LuaXmlDocument* ud = (LuaXmlDocument*)eryxUdata_pushudata(L, documentRef);
     ud->ref = docref_new();
 
     pugi::xml_parse_result result = ud->ref->doc->load_file(path.c_str());
@@ -155,28 +152,24 @@ static int xml_load(lua_State* L) {
         luaL_error(L, "%s", err.c_str());
     }
 
-    luaL_getmetatable(L, MT_DOCUMENT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-// ── xml.document() -> new empty XmlDocument ───────────────────────────────────
+// -- xml.document() -> new empty XmlDocument -----------------------------------
 
 static int xml_document(lua_State* L) {
-    LuaXmlDocument* ud = (LuaXmlDocument*)lua_newuserdata(L, sizeof(LuaXmlDocument));
+    LuaXmlDocument* ud = (LuaXmlDocument*)eryxUdata_pushudata(L, documentRef);
     ud->ref = docref_new();
-    luaL_getmetatable(L, MT_DOCUMENT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-// ── Document methods ──────────────────────────────────────────────────────────
+// -- Document methods ----------------------------------------------------------
 
-static int doc_gc(lua_State* L) {
-    LuaXmlDocument* ud = check_doc(L, 1);
+static void doc_dtor(lua_State* L, void* ptr) {
+    (void)L;
+    LuaXmlDocument* ud = (LuaXmlDocument*)ptr;
     docref_release(ud->ref);
     ud->ref = nullptr;
-    return 0;
 }
 
 static int doc_tostring(lua_State* L) {
@@ -289,16 +282,17 @@ static int doc_appendchild(lua_State* L) {
     return 1;
 }
 
-// ── Node GC ───────────────────────────────────────────────────────────────────
+// -- Node GC -------------------------------------------------------------------
 
-static int node_gc(lua_State* L) {
-    LuaXmlNode* ud = check_node(L, 1);
+static void node_dtor(lua_State* L, void* ptr) {
+    (void)L;
+    LuaXmlNode* ud = (LuaXmlNode*)ptr;
     docref_release(ud->ref);
     ud->ref = nullptr;
-    return 0;
+    ud->~LuaXmlNode();
 }
 
-// ── Node methods ──────────────────────────────────────────────────────────────
+// -- Node methods --------------------------------------------------------------
 
 static int node_tostring(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
@@ -530,27 +524,24 @@ static int node_path(lua_State* L) {
     return 1;
 }
 
-// ── Node __index ──────────────────────────────────────────────────────────────
+// -- Node fields ---------------------------------------------------------------
 
-static int node_index(lua_State* L) {
+static int node_get_name(lua_State* L) {
     LuaXmlNode* ud = check_node(L, 1);
-    const char* key = luaL_checkstring(L, 2);
+    lua_pushstring(L, ud->node.name());
+    return 1;
+}
 
-    if (strcmp(key, "name") == 0) {
-        lua_pushstring(L, ud->node.name());
-        return 1;
-    }
-    if (strcmp(key, "type") == 0) {
-        lua_pushstring(L, node_type_name(ud->node.type()));
-        return 1;
-    }
-    if (strcmp(key, "value") == 0) {
-        lua_pushstring(L, ud->node.child_value());
-        return 1;
-    }
+static int node_get_type(lua_State* L) {
+    LuaXmlNode* ud = check_node(L, 1);
+    lua_pushstring(L, node_type_name(ud->node.type()));
+    return 1;
+}
 
-    // Fall through to metatable for methods
-    return eryx_metatable_index(L);
+static int node_get_value(lua_State* L) {
+    LuaXmlNode* ud = check_node(L, 1);
+    lua_pushstring(L, ud->node.child_value());
+    return 1;
 }
 
 // node:setname(name)
@@ -561,89 +552,83 @@ static int node_setname(lua_State* L) {
     return 0;
 }
 
-// ── Document __index ──────────────────────────────────────────────────────────
+// -- Module entry --------------------------------------------------------------
 
-static int doc_index(lua_State* L) {
-    // Fall through to metatable for methods
-    return eryx_metatable_index(L);
-}
+static luaL_Reg documentMethods[] = {
+    { "root", doc_root },   { "save", doc_save },         { "saveFile", doc_savefile },
+    { "xpath", doc_xpath }, { "xpathOne", doc_xpathone }, { "appendChild", doc_appendchild },
+    { nullptr, nullptr },
+};
 
-// ── Module entry ──────────────────────────────────────────────────────────────
+static luaL_Reg documentMetamethods[] = {
+    { "__tostring", doc_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef documentDef = {
+    .name = "XmlDocument",
+    .size = sizeof(LuaXmlDocument),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = documentMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = documentMethods,
+    .destructor = doc_dtor,
+};
+
+static udataField nodeFields[] = {
+    { "name", node_get_name, nullptr },
+    { "type", node_get_type, nullptr },
+    { "value", node_get_value, nullptr },
+    { nullptr, nullptr, nullptr },
+};
+
+static luaL_Reg nodeMethods[] = {
+    { "children", node_children },
+    { "child", node_child },
+    { "appendChild", node_appendchild },
+    { "prependChild", node_prependchild },
+    { "removeChild", node_removechild },
+    { "parent", node_parent },
+    { "nextSibling", node_nextsibling },
+    { "prevSibling", node_prevsibling },
+    { "attr", node_attr },
+    { "setAttr", node_setattr },
+    { "removeAttr", node_removeattr },
+    { "attrs", node_attrs },
+    { "text", node_text },
+    { "setText", node_settext },
+    { "xpath", node_xpath },
+    { "xpathOne", node_xpathone },
+    { "xpathValue", node_xpathvalue },
+    { "path", node_path },
+    { "setName", node_setname },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg nodeMetamethods[] = {
+    { "__tostring", node_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef nodeDef = {
+    .name = "XmlNode",
+    .size = sizeof(LuaXmlNode),
+    .fields = nodeFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nodeMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = nodeMethods,
+    .destructor = node_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_xml(lua_State* L) {
-    // -- XmlDocument metatable --
-    luaL_newmetatable(L, MT_DOCUMENT);
-    lua_pushcfunction(L, doc_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, doc_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, doc_gc, "gc");
-    lua_setfield(L, -2, "__gc");
-
-    // Methods
-    lua_pushcfunction(L, doc_root, "root");
-    lua_setfield(L, -2, "root");
-    lua_pushcfunction(L, doc_save, "save");
-    lua_setfield(L, -2, "save");
-    lua_pushcfunction(L, doc_savefile, "saveFile");
-    lua_setfield(L, -2, "saveFile");
-    lua_pushcfunction(L, doc_xpath, "xpath");
-    lua_setfield(L, -2, "xpath");
-    lua_pushcfunction(L, doc_xpathone, "xpathOne");
-    lua_setfield(L, -2, "xpathOne");
-    lua_pushcfunction(L, doc_appendchild, "appendChild");
-    lua_setfield(L, -2, "appendChild");
-    lua_pop(L, 1);
-
-    // -- XmlNode metatable --
-    luaL_newmetatable(L, MT_NODE);
-    lua_pushcfunction(L, node_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, node_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, node_gc, "gc");
-    lua_setfield(L, -2, "__gc");
-
-    // Methods
-    lua_pushcfunction(L, node_children, "children");
-    lua_setfield(L, -2, "children");
-    lua_pushcfunction(L, node_child, "child");
-    lua_setfield(L, -2, "child");
-    lua_pushcfunction(L, node_appendchild, "appendChild");
-    lua_setfield(L, -2, "appendChild");
-    lua_pushcfunction(L, node_prependchild, "prependChild");
-    lua_setfield(L, -2, "prependChild");
-    lua_pushcfunction(L, node_removechild, "removeChild");
-    lua_setfield(L, -2, "removeChild");
-    lua_pushcfunction(L, node_parent, "parent");
-    lua_setfield(L, -2, "parent");
-    lua_pushcfunction(L, node_nextsibling, "nextSibling");
-    lua_setfield(L, -2, "nextSibling");
-    lua_pushcfunction(L, node_prevsibling, "prevSibling");
-    lua_setfield(L, -2, "prevSibling");
-    lua_pushcfunction(L, node_attr, "attr");
-    lua_setfield(L, -2, "attr");
-    lua_pushcfunction(L, node_setattr, "setAttr");
-    lua_setfield(L, -2, "setAttr");
-    lua_pushcfunction(L, node_removeattr, "removeAttr");
-    lua_setfield(L, -2, "removeAttr");
-    lua_pushcfunction(L, node_attrs, "attrs");
-    lua_setfield(L, -2, "attrs");
-    lua_pushcfunction(L, node_text, "text");
-    lua_setfield(L, -2, "text");
-    lua_pushcfunction(L, node_settext, "setText");
-    lua_setfield(L, -2, "setText");
-    lua_pushcfunction(L, node_xpath, "xpath");
-    lua_setfield(L, -2, "xpath");
-    lua_pushcfunction(L, node_xpathone, "xpathOne");
-    lua_setfield(L, -2, "xpathOne");
-    lua_pushcfunction(L, node_xpathvalue, "xpathValue");
-    lua_setfield(L, -2, "xpathValue");
-    lua_pushcfunction(L, node_path, "path");
-    lua_setfield(L, -2, "path");
-    lua_pushcfunction(L, node_setname, "setName");
-    lua_setfield(L, -2, "setName");
-    lua_pop(L, 1);
+    documentRef = eryxUdata_registerudata(L, &documentDef);
+    nodeRef = eryxUdata_registerudata(L, &nodeDef);
 
     // -- Module table --
     lua_newtable(L);

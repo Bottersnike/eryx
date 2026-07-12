@@ -14,6 +14,9 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
+udataRef* zlibDeflate;
+udataRef* zlibInflate;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -25,23 +28,13 @@ static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;            // 32 KB
 // Streaming Deflate
 // ---------------------------------------------------------------------------
 
-static const char* MT_DEFLATE = "zlib.Deflate";
-
 struct LuaDeflate {
     z_stream strm;
     bool closed;
 };
 
-static void deflate_dtor(void* ud) {
-    auto* d = (LuaDeflate*)ud;
-    if (!d->closed) {
-        deflateEnd(&d->strm);
-        d->closed = true;
-    }
-}
-
 static LuaDeflate* check_deflate(lua_State* L) {
-    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+    auto* d = (LuaDeflate*)eryxUdata_checkudata(L, zlibDeflate, 1);
     if (d->closed) luaL_error(L, "zlib: deflate stream is closed");
     return d;
 }
@@ -110,17 +103,22 @@ static int l_deflate_finish(lua_State* L) {
 }
 
 // deflate:close()
-static int l_deflate_close(lua_State* L) {
-    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+static void l_deflate_destructor(lua_State* L, void* ud) {
+    auto* d = (LuaDeflate*)ud;
     if (!d->closed) {
         deflateEnd(&d->strm);
         d->closed = true;
     }
+}
+
+static int l_deflate_close(lua_State* L) {
+    auto* d = (LuaDeflate*)eryxUdata_checkudata(L, zlibDeflate, 1);
+    l_deflate_destructor(L, d);
     return 0;
 }
 
 static int l_deflate_tostring(lua_State* L) {
-    auto* d = (LuaDeflate*)luaL_checkudata(L, 1, MT_DEFLATE);
+    auto* d = (LuaDeflate*)eryxUdata_checkudata(L, zlibDeflate, 1);
     lua_pushfstring(L, "zlib.Deflate(%s)", d->closed ? "closed" : "open");
     return 1;
 }
@@ -132,7 +130,7 @@ static int l_create_deflate(lua_State* L) {
     int memLevel = (int)luaL_optinteger(L, 3, 8);
     int strategy = (int)luaL_optinteger(L, 4, Z_DEFAULT_STRATEGY);
 
-    auto* d = (LuaDeflate*)lua_newuserdatadtor(L, sizeof(LuaDeflate), deflate_dtor);
+    auto* d = (LuaDeflate*)eryxUdata_pushudata(L, zlibDeflate);
     memset(&d->strm, 0, sizeof(z_stream));
     d->closed = false;
 
@@ -142,8 +140,6 @@ static int l_create_deflate(lua_State* L) {
         luaL_error(L, "zlib: deflateInit2 failed (%d)", ret);
     }
 
-    luaL_getmetatable(L, MT_DEFLATE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -151,24 +147,14 @@ static int l_create_deflate(lua_State* L) {
 // Streaming Inflate
 // ---------------------------------------------------------------------------
 
-static const char* MT_INFLATE = "zlib.Inflate";
-
 struct LuaInflate {
     z_stream strm;
     bool closed;
     bool finished;
 };
 
-static void inflate_dtor(void* ud) {
-    auto* d = (LuaInflate*)ud;
-    if (!d->closed) {
-        inflateEnd(&d->strm);
-        d->closed = true;
-    }
-}
-
 static LuaInflate* check_inflate(lua_State* L) {
-    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+    auto* d = (LuaInflate*)eryxUdata_checkudata(L, zlibInflate, 1);
     if (d->closed) luaL_error(L, "zlib: inflate stream is closed");
     return d;
 }
@@ -221,17 +207,22 @@ static int l_inflate_write(lua_State* L) {
 }
 
 // inflate:close()
-static int l_inflate_close(lua_State* L) {
-    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+static void l_inflate_destructor(lua_State* L, void* ud) {
+    auto* d = (LuaInflate*)ud;
     if (!d->closed) {
         inflateEnd(&d->strm);
         d->closed = true;
     }
+}
+
+static int l_inflate_close(lua_State* L) {
+    auto* d = (LuaInflate*)eryxUdata_checkudata(L, zlibInflate, 1);
+    l_inflate_destructor(L, d);
     return 0;
 }
 
 static int l_inflate_tostring(lua_State* L) {
-    auto* d = (LuaInflate*)luaL_checkudata(L, 1, MT_INFLATE);
+    auto* d = (LuaInflate*)eryxUdata_checkudata(L, zlibInflate, 1);
     const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
     lua_pushfstring(L, "zlib.Inflate(%s)", state);
     return 1;
@@ -241,7 +232,7 @@ static int l_inflate_tostring(lua_State* L) {
 static int l_create_inflate(lua_State* L) {
     int windowBits = (int)luaL_optinteger(L, 1, MAX_WBITS);
 
-    auto* d = (LuaInflate*)lua_newuserdatadtor(L, sizeof(LuaInflate), inflate_dtor);
+    auto* d = (LuaInflate*)eryxUdata_pushudata(L, zlibInflate);
     memset(&d->strm, 0, sizeof(z_stream));
     d->closed = false;
     d->finished = false;
@@ -252,8 +243,6 @@ static int l_create_inflate(lua_State* L) {
         luaL_error(L, "zlib: inflateInit2 failed (%d)", ret);
     }
 
-    luaL_getmetatable(L, MT_INFLATE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -410,53 +399,62 @@ static int l_compress_bound(lua_State* L) {
     return 1;
 }
 
+luaL_Reg zlibDeflateMethods[] = {
+    { "write", l_deflate_write },
+    { "finish", l_deflate_finish },
+    { "close", l_deflate_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg zlibDeflateMetamethods[] = {
+    { "__tostring", l_deflate_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef zlibDeflateDef = {
+    .name = "ZlibDeflate",
+    .size = sizeof(LuaDeflate),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = zlibDeflateMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = zlibDeflateMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_deflate_destructor,
+};
+
+luaL_Reg zlibInflateMethods[] = {
+    { "write", l_inflate_write },
+    { "close", l_inflate_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg zlibInflateMetamethods[] = {
+    { "__tostring", l_inflate_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef zlibInflateDef = {
+    .name = "ZlibInflate",
+    .size = sizeof(LuaInflate),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = zlibInflateMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = zlibInflateMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_inflate_destructor,
+};
+
 // ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_zlib(lua_State* L) {
-    // Register Deflate metatable
-    luaL_newmetatable(L, MT_DEFLATE);
-    {
-        static const luaL_Reg deflate_methods[] = {
-            { "write", l_deflate_write },
-            { "finish", l_deflate_finish },
-            { "close", l_deflate_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = deflate_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_deflate_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_deflate_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    // Register Inflate metatable
-    luaL_newmetatable(L, MT_INFLATE);
-    {
-        static const luaL_Reg inflate_methods[] = {
-            { "write", l_inflate_write },
-            { "close", l_inflate_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = inflate_methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_inflate_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_inflate_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+    zlibDeflate = eryxUdata_registerudata(L, &zlibDeflateDef);
+    zlibInflate = eryxUdata_registerudata(L, &zlibInflateDef);
 
     // Module table
     lua_newtable(L);

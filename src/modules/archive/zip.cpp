@@ -1,4 +1,5 @@
 #include <cstring>
+#include <new>
 
 #include "lua.h"
 #include "lualib.h"
@@ -24,7 +25,7 @@ LUAU_MODULE_INFO()
 // copy=0 - no data duplication. The central directory is parsed once on open.
 // ---------------------------------------------------------------------------
 
-static const char* ZIPREADER_MT = "ZipReader";
+udataRef* zipReaderRef;
 
 struct ZipReader {
     void* handle;
@@ -33,9 +34,13 @@ struct ZipReader {
 };
 
 static ZipReader* check_reader(lua_State* L, int idx = 1) {
-    ZipReader* rd = (ZipReader*)luaL_checkudata(L, idx, ZIPREADER_MT);
+    ZipReader* rd = (ZipReader*)eryxUdata_checkudata(L, zipReaderRef, idx);
     if (rd->closed) luaL_error(L, "ZipReader is closed");
     return rd;
+}
+
+static ZipReader* check_reader_any(lua_State* L, int idx = 1) {
+    return (ZipReader*)eryxUdata_checkudata(L, zipReaderRef, idx);
 }
 
 // Push the standard entry info table for the reader's current entry.
@@ -96,20 +101,30 @@ static int l_reader_read(lua_State* L) {
     return 1;
 }
 
-// reader:close()  (also called by __gc)
-static int l_reader_close(lua_State* L) {
-    ZipReader* rd = (ZipReader*)luaL_checkudata(L, 1, ZIPREADER_MT);
+static void reader_close(lua_State* L, ZipReader* rd) {
     if (!rd->closed) {
-        mz_zip_reader_close(rd->handle);
-        mz_zip_reader_delete(&rd->handle);
-        lua_unref(L, rd->buf_ref);
+        if (rd->handle) {
+            mz_zip_reader_close(rd->handle);
+            mz_zip_reader_delete(&rd->handle);
+        }
+        if (rd->buf_ref != LUA_NOREF) {
+            lua_unref(L, rd->buf_ref);
+            rd->buf_ref = LUA_NOREF;
+        }
         rd->closed = true;
     }
+}
+
+// reader:close()
+static int l_reader_close(lua_State* L) {
+    reader_close(L, check_reader_any(L, 1));
     return 0;
 }
 
+static void reader_dtor(lua_State* L, void* ud) { reader_close(L, (ZipReader*)ud); }
+
 static int l_reader_tostring(lua_State* L) {
-    ZipReader* rd = (ZipReader*)lua_touserdata(L, 1);
+    ZipReader* rd = check_reader_any(L, 1);
     lua_pushstring(L, rd->closed ? "ZipReader (closed)" : "ZipReader");
     return 1;
 }
@@ -124,7 +139,8 @@ static int l_open(lua_State* L) {
     // pointer into it (copy=0 below). lua_ref takes a stack index directly.
     int buf_ref = lua_ref(L, 1);
 
-    ZipReader* rd = (ZipReader*)lua_newuserdata(L, sizeof(ZipReader));
+    ZipReader* rd = (ZipReader*)eryxUdata_pushudata(L, zipReaderRef);
+    new (rd) ZipReader{};
     rd->handle = mz_zip_reader_create();
     rd->buf_ref = buf_ref;
     rd->closed = false;
@@ -134,11 +150,11 @@ static int l_open(lua_State* L) {
     if (err != MZ_OK) {
         mz_zip_reader_delete(&rd->handle);
         lua_unref(L, buf_ref);
+        rd->buf_ref = LUA_NOREF;
+        rd->closed = true;
         luaL_error(L, "zip.open: failed to open (%d)", err);
     }
 
-    luaL_getmetatable(L, ZIPREADER_MT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -338,29 +354,33 @@ static int l_pack(lua_State* L) {
 // ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
+static luaL_Reg readerMethods[] = {
+    { "list", l_reader_list },
+    { "read", l_reader_read },
+    { "close", l_reader_close },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg readerMetamethods[] = {
+    { "__tostring", l_reader_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef readerDef = {
+    .name = "ZipReader",
+    .size = sizeof(ZipReader),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = readerMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = readerMethods,
+    .destructor = reader_dtor,
+};
+
 LUAU_MODULE_EXPORT int luauopen_zip(lua_State* L) {
-    // Register ZipReader metatable
-    luaL_newmetatable(L, ZIPREADER_MT);
-
-    static const luaL_Reg reader_methods[] = {
-        { "list", l_reader_list },
-        { "read", l_reader_read },
-        { "close", l_reader_close },
-        { nullptr, nullptr },
-    };
-    lua_newtable(L);
-    for (const luaL_Reg* m = reader_methods; m->name; m++) {
-        lua_pushcfunction(L, m->func, m->name);
-        lua_setfield(L, -2, m->name);
-    }
-    lua_setfield(L, -2, "__index");
-
-    lua_pushcfunction(L, l_reader_close, "__gc");  // close and __gc are identical
-    lua_setfield(L, -2, "__gc");
-    lua_pushcfunction(L, l_reader_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
-
-    lua_pop(L, 1);  // pop metatable
+    zipReaderRef = eryxUdata_registerudata(L, &readerDef);
 
     // Module table
     lua_newtable(L);

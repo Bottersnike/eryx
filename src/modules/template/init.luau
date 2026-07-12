@@ -677,7 +677,7 @@ local function _evaluate(nodes: Parser.AstSuite, context: TContext): string
 	return table.concat(rendered, "")
 end
 
--- ── Raw (structured-error) implementations ───────────────────────────────────
+-- -- Raw (structured-error) implementations -----------------------------------
 -- These functions do the actual work and propagate TemplateError tables via
 -- error() so that callers can inspect .message / .line / .col / .filepath.
 
@@ -699,7 +699,7 @@ local function _evaluateRaw(
 	return _evaluate(nodes, context)
 end
 
--- ── Public API ────────────────────────────────────────────────────────────────
+-- -- Public API ----------------------------------------------------------------
 
 --[=[
 	Parses a template source string into a list of AST nodes.

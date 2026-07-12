@@ -132,4 +132,12 @@ function BufferBuilder.writeBuffer(self: BufferBuilder, src: buffer)
 	self.offset += len
 end
 
+local function foo(options: { bar: number? })
+	if options.bar == nil then
+		options.bar = 1
+	end
+
+	options.bar += 1
+end
+
 return table.freeze(BufferBuilder)

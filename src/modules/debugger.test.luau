@@ -43,7 +43,7 @@ local function findLine(path: string, marker: string): number
 end
 
 local function findByName<T>(list: { T & { name: string } }, name: string): T?
-	for _, item in ipairs(list) do
+	for _, item in list do
 		if item.name == name then
 			return item
 		end
@@ -151,7 +151,7 @@ end
 
 local function joinedOutput(events: { dbg.SessionEvent }): string
 	local parts = {}
-	for _, event in ipairs(events) do
+	for _, event in events do
 		if event.kind == "output" then
 			table.insert(parts, event.text)
 		end
@@ -483,7 +483,7 @@ print("coroutine-debugger-done", label)
 			local threads = session:threads()
 			test.expect(#threads >= 2):toBeTrue()
 			local workerThread = nil :: dbg.Thread?
-			for _, thread in ipairs(threads) do
+			for _, thread in threads do
 				if thread.id == workerStop.threadId then
 					workerThread = thread
 				end

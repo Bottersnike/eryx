@@ -28,6 +28,7 @@
 #include "../runtime/runtime_host.hpp"
 #include "Luau/BytecodeBuilder.h"
 #include "Luau/Compiler.h"
+#include "Luau/DenseHash.h"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -36,7 +37,25 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-static const char* DBG_SESSION_MT = "DebugSession";
+static Luau::DenseHashMap<lua_State*, udataRef*> debugSessionRefs{ nullptr };
+
+static udataRef* dbg_session_ref(lua_State* L) {
+    if (udataRef** ref = debugSessionRefs.find(lua_mainthread(L))) {
+        return *ref;
+    }
+
+    return nullptr;
+}
+
+static udataRef* dbg_check_session_ref(lua_State* L) {
+    udataRef* ref = dbg_session_ref(L);
+    if (!ref) {
+        luaL_error(L, "DebugSession userdata is not registered");
+    }
+
+    return ref;
+}
+
 struct DebugLaunchOptions {
     std::string program;
     std::vector<std::string> args;
@@ -1824,7 +1843,7 @@ static void dbg_worker(std::shared_ptr<DebugSession> session) {
 }
 
 static DebugSessionHandle* dbg_check_session(lua_State* L, int idx) {
-    auto* handle = (DebugSessionHandle*)luaL_checkudata(L, idx, DBG_SESSION_MT);
+    auto* handle = (DebugSessionHandle*)eryxUdata_checkudata(L, dbg_check_session_ref(L), idx);
     if (!handle || !handle->session) luaL_error(L, "debug session is closed");
     return handle;
 }
@@ -1933,10 +1952,8 @@ static int debugger_open(lua_State* L) {
     DebugLaunchOptions options = dbg_read_launch_options(L, 1);
     auto session = std::make_shared<DebugSession>(std::move(options));
 
-    auto* handle = (DebugSessionHandle*)lua_newuserdata(L, sizeof(DebugSessionHandle));
+    auto* handle = (DebugSessionHandle*)eryxUdata_pushudata(L, dbg_check_session_ref(L));
     new (handle) DebugSessionHandle{ session };
-    luaL_getmetatable(L, DBG_SESSION_MT);
-    lua_setmetatable(L, -2);
 
     session->worker = std::thread(dbg_worker, session);
     return 1;
@@ -3023,72 +3040,56 @@ static int session_clear_breakpoints(lua_State* L) {
     return 0;
 }
 
-static int session_gc(lua_State* L) {
-    auto* handle = (DebugSessionHandle*)luaL_checkudata(L, 1, DBG_SESSION_MT);
+static void session_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* handle = (DebugSessionHandle*)ud;
     if (handle && handle->session) {
         dbg_request_terminate(handle->session);
         dbg_join(handle->session);
         handle->session.reset();
     }
     handle->~DebugSessionHandle();
-    return 0;
 }
 
-static void register_session_metatable(lua_State* L) {
-    if (luaL_newmetatable(L, DBG_SESSION_MT)) {
-        lua_pushcfunction(L, session_gc, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushstring(L, DBG_SESSION_MT);
-        lua_setfield(L, -2, "__type");
+static luaL_Reg sessionMethods[] = {
+    { "start", session_start },
+    { "wait", session_wait },
+    { "state", session_state },
+    { "threads", session_threads },
+    { "resume", session_resume },
+    { "pause", session_pause },
+    { "step", session_step },
+    { "terminate", session_terminate },
+    { "close", session_close },
+    { "sources", session_sources },
+    { "setBreakpoints", session_set_breakpoints },
+    { "clearBreakpoints", session_clear_breakpoints },
+    { "frames", session_frames },
+    { "scopes", session_scopes },
+    { "inspect", session_inspect },
+    { "evaluate", session_evaluate },
+    { "setVariable", session_set_variable },
+    { "readSource", session_read_source },
+    { "disassemble", session_disassemble },
+    { "exception", session_exception },
+    { nullptr, nullptr },
+};
 
-        lua_newtable(L);
-        lua_pushcfunction(L, session_start, "start");
-        lua_setfield(L, -2, "start");
-        lua_pushcfunction(L, session_wait, "wait");
-        lua_setfield(L, -2, "wait");
-        lua_pushcfunction(L, session_state, "state");
-        lua_setfield(L, -2, "state");
-        lua_pushcfunction(L, session_threads, "threads");
-        lua_setfield(L, -2, "threads");
-        lua_pushcfunction(L, session_resume, "resume");
-        lua_setfield(L, -2, "resume");
-        lua_pushcfunction(L, session_pause, "pause");
-        lua_setfield(L, -2, "pause");
-        lua_pushcfunction(L, session_step, "step");
-        lua_setfield(L, -2, "step");
-        lua_pushcfunction(L, session_terminate, "terminate");
-        lua_setfield(L, -2, "terminate");
-        lua_pushcfunction(L, session_close, "close");
-        lua_setfield(L, -2, "close");
-        lua_pushcfunction(L, session_sources, "sources");
-        lua_setfield(L, -2, "sources");
-        lua_pushcfunction(L, session_set_breakpoints, "setBreakpoints");
-        lua_setfield(L, -2, "setBreakpoints");
-        lua_pushcfunction(L, session_clear_breakpoints, "clearBreakpoints");
-        lua_setfield(L, -2, "clearBreakpoints");
-        lua_pushcfunction(L, session_frames, "frames");
-        lua_setfield(L, -2, "frames");
-        lua_pushcfunction(L, session_scopes, "scopes");
-        lua_setfield(L, -2, "scopes");
-        lua_pushcfunction(L, session_inspect, "inspect");
-        lua_setfield(L, -2, "inspect");
-        lua_pushcfunction(L, session_evaluate, "evaluate");
-        lua_setfield(L, -2, "evaluate");
-        lua_pushcfunction(L, session_set_variable, "setVariable");
-        lua_setfield(L, -2, "setVariable");
-        lua_pushcfunction(L, session_read_source, "readSource");
-        lua_setfield(L, -2, "readSource");
-        lua_pushcfunction(L, session_disassemble, "disassemble");
-        lua_setfield(L, -2, "disassemble");
-        lua_pushcfunction(L, session_exception, "exception");
-        lua_setfield(L, -2, "exception");
-        lua_setfield(L, -2, "__index");
-    }
-    lua_pop(L, 1);
-}
+static udataDef sessionDef = {
+    .name = "DebugSession",
+    .size = sizeof(DebugSessionHandle),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = sessionMethods,
+    .destructor = session_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_debugger(lua_State* L) {
-    register_session_metatable(L);
+    debugSessionRefs[lua_mainthread(L)] = eryxUdata_registerudata(L, &sessionDef);
 
     lua_newtable(L);
     lua_pushcfunction(L, debugger_open, "open");

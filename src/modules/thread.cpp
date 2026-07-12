@@ -238,8 +238,18 @@ static void shared_ptr_dtor(void* userdata) {
     box->~shared_ptr<ThreadShared>();
 }
 
+static udataRef* check_udata_ref(lua_State* L, const char* name) {
+    udataRef* ref = eryxUdata_getudata(L, name);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", name);
+        return nullptr;
+    }
+    return ref;
+}
+
 static std::shared_ptr<ThreadShared> check_thread_handle(lua_State* L, int idx) {
-    auto* box = static_cast<ThreadHandleBox*>(luaL_checkudata(L, idx, THREAD_HANDLE_MT));
+    auto* box = static_cast<ThreadHandleBox*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, THREAD_HANDLE_MT), idx));
     if (!box->shared) {
         luaL_error(L, "thread handle is invalid");
     }
@@ -247,7 +257,8 @@ static std::shared_ptr<ThreadShared> check_thread_handle(lua_State* L, int idx) 
 }
 
 static std::shared_ptr<FutureShared> check_future_handle(lua_State* L, int idx) {
-    auto* box = static_cast<FutureHandleBox*>(luaL_checkudata(L, idx, THREAD_FUTURE_MT));
+    auto* box = static_cast<FutureHandleBox*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, THREAD_FUTURE_MT), idx));
     if (!box->shared) {
         luaL_error(L, "future handle is invalid");
     }
@@ -255,7 +266,8 @@ static std::shared_ptr<FutureShared> check_future_handle(lua_State* L, int idx) 
 }
 
 static std::shared_ptr<PoolShared> check_pool_handle(lua_State* L, int idx) {
-    auto* box = static_cast<PoolHandleBox*>(luaL_checkudata(L, idx, THREAD_POOL_MT));
+    auto* box = static_cast<PoolHandleBox*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, THREAD_POOL_MT), idx));
     if (!box->shared) {
         luaL_error(L, "thread pool is invalid");
     }
@@ -263,7 +275,8 @@ static std::shared_ptr<PoolShared> check_pool_handle(lua_State* L, int idx) {
 }
 
 static std::shared_ptr<WorkerShared> check_worker_handle(lua_State* L, int idx) {
-    auto* box = static_cast<WorkerHandleBox*>(luaL_checkudata(L, idx, THREAD_WORKER_MT));
+    auto* box = static_cast<WorkerHandleBox*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, THREAD_WORKER_MT), idx));
     if (!box->shared) {
         luaL_error(L, "thread worker is invalid");
     }
@@ -375,11 +388,7 @@ static void thread_push_exception_copy(lua_State* L, const LuaExceptionSnapshot*
 
     lua_checkstack(L, 2);
 
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-    luaL_getmetatable(L, EXCEPTION_METATABLE);
-    lua_setmetatable(L, -2);
-
+    LuaException* exception = eryx_exception_push_userdata(L);
     exception->type = thread_exception_type_name(source->type);
     exception->message = source->message;
     exception->traceback = source->traceback;
@@ -1424,10 +1433,7 @@ static int thread_handle_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, THREAD_HANDLE_MT);
-    lua_getfield(L, -1, key);
-    lua_remove(L, -2);
-    return 1;
+    return 0;
 }
 
 static int thread_handle_newindex(lua_State* L) {
@@ -1561,8 +1567,8 @@ static int thread_handle_kill(lua_State* L) {
     return 0;
 }
 
-static int thread_handle_gc(lua_State* L) {
-    auto* box = static_cast<ThreadHandleBox*>(luaL_checkudata(L, 1, THREAD_HANDLE_MT));
+static void thread_handle_dtor(lua_State* L, void* ud) {
+    auto* box = static_cast<ThreadHandleBox*>(ud);
     if (box->shared) {
         ThreadStatus status;
         int onErrorRef = LUA_NOREF;
@@ -1592,18 +1598,13 @@ static int thread_handle_gc(lua_State* L) {
 
         box->shared.reset();
     }
-    return 0;
+    box->~ThreadHandleBox();
 }
 
 static int thread_push_future_handle(lua_State* L, const std::shared_ptr<FutureShared>& future) {
-    auto* box = static_cast<FutureHandleBox*>(
-        lua_newuserdatadtor(L, sizeof(FutureHandleBox), [](void* userdata) {
-            auto* box = static_cast<FutureHandleBox*>(userdata);
-            box->~FutureHandleBox();
-        }));
+    auto* box =
+        static_cast<FutureHandleBox*>(eryxUdata_pushudata(L, check_udata_ref(L, THREAD_FUTURE_MT)));
     new (box) FutureHandleBox{ future };
-    luaL_getmetatable(L, THREAD_FUTURE_MT);
-    lua_setmetatable(L, -2);
 
     {
         std::lock_guard lock(future->mutex);
@@ -1618,26 +1619,16 @@ static int thread_push_future_handle(lua_State* L, const std::shared_ptr<FutureS
 }
 
 static int thread_push_pool_handle(lua_State* L, const std::shared_ptr<PoolShared>& pool) {
-    auto* box = static_cast<PoolHandleBox*>(
-        lua_newuserdatadtor(L, sizeof(PoolHandleBox), [](void* userdata) {
-            auto* box = static_cast<PoolHandleBox*>(userdata);
-            box->~PoolHandleBox();
-        }));
+    auto* box =
+        static_cast<PoolHandleBox*>(eryxUdata_pushudata(L, check_udata_ref(L, THREAD_POOL_MT)));
     new (box) PoolHandleBox{ pool };
-    luaL_getmetatable(L, THREAD_POOL_MT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int thread_push_worker_handle(lua_State* L, const std::shared_ptr<WorkerShared>& worker) {
-    auto* box = static_cast<WorkerHandleBox*>(
-        lua_newuserdatadtor(L, sizeof(WorkerHandleBox), [](void* userdata) {
-            auto* box = static_cast<WorkerHandleBox*>(userdata);
-            box->~WorkerHandleBox();
-        }));
+    auto* box =
+        static_cast<WorkerHandleBox*>(eryxUdata_pushudata(L, check_udata_ref(L, THREAD_WORKER_MT)));
     new (box) WorkerHandleBox{ worker };
-    luaL_getmetatable(L, THREAD_WORKER_MT);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -1831,10 +1822,7 @@ static int thread_future_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, THREAD_FUTURE_MT);
-    lua_getfield(L, -1, key);
-    lua_remove(L, -2);
-    return 1;
+    return 0;
 }
 
 static int thread_future_newindex(lua_State* L) {
@@ -1934,8 +1922,8 @@ static int thread_future_wait(lua_State* L) {
     return 0;
 }
 
-static int thread_future_gc(lua_State* L) {
-    auto* box = static_cast<FutureHandleBox*>(luaL_checkudata(L, 1, THREAD_FUTURE_MT));
+static void thread_future_dtor(lua_State* L, void* ud) {
+    auto* box = static_cast<FutureHandleBox*>(ud);
     if (box->shared) {
         int onErrorRef = LUA_NOREF;
         int onUpdateRef = LUA_NOREF;
@@ -1960,7 +1948,7 @@ static int thread_future_gc(lua_State* L) {
         }
         box->shared.reset();
     }
-    return 0;
+    box->~FutureHandleBox();
 }
 
 static int thread_pool_index(lua_State* L) {
@@ -2001,10 +1989,7 @@ static int thread_pool_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, THREAD_POOL_MT);
-    lua_getfield(L, -1, key);
-    lua_remove(L, -2);
-    return 1;
+    return 0;
 }
 
 static int thread_pool_newindex(lua_State* L) {
@@ -2057,8 +2042,8 @@ static int thread_pool_spawn(lua_State* L) {
     return 1;
 }
 
-static int thread_pool_gc(lua_State* L) {
-    auto* box = static_cast<PoolHandleBox*>(luaL_checkudata(L, 1, THREAD_POOL_MT));
+static void thread_pool_dtor(lua_State* L, void* ud) {
+    auto* box = static_cast<PoolHandleBox*>(ud);
     if (box->shared) {
         int onErrorRef = LUA_NOREF;
         int onUpdateRef = LUA_NOREF;
@@ -2077,7 +2062,7 @@ static int thread_pool_gc(lua_State* L) {
         }
         box->shared.reset();
     }
-    return 0;
+    box->~PoolHandleBox();
 }
 
 static int thread_worker_index(lua_State* L) {
@@ -2119,10 +2104,7 @@ static int thread_worker_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, THREAD_WORKER_MT);
-    lua_getfield(L, -1, key);
-    lua_remove(L, -2);
-    return 1;
+    return 0;
 }
 
 static int thread_worker_newindex(lua_State* L) {
@@ -2180,8 +2162,8 @@ static int thread_worker_submit(lua_State* L) {
     return 1;
 }
 
-static int thread_worker_gc(lua_State* L) {
-    auto* box = static_cast<WorkerHandleBox*>(luaL_checkudata(L, 1, THREAD_WORKER_MT));
+static void thread_worker_dtor(lua_State* L, void* ud) {
+    auto* box = static_cast<WorkerHandleBox*>(ud);
     if (box->shared) {
         int onErrorRef = LUA_NOREF;
         int onUpdateRef = LUA_NOREF;
@@ -2200,94 +2182,80 @@ static int thread_worker_gc(lua_State* L) {
         }
         box->shared.reset();
     }
-    return 0;
+    box->~WorkerHandleBox();
 }
 
-static void register_thread_handle_metatable(lua_State* L) {
-    if (!luaL_newmetatable(L, THREAD_HANDLE_MT)) {
-        lua_pop(L, 1);
-        return;
-    }
+static luaL_Reg threadHandleMethods[] = {
+    { "send", thread_handle_send }, { "recv", thread_handle_recv }, { "join", thread_handle_join },
+    { "kill", thread_handle_kill }, { nullptr, nullptr },
+};
 
-    lua_pushcfunction(L, thread_handle_gc, "__gc");
-    lua_setfield(L, -2, "__gc");
-    lua_pushstring(L, THREAD_HANDLE_MT);
-    lua_setfield(L, -2, "__type");
+static udataDef threadHandleDef = {
+    .name = THREAD_HANDLE_MT,
+    .size = sizeof(ThreadHandleBox),
+    .fields = nullptr,
+    .indexFallback = thread_handle_index,
+    .newindexFallback = thread_handle_newindex,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = threadHandleMethods,
+    .destructor = thread_handle_dtor,
+};
 
-    lua_pushcfunction(L, thread_handle_send, "send");
-    lua_setfield(L, -2, "send");
-    lua_pushcfunction(L, thread_handle_recv, "recv");
-    lua_setfield(L, -2, "recv");
-    lua_pushcfunction(L, thread_handle_join, "join");
-    lua_setfield(L, -2, "join");
-    lua_pushcfunction(L, thread_handle_kill, "kill");
-    lua_setfield(L, -2, "kill");
-    lua_pushcfunction(L, thread_handle_index, "__index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, thread_handle_newindex, "__newindex");
-    lua_setfield(L, -2, "__newindex");
-    lua_pop(L, 1);
-}
+static luaL_Reg threadFutureMethods[] = {
+    { "wait", thread_future_wait },
+    { nullptr, nullptr },
+};
 
-static void register_thread_future_metatable(lua_State* L) {
-    if (!luaL_newmetatable(L, THREAD_FUTURE_MT)) {
-        lua_pop(L, 1);
-        return;
-    }
+static udataDef threadFutureDef = {
+    .name = THREAD_FUTURE_MT,
+    .size = sizeof(FutureHandleBox),
+    .fields = nullptr,
+    .indexFallback = thread_future_index,
+    .newindexFallback = thread_future_newindex,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = threadFutureMethods,
+    .destructor = thread_future_dtor,
+};
 
-    lua_pushcfunction(L, thread_future_gc, "__gc");
-    lua_setfield(L, -2, "__gc");
-    lua_pushstring(L, THREAD_FUTURE_MT);
-    lua_setfield(L, -2, "__type");
+static luaL_Reg threadPoolMethods[] = {
+    { "spawn", thread_pool_spawn },
+    { nullptr, nullptr },
+};
 
-    lua_pushcfunction(L, thread_future_wait, "wait");
-    lua_setfield(L, -2, "wait");
-    lua_pushcfunction(L, thread_future_index, "__index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, thread_future_newindex, "__newindex");
-    lua_setfield(L, -2, "__newindex");
-    lua_pop(L, 1);
-}
+static udataDef threadPoolDef = {
+    .name = THREAD_POOL_MT,
+    .size = sizeof(PoolHandleBox),
+    .fields = nullptr,
+    .indexFallback = thread_pool_index,
+    .newindexFallback = thread_pool_newindex,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = threadPoolMethods,
+    .destructor = thread_pool_dtor,
+};
 
-static void register_thread_pool_metatable(lua_State* L) {
-    if (!luaL_newmetatable(L, THREAD_POOL_MT)) {
-        lua_pop(L, 1);
-        return;
-    }
+static luaL_Reg threadWorkerMethods[] = {
+    { "submit", thread_worker_submit },
+    { nullptr, nullptr },
+};
 
-    lua_pushcfunction(L, thread_pool_gc, "__gc");
-    lua_setfield(L, -2, "__gc");
-    lua_pushstring(L, THREAD_POOL_MT);
-    lua_setfield(L, -2, "__type");
-
-    lua_pushcfunction(L, thread_pool_spawn, "spawn");
-    lua_setfield(L, -2, "spawn");
-    lua_pushcfunction(L, thread_pool_index, "__index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, thread_pool_newindex, "__newindex");
-    lua_setfield(L, -2, "__newindex");
-    lua_pop(L, 1);
-}
-
-static void register_thread_worker_metatable(lua_State* L) {
-    if (!luaL_newmetatable(L, THREAD_WORKER_MT)) {
-        lua_pop(L, 1);
-        return;
-    }
-
-    lua_pushcfunction(L, thread_worker_gc, "__gc");
-    lua_setfield(L, -2, "__gc");
-    lua_pushstring(L, THREAD_WORKER_MT);
-    lua_setfield(L, -2, "__type");
-
-    lua_pushcfunction(L, thread_worker_submit, "submit");
-    lua_setfield(L, -2, "submit");
-    lua_pushcfunction(L, thread_worker_index, "__index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, thread_worker_newindex, "__newindex");
-    lua_setfield(L, -2, "__newindex");
-    lua_pop(L, 1);
-}
+static udataDef threadWorkerDef = {
+    .name = THREAD_WORKER_MT,
+    .size = sizeof(WorkerHandleBox),
+    .fields = nullptr,
+    .indexFallback = thread_worker_index,
+    .newindexFallback = thread_worker_newindex,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = threadWorkerMethods,
+    .destructor = thread_worker_dtor,
+};
 
 static int thread_spawn(lua_State* L) {
     auto shared = std::make_shared<ThreadShared>();
@@ -2308,14 +2276,9 @@ static int thread_spawn(lua_State* L) {
         luaL_error(L, "%s", error.c_str());
     }
 
-    auto* box = static_cast<ThreadHandleBox*>(
-        lua_newuserdatadtor(L, sizeof(ThreadHandleBox), [](void* userdata) {
-            auto* box = static_cast<ThreadHandleBox*>(userdata);
-            box->~ThreadHandleBox();
-        }));
+    auto* box =
+        static_cast<ThreadHandleBox*>(eryxUdata_pushudata(L, check_udata_ref(L, THREAD_HANDLE_MT)));
     new (box) ThreadHandleBox{ shared };
-    luaL_getmetatable(L, THREAD_HANDLE_MT);
-    lua_setmetatable(L, -2);
 
     return 1;
 }
@@ -2354,10 +2317,10 @@ static int thread_worker_create(lua_State* L) {
 }
 
 LUAU_MODULE_EXPORT int luauopen_thread(lua_State* L) {
-    register_thread_handle_metatable(L);
-    register_thread_future_metatable(L);
-    register_thread_pool_metatable(L);
-    register_thread_worker_metatable(L);
+    eryxUdata_registerudata(L, &threadHandleDef);
+    eryxUdata_registerudata(L, &threadFutureDef);
+    eryxUdata_registerudata(L, &threadPoolDef);
+    eryxUdata_registerudata(L, &threadWorkerDef);
 
     lua_newtable(L);
     lua_pushcfunction(L, thread_spawn, "spawn");

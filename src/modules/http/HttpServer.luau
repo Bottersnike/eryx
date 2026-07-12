@@ -521,6 +521,7 @@ function HttpServer.listen(self: HttpServer, callback: ((host: string, port: num
 			end
 			if self._running then
 				print("accept error: ", client_or_err)
+				print(require("@eryx/exception").format(client_or_err))
 			end
 			continue
 		end

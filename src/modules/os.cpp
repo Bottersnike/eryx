@@ -1433,10 +1433,10 @@ static int os_shell(lua_State* L) {
 // os.spawn(cmd, args?, opts?) -> ProcessHandle userdata
 // ---------------------------------------------------------------------------
 
-static const char* PROCESS_HANDLE_MT = "ProcessHandle";
-static const char* PROCESS_STDIN_STREAM_MT = "ProcessStdinStream";
-static const char* PROCESS_STDOUT_STREAM_MT = "ProcessStdoutStream";
-static const char* PROCESS_STDERR_STREAM_MT = "ProcessStderrStream";
+static udataRef* processHandleRef;
+static udataRef* processStdinRef;
+static udataRef* processStdoutRef;
+static udataRef* processStderrRef;
 
 struct ProcessHandle {
     ProcessData* pd;
@@ -1461,25 +1461,25 @@ static const char* check_bytes_arg(lua_State* L, int idx, size_t* len) {
 }
 
 static ProcessData* check_process(lua_State* L, int idx) {
-    auto* h = (ProcessHandle*)luaL_checkudata(L, idx, PROCESS_HANDLE_MT);
+    auto* h = (ProcessHandle*)eryxUdata_checkudata(L, processHandleRef, idx);
     if (!h->pd) luaL_error(L, "process handle is invalid");
     return h->pd;
 }
 
 static ProcessData* check_stdin_stream(lua_State* L, int idx) {
-    auto* h = (ProcessStdinStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDIN_STREAM_MT);
+    auto* h = (ProcessStdinStreamHandle*)eryxUdata_checkudata(L, processStdinRef, idx);
     if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
     return h->pd;
 }
 
 static ProcessData* check_stdout_stream(lua_State* L, int idx) {
-    auto* h = (ProcessStdoutStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDOUT_STREAM_MT);
+    auto* h = (ProcessStdoutStreamHandle*)eryxUdata_checkudata(L, processStdoutRef, idx);
     if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
     return h->pd;
 }
 
 static ProcessData* check_stderr_stream(lua_State* L, int idx) {
-    auto* h = (ProcessStderrStreamHandle*)luaL_checkudata(L, idx, PROCESS_STDERR_STREAM_MT);
+    auto* h = (ProcessStderrStreamHandle*)eryxUdata_checkudata(L, processStderrRef, idx);
     if (!h->pd || !h->pd->ownerAlive) luaL_error(L, "process stream is invalid");
     return h->pd;
 }
@@ -1717,9 +1717,7 @@ static int process_stdin_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, PROCESS_STDIN_STREAM_MT);
-    lua_getfield(L, -1, key);
-    return 1;
+    return 0;
 }
 
 static int process_stdout_index(lua_State* L) {
@@ -1739,9 +1737,7 @@ static int process_stdout_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, PROCESS_STDOUT_STREAM_MT);
-    lua_getfield(L, -1, key);
-    return 1;
+    return 0;
 }
 
 static int process_stderr_index(lua_State* L) {
@@ -1761,60 +1757,52 @@ static int process_stderr_index(lua_State* L) {
         return 1;
     }
 
-    luaL_getmetatable(L, PROCESS_STDERR_STREAM_MT);
-    lua_getfield(L, -1, key);
-    return 1;
+    return 0;
 }
 
 static void push_process_stdin_stream(lua_State* L, ProcessData* pd) {
     retain_process_data(pd);
-    auto* h = (ProcessStdinStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdinStreamHandle));
+    auto* h = (ProcessStdinStreamHandle*)eryxUdata_pushudata(L, processStdinRef);
     h->pd = pd;
-    luaL_getmetatable(L, PROCESS_STDIN_STREAM_MT);
-    lua_setmetatable(L, -2);
 }
 
 static void push_process_stdout_stream(lua_State* L, ProcessData* pd) {
     retain_process_data(pd);
-    auto* h = (ProcessStdoutStreamHandle*)lua_newuserdata(L, sizeof(ProcessStdoutStreamHandle));
+    auto* h = (ProcessStdoutStreamHandle*)eryxUdata_pushudata(L, processStdoutRef);
     h->pd = pd;
-    luaL_getmetatable(L, PROCESS_STDOUT_STREAM_MT);
-    lua_setmetatable(L, -2);
 }
 
 static void push_process_stderr_stream(lua_State* L, ProcessData* pd) {
     retain_process_data(pd);
-    auto* h = (ProcessStderrStreamHandle*)lua_newuserdata(L, sizeof(ProcessStderrStreamHandle));
+    auto* h = (ProcessStderrStreamHandle*)eryxUdata_pushudata(L, processStderrRef);
     h->pd = pd;
-    luaL_getmetatable(L, PROCESS_STDERR_STREAM_MT);
-    lua_setmetatable(L, -2);
 }
 
-static int process_stdin_stream_gc(lua_State* L) {
-    auto* h = (ProcessStdinStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDIN_STREAM_MT);
+static void process_stdin_stream_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* h = (ProcessStdinStreamHandle*)ud;
     if (h->pd) {
         release_process_data(h->pd);
         h->pd = nullptr;
     }
-    return 0;
 }
 
-static int process_stdout_stream_gc(lua_State* L) {
-    auto* h = (ProcessStdoutStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDOUT_STREAM_MT);
+static void process_stdout_stream_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* h = (ProcessStdoutStreamHandle*)ud;
     if (h->pd) {
         release_process_data(h->pd);
         h->pd = nullptr;
     }
-    return 0;
 }
 
-static int process_stderr_stream_gc(lua_State* L) {
-    auto* h = (ProcessStderrStreamHandle*)luaL_checkudata(L, 1, PROCESS_STDERR_STREAM_MT);
+static void process_stderr_stream_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* h = (ProcessStderrStreamHandle*)ud;
     if (h->pd) {
         release_process_data(h->pd);
         h->pd = nullptr;
     }
-    return 0;
 }
 
 // ProcessHandle.pid
@@ -1851,14 +1839,12 @@ static int process_index(lua_State* L) {
         return 1;
     }
 
-    // Check methods in the metatable
-    luaL_getmetatable(L, PROCESS_HANDLE_MT);
-    lua_getfield(L, -1, key);
-    return 1;
+    return 0;
 }
 
-static int process_gc(lua_State* L) {
-    auto* h = (ProcessHandle*)luaL_checkudata(L, 1, PROCESS_HANDLE_MT);
+static void process_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* h = (ProcessHandle*)ud;
     if (h->pd) {
         h->pd->ownerAlive = false;
     }
@@ -1870,92 +1856,93 @@ static int process_gc(lua_State* L) {
     }
     // Note: pd is cleaned up by libuv close callbacks
     h->pd = nullptr;
-    return 0;
 }
 
-static void register_process_metatable(lua_State* L) {
-    if (luaL_newmetatable(L, PROCESS_HANDLE_MT)) {
-        lua_pushcfunction(L, process_wait, "wait");
-        lua_setfield(L, -2, "wait");
+static luaL_Reg processMethods[] = {
+    { "wait", process_wait },
+    { "kill", process_kill },
+    { nullptr, nullptr },
+};
 
-        lua_pushcfunction(L, process_kill, "kill");
-        lua_setfield(L, -2, "kill");
+static udataDef processDef = {
+    .name = "ProcessHandle",
+    .size = sizeof(ProcessHandle),
+    .fields = nullptr,
+    .indexFallback = process_index,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = processMethods,
+    .destructor = process_dtor,
+};
 
-        lua_pushcfunction(L, process_index, "__index");
-        lua_setfield(L, -2, "__index");
+static luaL_Reg processStdinMethods[] = {
+    { "write", process_stdin_write },
+    { "writeSync", process_stdin_write_sync },
+    { "close", process_stdin_close },
+    { "closeSync", process_stdin_close_sync },
+    { nullptr, nullptr },
+};
 
-        lua_pushcfunction(L, process_gc, "__gc");
-        lua_setfield(L, -2, "__gc");
+static udataDef processStdinDef = {
+    .name = "ProcessStdinStream",
+    .size = sizeof(ProcessStdinStreamHandle),
+    .fields = nullptr,
+    .indexFallback = process_stdin_index,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = processStdinMethods,
+    .destructor = process_stdin_stream_dtor,
+};
 
-        lua_pushstring(L, PROCESS_HANDLE_MT);
-        lua_setfield(L, -2, "__type");
-    }
-    lua_pop(L, 1);
-}
+static luaL_Reg processStdoutMethods[] = {
+    { "read", process_stdout_read },
+    { "readSync", process_stdout_read_sync },
+    { "readBuffer", process_stdout_read_buffer },
+    { "readBufferSync", process_stdout_read_buffer_sync },
+    { "close", process_stdout_close },
+    { "closeSync", process_stdout_close_sync },
+    { nullptr, nullptr },
+};
 
-static void register_process_stream_metatables(lua_State* L) {
-    if (luaL_newmetatable(L, PROCESS_STDIN_STREAM_MT)) {
-        lua_pushcfunction(L, process_stdin_write, "write");
-        lua_setfield(L, -2, "write");
-        lua_pushcfunction(L, process_stdin_write_sync, "writeSync");
-        lua_setfield(L, -2, "writeSync");
-        lua_pushcfunction(L, process_stdin_close, "close");
-        lua_setfield(L, -2, "close");
-        lua_pushcfunction(L, process_stdin_close_sync, "closeSync");
-        lua_setfield(L, -2, "closeSync");
-        lua_pushcfunction(L, process_stdin_index, "__index");
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, process_stdin_stream_gc, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushstring(L, PROCESS_STDIN_STREAM_MT);
-        lua_setfield(L, -2, "__type");
-    }
-    lua_pop(L, 1);
+static udataDef processStdoutDef = {
+    .name = "ProcessStdoutStream",
+    .size = sizeof(ProcessStdoutStreamHandle),
+    .fields = nullptr,
+    .indexFallback = process_stdout_index,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = processStdoutMethods,
+    .destructor = process_stdout_stream_dtor,
+};
 
-    if (luaL_newmetatable(L, PROCESS_STDOUT_STREAM_MT)) {
-        lua_pushcfunction(L, process_stdout_read, "read");
-        lua_setfield(L, -2, "read");
-        lua_pushcfunction(L, process_stdout_read_sync, "readSync");
-        lua_setfield(L, -2, "readSync");
-        lua_pushcfunction(L, process_stdout_read_buffer, "readBuffer");
-        lua_setfield(L, -2, "readBuffer");
-        lua_pushcfunction(L, process_stdout_read_buffer_sync, "readBufferSync");
-        lua_setfield(L, -2, "readBufferSync");
-        lua_pushcfunction(L, process_stdout_close, "close");
-        lua_setfield(L, -2, "close");
-        lua_pushcfunction(L, process_stdout_close_sync, "closeSync");
-        lua_setfield(L, -2, "closeSync");
-        lua_pushcfunction(L, process_stdout_index, "__index");
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, process_stdout_stream_gc, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushstring(L, PROCESS_STDOUT_STREAM_MT);
-        lua_setfield(L, -2, "__type");
-    }
-    lua_pop(L, 1);
+static luaL_Reg processStderrMethods[] = {
+    { "read", process_stderr_read },
+    { "readSync", process_stderr_read_sync },
+    { "readBuffer", process_stderr_read_buffer },
+    { "readBufferSync", process_stderr_read_buffer_sync },
+    { "close", process_stderr_close },
+    { "closeSync", process_stderr_close_sync },
+    { nullptr, nullptr },
+};
 
-    if (luaL_newmetatable(L, PROCESS_STDERR_STREAM_MT)) {
-        lua_pushcfunction(L, process_stderr_read, "read");
-        lua_setfield(L, -2, "read");
-        lua_pushcfunction(L, process_stderr_read_sync, "readSync");
-        lua_setfield(L, -2, "readSync");
-        lua_pushcfunction(L, process_stderr_read_buffer, "readBuffer");
-        lua_setfield(L, -2, "readBuffer");
-        lua_pushcfunction(L, process_stderr_read_buffer_sync, "readBufferSync");
-        lua_setfield(L, -2, "readBufferSync");
-        lua_pushcfunction(L, process_stderr_close, "close");
-        lua_setfield(L, -2, "close");
-        lua_pushcfunction(L, process_stderr_close_sync, "closeSync");
-        lua_setfield(L, -2, "closeSync");
-        lua_pushcfunction(L, process_stderr_index, "__index");
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, process_stderr_stream_gc, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushstring(L, PROCESS_STDERR_STREAM_MT);
-        lua_setfield(L, -2, "__type");
-    }
-    lua_pop(L, 1);
-}
+static udataDef processStderrDef = {
+    .name = "ProcessStderrStream",
+    .size = sizeof(ProcessStderrStreamHandle),
+    .fields = nullptr,
+    .indexFallback = process_stderr_index,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = processStderrMethods,
+    .destructor = process_stderr_stream_dtor,
+};
 
 static int os_spawn(lua_State* L) {
     const char* cmd = luaL_checkstring(L, 1);
@@ -1982,12 +1969,9 @@ static int os_spawn(lua_State* L) {
 
     ProcessData* pd = spawn_process(L, cmd, opts, false, true);
 
-    // Create userdata
     retain_process_data(pd);
-    auto* h = (ProcessHandle*)lua_newuserdata(L, sizeof(ProcessHandle));
+    auto* h = (ProcessHandle*)eryxUdata_pushudata(L, processHandleRef);
     h->pd = pd;
-    luaL_getmetatable(L, PROCESS_HANDLE_MT);
-    lua_setmetatable(L, -2);
 
     return 1;
 }
@@ -2011,8 +1995,10 @@ static void push_signal_constants(lua_State* L) {
 // ===========================================================================
 
 LUAU_MODULE_EXPORT int luauopen_os(lua_State* L) {
-    register_process_metatable(L);
-    register_process_stream_metatables(L);
+    processHandleRef = eryxUdata_registerudata(L, &processDef);
+    processStdinRef = eryxUdata_registerudata(L, &processStdinDef);
+    processStdoutRef = eryxUdata_registerudata(L, &processStdoutDef);
+    processStderrRef = eryxUdata_registerudata(L, &processStderrDef);
 
     lua_newtable(L);
 

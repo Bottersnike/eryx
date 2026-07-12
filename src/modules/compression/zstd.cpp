@@ -15,6 +15,9 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
+udataRef* zstdCompressor;
+udataRef* zstdDecompressor;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -258,25 +261,13 @@ static int l_train_dictionary(lua_State* L) {
 
 static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;  // 32 KB
 
-static const char* MT_ZSTD_CSTREAM = "zstd.Compressor";
-static const char* MT_ZSTD_DSTREAM = "zstd.Decompressor";
-
 struct LuaZstdCompressor {
     ZSTD_CStream* cstream;
     bool closed;
 };
 
-static void zstd_compressor_dtor(void* ud) {
-    auto* c = (LuaZstdCompressor*)ud;
-    if (!c->closed && c->cstream) {
-        ZSTD_freeCStream(c->cstream);
-        c->cstream = nullptr;
-        c->closed = true;
-    }
-}
-
 static LuaZstdCompressor* check_zstd_compressor(lua_State* L) {
-    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+    auto* c = (LuaZstdCompressor*)eryxUdata_checkudata(L, zstdCompressor, 1);
     if (c->closed) luaL_error(L, "zstd: compressor is closed");
     return c;
 }
@@ -362,18 +353,23 @@ static int l_zstd_compressor_finish(lua_State* L) {
     return 1;
 }
 
-static int l_zstd_compressor_close(lua_State* L) {
-    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+static void l_zstd_compressor_destructor(lua_State* L, void* ud) {
+    auto* c = (LuaZstdCompressor*)ud;
     if (!c->closed && c->cstream) {
         ZSTD_freeCStream(c->cstream);
         c->cstream = nullptr;
         c->closed = true;
     }
+}
+
+static int l_zstd_compressor_close(lua_State* L) {
+    auto* c = (LuaZstdCompressor*)eryxUdata_checkudata(L, zstdCompressor, 1);
+    l_zstd_compressor_destructor(L, c);
     return 0;
 }
 
 static int l_zstd_compressor_tostring(lua_State* L) {
-    auto* c = (LuaZstdCompressor*)luaL_checkudata(L, 1, MT_ZSTD_CSTREAM);
+    auto* c = (LuaZstdCompressor*)eryxUdata_checkudata(L, zstdCompressor, 1);
     lua_pushfstring(L, "zstd.Compressor(%s)", c->closed ? "closed" : "open");
     return 1;
 }
@@ -382,8 +378,7 @@ static int l_zstd_compressor_tostring(lua_State* L) {
 static int l_create_zstd_compressor(lua_State* L) {
     int level = (int)luaL_optinteger(L, 1, ZSTD_CLEVEL_DEFAULT);
 
-    auto* c =
-        (LuaZstdCompressor*)lua_newuserdatadtor(L, sizeof(LuaZstdCompressor), zstd_compressor_dtor);
+    auto* c = (LuaZstdCompressor*)eryxUdata_pushudata(L, zstdCompressor);
     c->cstream = ZSTD_createCStream();
     c->closed = false;
 
@@ -400,8 +395,6 @@ static int l_create_zstd_compressor(lua_State* L) {
         luaL_error(L, "zstd: initCStream failed: %s", ZSTD_getErrorName(ret));
     }
 
-    luaL_getmetatable(L, MT_ZSTD_CSTREAM);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -415,17 +408,8 @@ struct LuaZstdDecompressor {
     bool finished;
 };
 
-static void zstd_decompressor_dtor(void* ud) {
-    auto* d = (LuaZstdDecompressor*)ud;
-    if (!d->closed && d->dstream) {
-        ZSTD_freeDStream(d->dstream);
-        d->dstream = nullptr;
-        d->closed = true;
-    }
-}
-
 static LuaZstdDecompressor* check_zstd_decompressor(lua_State* L) {
-    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+    auto* d = (LuaZstdDecompressor*)eryxUdata_checkudata(L, zstdDecompressor, 1);
     if (d->closed) luaL_error(L, "zstd: decompressor is closed");
     return d;
 }
@@ -469,18 +453,23 @@ static int l_zstd_decompressor_write(lua_State* L) {
     return 2;
 }
 
-static int l_zstd_decompressor_close(lua_State* L) {
-    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+static void l_zstd_decompressor_destructor(lua_State* L, void* ud) {
+    auto* d = (LuaZstdDecompressor*)ud;
     if (!d->closed && d->dstream) {
         ZSTD_freeDStream(d->dstream);
         d->dstream = nullptr;
         d->closed = true;
     }
+}
+
+static int l_zstd_decompressor_close(lua_State* L) {
+    auto* d = (LuaZstdDecompressor*)eryxUdata_checkudata(L, zstdDecompressor, 1);
+    l_zstd_decompressor_destructor(L, d);
     return 0;
 }
 
 static int l_zstd_decompressor_tostring(lua_State* L) {
-    auto* d = (LuaZstdDecompressor*)luaL_checkudata(L, 1, MT_ZSTD_DSTREAM);
+    auto* d = (LuaZstdDecompressor*)eryxUdata_checkudata(L, zstdDecompressor, 1);
     const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
     lua_pushfstring(L, "zstd.Decompressor(%s)", state);
     return 1;
@@ -488,8 +477,7 @@ static int l_zstd_decompressor_tostring(lua_State* L) {
 
 // zstd.createDecompressor() -> Decompressor
 static int l_create_zstd_decompressor(lua_State* L) {
-    auto* d = (LuaZstdDecompressor*)lua_newuserdatadtor(L, sizeof(LuaZstdDecompressor),
-                                                        zstd_decompressor_dtor);
+    auto* d = (LuaZstdDecompressor*)eryxUdata_pushudata(L, zstdDecompressor);
     d->dstream = ZSTD_createDStream();
     d->closed = false;
     d->finished = false;
@@ -507,59 +495,66 @@ static int l_create_zstd_decompressor(lua_State* L) {
         luaL_error(L, "zstd: initDStream failed: %s", ZSTD_getErrorName(ret));
     }
 
-    luaL_getmetatable(L, MT_ZSTD_DSTREAM);
-    lua_setmetatable(L, -2);
     return 1;
 }
+
+luaL_Reg zstdCompressorMethods[] = {
+    { "write", l_zstd_compressor_write },
+    { "flush", l_zstd_compressor_flush },
+    { "finish", l_zstd_compressor_finish },
+    { "close", l_zstd_compressor_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg zstdCompressorMetamethods[] = {
+    { "__tostring", l_zstd_compressor_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef zstdCompressorDef = {
+    .name = "ZstdCompressor",
+    .size = sizeof(LuaZstdCompressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = zstdCompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = zstdCompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_zstd_compressor_destructor,
+};
+
+luaL_Reg zstdDecompressorMethods[] = {
+    { "write", l_zstd_decompressor_write },
+    { "close", l_zstd_decompressor_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg zstdDecompressorMetamethods[] = {
+    { "__tostring", l_zstd_decompressor_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef zstdDecompressorDef = {
+    .name = "ZstdDecompressor",
+    .size = sizeof(LuaZstdDecompressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = zstdDecompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = zstdDecompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_zstd_decompressor_destructor,
+};
 
 // ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_zstd(lua_State* L) {
-    // Register Compressor metatable
-    luaL_newmetatable(L, MT_ZSTD_CSTREAM);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_zstd_compressor_write },
-            { "flush", l_zstd_compressor_flush },
-            { "finish", l_zstd_compressor_finish },
-            { "close", l_zstd_compressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_zstd_compressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_zstd_compressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
-
-    // Register Decompressor metatable
-    luaL_newmetatable(L, MT_ZSTD_DSTREAM);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_zstd_decompressor_write },
-            { "close", l_zstd_decompressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_zstd_decompressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_zstd_decompressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+    zstdCompressor = eryxUdata_registerudata(L, &zstdCompressorDef);
+    zstdDecompressor = eryxUdata_registerudata(L, &zstdDecompressorDef);
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {

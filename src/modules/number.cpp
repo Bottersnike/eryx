@@ -10,7 +10,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "module_helpers.hpp"
 #include "mpfr.h"
 
 static const LuauModuleInfo INFO = {
@@ -102,7 +101,21 @@ struct TempFloat {
     operator mpfr_srcptr() const { return value; }
 };
 
-static void integer_dtor(void* userdata) {
+static udataRef* check_udata_ref(lua_State* L, const char* name) {
+    udataRef* ref = eryxUdata_getudata(L, name);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", name);
+        return nullptr;
+    }
+    return ref;
+}
+
+static udataRef* test_udata_ref(lua_State* L, const char* name) {
+    return eryxUdata_getudata(L, name);
+}
+
+static void integer_dtor(lua_State* L, void* userdata) {
+    (void)L;
     auto* integer = static_cast<LuaInteger*>(userdata);
     if (integer->initialized) {
         mpz_clear(integer->value);
@@ -110,7 +123,8 @@ static void integer_dtor(void* userdata) {
     }
 }
 
-static void rational_dtor(void* userdata) {
+static void rational_dtor(lua_State* L, void* userdata) {
+    (void)L;
     auto* rational = static_cast<LuaRational*>(userdata);
     if (rational->initialized) {
         mpq_clear(rational->value);
@@ -118,7 +132,8 @@ static void rational_dtor(void* userdata) {
     }
 }
 
-static void float_dtor(void* userdata) {
+static void float_dtor(lua_State* L, void* userdata) {
+    (void)L;
     auto* floatValue = static_cast<LuaFloat*>(userdata);
     if (floatValue->initialized) {
         mpfr_clear(floatValue->value);
@@ -126,7 +141,8 @@ static void float_dtor(void* userdata) {
     }
 }
 
-static void number_dtor(void* userdata) {
+static void number_dtor(lua_State* L, void* userdata) {
+    (void)L;
     auto* number = static_cast<LuaNumber*>(userdata);
     if (number->integerInitialized) {
         mpz_clear(number->integerValue);
@@ -139,39 +155,50 @@ static void number_dtor(void* userdata) {
 }
 
 static LuaInteger* check_integer(lua_State* L, int index) {
-    return static_cast<LuaInteger*>(luaL_checkudata(L, index, INTEGER_METATABLE));
+    return static_cast<LuaInteger*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, INTEGER_METATABLE), index));
 }
 
 static LuaRational* check_rational(lua_State* L, int index) {
-    return static_cast<LuaRational*>(luaL_checkudata(L, index, RATIONAL_METATABLE));
+    return static_cast<LuaRational*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, RATIONAL_METATABLE), index));
 }
 
 static LuaFloat* check_float(lua_State* L, int index) {
-    return static_cast<LuaFloat*>(luaL_checkudata(L, index, FLOAT_METATABLE));
+    return static_cast<LuaFloat*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, FLOAT_METATABLE), index));
 }
 
 static LuaNumber* check_number(lua_State* L, int index) {
-    return static_cast<LuaNumber*>(luaL_checkudata(L, index, NUMBER_METATABLE));
+    return static_cast<LuaNumber*>(
+        eryxUdata_checkudata(L, check_udata_ref(L, NUMBER_METATABLE), index));
+}
+
+template <typename T>
+static T* test_udata(lua_State* L, int index, const char* name) {
+    udataRef* ref = test_udata_ref(L, name);
+    return ref ? static_cast<T*>(eryxUdata_testudata(L, ref, index)) : nullptr;
 }
 
 static bool is_integer(lua_State* L, int index) {
-    return eryx_testudata(L, index, INTEGER_METATABLE) != nullptr;
+    return test_udata<LuaInteger>(L, index, INTEGER_METATABLE) != nullptr;
 }
 
 static bool is_rational(lua_State* L, int index) {
-    return eryx_testudata(L, index, RATIONAL_METATABLE) != nullptr;
+    return test_udata<LuaRational>(L, index, RATIONAL_METATABLE) != nullptr;
 }
 
 static bool is_float(lua_State* L, int index) {
-    return eryx_testudata(L, index, FLOAT_METATABLE) != nullptr;
+    return test_udata<LuaFloat>(L, index, FLOAT_METATABLE) != nullptr;
 }
 
 static bool is_number(lua_State* L, int index) {
-    return eryx_testudata(L, index, NUMBER_METATABLE) != nullptr;
+    return test_udata<LuaNumber>(L, index, NUMBER_METATABLE) != nullptr;
 }
 
 static LuaInteger* push_integer(lua_State* L) {
-    auto* integer = eryx_newuserdatadtor<LuaInteger>(L, INTEGER_METATABLE, integer_dtor);
+    auto* integer =
+        static_cast<LuaInteger*>(eryxUdata_pushudata(L, check_udata_ref(L, INTEGER_METATABLE)));
     std::memset(integer, 0, sizeof(LuaInteger));
 
     mpz_init(integer->value);
@@ -180,7 +207,8 @@ static LuaInteger* push_integer(lua_State* L) {
 }
 
 static LuaRational* push_rational(lua_State* L) {
-    auto* rational = eryx_newuserdatadtor<LuaRational>(L, RATIONAL_METATABLE, rational_dtor);
+    auto* rational =
+        static_cast<LuaRational*>(eryxUdata_pushudata(L, check_udata_ref(L, RATIONAL_METATABLE)));
     std::memset(rational, 0, sizeof(LuaRational));
 
     mpq_init(rational->value);
@@ -189,7 +217,8 @@ static LuaRational* push_rational(lua_State* L) {
 }
 
 static LuaFloat* push_float(lua_State* L, mpfr_prec_t precision = mpfr_get_default_prec()) {
-    auto* floatValue = eryx_newuserdatadtor<LuaFloat>(L, FLOAT_METATABLE, float_dtor);
+    auto* floatValue =
+        static_cast<LuaFloat*>(eryxUdata_pushudata(L, check_udata_ref(L, FLOAT_METATABLE)));
     std::memset(floatValue, 0, sizeof(LuaFloat));
 
     mpfr_init2(floatValue->value, precision);
@@ -199,7 +228,8 @@ static LuaFloat* push_float(lua_State* L, mpfr_prec_t precision = mpfr_get_defau
 }
 
 static LuaNumber* push_number_integer(lua_State* L) {
-    auto* number = eryx_newuserdatadtor<LuaNumber>(L, NUMBER_METATABLE, number_dtor);
+    auto* number =
+        static_cast<LuaNumber*>(eryxUdata_pushudata(L, check_udata_ref(L, NUMBER_METATABLE)));
     std::memset(number, 0, sizeof(LuaNumber));
 
     number->kind = NumberKind::Integer;
@@ -209,7 +239,8 @@ static LuaNumber* push_number_integer(lua_State* L) {
 }
 
 static LuaNumber* push_number_float(lua_State* L, mpfr_prec_t precision = mpfr_get_default_prec()) {
-    auto* number = eryx_newuserdatadtor<LuaNumber>(L, NUMBER_METATABLE, number_dtor);
+    auto* number =
+        static_cast<LuaNumber*>(eryxUdata_pushudata(L, check_udata_ref(L, NUMBER_METATABLE)));
     std::memset(number, 0, sizeof(LuaNumber));
 
     number->kind = NumberKind::Float;
@@ -545,7 +576,7 @@ static mpfr_rnd_t check_mpfr_round_mode(lua_State* L, int index, const char* con
 }
 
 static NumberKind classify_number_operand(lua_State* L, int index, const char* expected) {
-    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) return number->kind;
+    if (auto* number = test_udata<LuaNumber>(L, index, NUMBER_METATABLE)) return number->kind;
 
     int64_t whole = 0;
     if (try_get_whole_number64(L, index, whole)) return NumberKind::Integer;
@@ -556,7 +587,7 @@ static NumberKind classify_number_operand(lua_State* L, int index, const char* e
 
 static void load_number_integer_operand_no_string(lua_State* L, int index, mpz_ptr out,
                                                   const char* expected) {
-    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
+    if (auto* number = test_udata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind != NumberKind::Integer) luaL_typeerror(L, index, expected);
         mpz_set(out, number->integerValue);
         return;
@@ -568,7 +599,7 @@ static void load_number_integer_operand_no_string(lua_State* L, int index, mpz_p
 
 static void load_number_float_operand_no_string(lua_State* L, int index, mpfr_ptr out,
                                                 mpfr_rnd_t rounding, const char* expected) {
-    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
+    if (auto* number = test_udata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Float) {
             mpfr_set(out, number->floatValue, rounding);
         } else {
@@ -582,7 +613,7 @@ static void load_number_float_operand_no_string(lua_State* L, int index, mpfr_pt
 }
 
 static mpfr_prec_t number_operand_precision(lua_State* L, int index) {
-    if (auto* number = eryx_testudata<LuaNumber>(L, index, NUMBER_METATABLE)) {
+    if (auto* number = test_udata<LuaNumber>(L, index, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Float) return mpfr_get_prec(number->floatValue);
         return 53;
     }
@@ -733,7 +764,7 @@ static void divmod(mpz_ptr quotient, mpz_ptr remainder, mpz_srcptr lhs, mpz_srcp
 
 static void load_integer_operand_no_string(lua_State* L, int index, mpz_ptr out,
                                            const char* expected) {
-    if (auto* integer = eryx_testudata<LuaInteger>(L, index, INTEGER_METATABLE)) {
+    if (auto* integer = test_udata<LuaInteger>(L, index, INTEGER_METATABLE)) {
         mpz_set(out, integer->value);
         return;
     }
@@ -845,12 +876,12 @@ static void set_rational_from_string(lua_State* L, mpq_ptr out, const std::strin
 
 static void load_rational_operand_no_string(lua_State* L, int index, mpq_ptr out,
                                             const char* expected) {
-    if (auto* rational = eryx_testudata<LuaRational>(L, index, RATIONAL_METATABLE)) {
+    if (auto* rational = test_udata<LuaRational>(L, index, RATIONAL_METATABLE)) {
         mpq_set(out, rational->value);
         return;
     }
 
-    if (auto* integer = eryx_testudata<LuaInteger>(L, index, INTEGER_METATABLE)) {
+    if (auto* integer = test_udata<LuaInteger>(L, index, INTEGER_METATABLE)) {
         mpq_set_integer(out, integer->value);
         return;
     }
@@ -872,7 +903,7 @@ static void load_rational_like(lua_State* L, int index, mpq_ptr out, const char*
 
 static void load_float_operand_no_string(lua_State* L, int index, mpfr_ptr out, mpfr_rnd_t rounding,
                                          const char* expected) {
-    if (auto* floatValue = eryx_testudata<LuaFloat>(L, index, FLOAT_METATABLE)) {
+    if (auto* floatValue = test_udata<LuaFloat>(L, index, FLOAT_METATABLE)) {
         mpfr_set(out, floatValue->value, rounding);
         return;
     }
@@ -883,7 +914,7 @@ static void load_float_operand_no_string(lua_State* L, int index, mpfr_ptr out, 
 }
 
 static mpfr_prec_t float_operand_precision(lua_State* L, int index) {
-    if (auto* floatValue = eryx_testudata<LuaFloat>(L, index, FLOAT_METATABLE))
+    if (auto* floatValue = test_udata<LuaFloat>(L, index, FLOAT_METATABLE))
         return mpfr_get_prec(floatValue->value);
     return 53;
 }
@@ -1311,7 +1342,7 @@ static int integer_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
+    if (auto* integer = test_udata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
         return push_integer_copy(L, integer->value);
     }
 
@@ -1685,13 +1716,13 @@ static int rational_new(lua_State* L) {
     }
 
     if (lua_isnoneornil(L, 2)) {
-        if (auto* rational = eryx_testudata<LuaRational>(L, 1, RATIONAL_METATABLE)) {
+        if (auto* rational = test_udata<LuaRational>(L, 1, RATIONAL_METATABLE)) {
             return push_rational_copy(L, rational->value);
         }
 
         auto* out = push_rational(L);
 
-        if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
+        if (auto* integer = test_udata<LuaInteger>(L, 1, INTEGER_METATABLE)) {
             mpq_set_integer(out->value, integer->value);
             return 1;
         }
@@ -1996,7 +2027,7 @@ static int float_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* existing = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
+    if (auto* existing = test_udata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(existing->value) : check_precision(L, 2);
         auto* out = push_float(L, precision);
@@ -2529,7 +2560,7 @@ static int number_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* number = eryx_testudata<LuaNumber>(L, 1, NUMBER_METATABLE)) {
+    if (auto* number = test_udata<LuaNumber>(L, 1, NUMBER_METATABLE)) {
         if (number->kind == NumberKind::Integer)
             return push_number_integer_copy(L, number->integerValue);
 
@@ -2540,10 +2571,10 @@ static int number_new(lua_State* L) {
         return 1;
     }
 
-    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE))
+    if (auto* integer = test_udata<LuaInteger>(L, 1, INTEGER_METATABLE))
         return push_number_integer_copy(L, integer->value);
 
-    if (auto* floatValue = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
+    if (auto* floatValue = test_udata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(floatValue->value) : check_precision(L, 2);
         auto* out = push_number_float(L, precision);
@@ -2605,7 +2636,7 @@ static int number_from_number(lua_State* L) {
 }
 
 static int number_from_integer(lua_State* L) {
-    if (auto* integer = eryx_testudata<LuaInteger>(L, 1, INTEGER_METATABLE))
+    if (auto* integer = test_udata<LuaInteger>(L, 1, INTEGER_METATABLE))
         return push_number_integer_copy(L, integer->value);
 
     auto* out = push_number_integer(L);
@@ -2614,7 +2645,7 @@ static int number_from_integer(lua_State* L) {
 }
 
 static int number_from_float(lua_State* L) {
-    if (auto* floatValue = eryx_testudata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
+    if (auto* floatValue = test_udata<LuaFloat>(L, 1, FLOAT_METATABLE)) {
         mpfr_prec_t precision =
             lua_isnoneornil(L, 2) ? mpfr_get_prec(floatValue->value) : check_precision(L, 2);
         auto* out = push_number_float(L, precision);
@@ -2643,6 +2674,233 @@ static int number_is_number(lua_State* L) {
     return 1;
 }
 
+static luaL_Reg integerMethods[] = {
+    { "clone", integer_clone },
+    { "abs", integer_abs },
+    { "sign", integer_sign },
+    { "cmp", integer_cmp },
+    { "isZero", integer_is_zero },
+    { "isOne", integer_is_one },
+    { "isEven", integer_is_even },
+    { "isOdd", integer_is_odd },
+    { "divTrunc", integer_div_trunc },
+    { "divFloor", integer_div_floor },
+    { "divCeil", integer_div_ceil },
+    { "divmod", integer_divmod },
+    { "gcd", integer_gcd },
+    { "lcm", integer_lcm },
+    { "extendedGcd", integer_extended_gcd },
+    { "pow", integer_pow },
+    { "modPow", integer_mod_pow },
+    { "modInverse", integer_mod_inverse },
+    { "isProbablePrime", integer_is_probable_prime },
+    { "nextPrime", integer_next_prime },
+    { "bitLength", integer_bit_length },
+    { "popcount", integer_popcount },
+    { "testBit", integer_test_bit },
+    { "setBit", integer_set_bit },
+    { "clearBit", integer_clear_bit },
+    { "flipBit", integer_flip_bit },
+    { "band", integer_band },
+    { "bor", integer_bor },
+    { "bxor", integer_bxor },
+    { "bnot", integer_bnot },
+    { "shl", integer_shl },
+    { "shr", integer_shr },
+    { "toString", integer_to_string },
+    { "toNumber", integer_to_number },
+    { "toRational", integer_to_rational },
+    { "toFloat", integer_to_float },
+    { "toI64", integer_to_i64 },
+    { "toU64", integer_to_u64 },
+    { "fitsNumber", integer_fits_number },
+    { "fitsI64", integer_fits_i64 },
+    { "fitsU64", integer_fits_u64 },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg integerMetamethods[] = {
+    { "__tostring", integer_tostring },
+    { "__eq", integer_eq },
+    { "__lt", integer_lt },
+    { "__le", integer_le },
+    { "__unm", integer_unm },
+    { "__add", integer_add },
+    { "__sub", integer_sub },
+    { "__mul", integer_mul },
+    { "__idiv", integer_idiv },
+    { "__mod", integer_mod },
+    { "__pow", integer_pow_metamethod },
+    { nullptr, nullptr },
+};
+
+static udataDef integerDef = {
+    .name = INTEGER_METATABLE,
+    .size = sizeof(LuaInteger),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = integerMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = integerMethods,
+    .destructor = integer_dtor,
+};
+
+static luaL_Reg rationalMethods[] = {
+    { "clone", rational_clone },
+    { "abs", rational_abs },
+    { "sign", rational_sign },
+    { "cmp", rational_cmp },
+    { "inverse", rational_inverse },
+    { "canonical", rational_canonical },
+    { "numerator", rational_numerator },
+    { "denominator", rational_denominator },
+    { "isZero", rational_is_zero },
+    { "isOne", rational_is_one },
+    { "isInteger", rational_is_integer },
+    { "floor", rational_floor },
+    { "ceil", rational_ceil },
+    { "trunc", rational_trunc },
+    { "round", rational_round },
+    { "toString", rational_to_string },
+    { "toDecimal", rational_to_decimal },
+    { "toNumber", rational_to_number },
+    { "toInteger", rational_to_integer },
+    { "toFloat", rational_to_float },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg rationalMetamethods[] = {
+    { "__tostring", rational_tostring },
+    { "__eq", rational_eq },
+    { "__lt", rational_lt },
+    { "__le", rational_le },
+    { "__unm", rational_unm },
+    { "__add", rational_add },
+    { "__sub", rational_sub },
+    { "__mul", rational_mul },
+    { "__div", rational_div },
+    { "__idiv", rational_idiv },
+    { "__mod", rational_mod },
+    { "__pow", rational_pow },
+    { nullptr, nullptr },
+};
+
+static udataDef rationalDef = {
+    .name = RATIONAL_METATABLE,
+    .size = sizeof(LuaRational),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = rationalMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = rationalMethods,
+    .destructor = rational_dtor,
+};
+
+static luaL_Reg floatMethods[] = {
+    { "clone", float_clone },
+    { "abs", float_abs },
+    { "sign", float_sign },
+    { "cmp", float_cmp },
+    { "sqrt", float_sqrt },
+    { "floor", float_floor },
+    { "ceil", float_ceil },
+    { "trunc", float_trunc },
+    { "round", float_round },
+    { "precision", float_precision },
+    { "withPrecision", float_with_precision },
+    { "isZero", float_is_zero },
+    { "isFinite", float_is_finite },
+    { "isNaN", float_is_nan },
+    { "isInfinite", float_is_infinite },
+    { "toString", float_to_string },
+    { "toNumber", float_to_number },
+    { "toInteger", float_to_integer },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg floatMetamethods[] = {
+    { "__tostring", float_tostring },
+    { "__eq", float_eq },
+    { "__lt", float_lt },
+    { "__le", float_le },
+    { "__unm", float_unm },
+    { "__add", float_add },
+    { "__sub", float_sub },
+    { "__mul", float_mul },
+    { "__div", float_div },
+    { "__idiv", float_idiv },
+    { "__mod", float_mod },
+    { "__pow", float_pow },
+    { nullptr, nullptr },
+};
+
+static udataDef floatDef = {
+    .name = FLOAT_METATABLE,
+    .size = sizeof(LuaFloat),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = floatMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = floatMethods,
+    .destructor = float_dtor,
+};
+
+static luaL_Reg numberMethods[] = {
+    { "clone", number_clone },
+    { "kind", number_kind },
+    { "isInteger", number_is_integer_kind },
+    { "isFloat", number_is_float_kind },
+    { "integer", number_integer_value },
+    { "float", number_float_value },
+    { "abs", number_abs },
+    { "sign", number_sign },
+    { "cmp", number_cmp },
+    { "floor", number_floor },
+    { "ceil", number_ceil },
+    { "trunc", number_trunc },
+    { "round", number_round },
+    { "toString", number_to_string },
+    { "toNumber", number_to_number },
+    { "toInteger", number_to_integer },
+    { "toFloat", number_to_float },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg numberMetamethods[] = {
+    { "__tostring", number_tostring },
+    { "__eq", number_eq },
+    { "__lt", number_lt },
+    { "__le", number_le },
+    { "__unm", number_unm },
+    { "__add", number_add },
+    { "__sub", number_sub },
+    { "__mul", number_mul },
+    { "__div", number_div },
+    { "__idiv", number_idiv },
+    { "__mod", number_mod },
+    { "__pow", number_pow },
+    { nullptr, nullptr },
+};
+
+static udataDef numberDef = {
+    .name = NUMBER_METATABLE,
+    .size = sizeof(LuaNumber),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = numberMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = numberMethods,
+    .destructor = number_dtor,
+};
+
 static void set_function(lua_State* L, const char* name, lua_CFunction function) {
     lua_pushcfunction(L, function, name);
     lua_setfield(L, -2, name);
@@ -2651,185 +2909,10 @@ static void set_function(lua_State* L, const char* name, lua_CFunction function)
 }  // namespace
 
 LUAU_MODULE_EXPORT int luauopen_number(lua_State* L) {
-    luaL_newmetatable(L, INTEGER_METATABLE);
-    lua_pushstring(L, "Integer");
-    lua_setfield(L, -2, "__type");
-    set_function(L, "__tostring", integer_tostring);
-    set_function(L, "__eq", integer_eq);
-    set_function(L, "__lt", integer_lt);
-    set_function(L, "__le", integer_le);
-    set_function(L, "__unm", integer_unm);
-    set_function(L, "__add", integer_add);
-    set_function(L, "__sub", integer_sub);
-    set_function(L, "__mul", integer_mul);
-    set_function(L, "__idiv", integer_idiv);
-    set_function(L, "__mod", integer_mod);
-    set_function(L, "__pow", integer_pow_metamethod);
-
-    set_function(L, "clone", integer_clone);
-    set_function(L, "abs", integer_abs);
-    set_function(L, "sign", integer_sign);
-    set_function(L, "cmp", integer_cmp);
-    set_function(L, "isZero", integer_is_zero);
-    set_function(L, "isOne", integer_is_one);
-    set_function(L, "isEven", integer_is_even);
-    set_function(L, "isOdd", integer_is_odd);
-    set_function(L, "divTrunc", integer_div_trunc);
-    set_function(L, "divFloor", integer_div_floor);
-    set_function(L, "divCeil", integer_div_ceil);
-    set_function(L, "divmod", integer_divmod);
-    set_function(L, "gcd", integer_gcd);
-    set_function(L, "lcm", integer_lcm);
-    set_function(L, "extendedGcd", integer_extended_gcd);
-    set_function(L, "pow", integer_pow);
-    set_function(L, "modPow", integer_mod_pow);
-    set_function(L, "modInverse", integer_mod_inverse);
-    set_function(L, "isProbablePrime", integer_is_probable_prime);
-    set_function(L, "nextPrime", integer_next_prime);
-    set_function(L, "bitLength", integer_bit_length);
-    set_function(L, "popcount", integer_popcount);
-    set_function(L, "testBit", integer_test_bit);
-    set_function(L, "setBit", integer_set_bit);
-    set_function(L, "clearBit", integer_clear_bit);
-    set_function(L, "flipBit", integer_flip_bit);
-    set_function(L, "band", integer_band);
-    set_function(L, "bor", integer_bor);
-    set_function(L, "bxor", integer_bxor);
-    set_function(L, "bnot", integer_bnot);
-    set_function(L, "shl", integer_shl);
-    set_function(L, "shr", integer_shr);
-    set_function(L, "toString", integer_to_string);
-    set_function(L, "toNumber", integer_to_number);
-    set_function(L, "toRational", integer_to_rational);
-    set_function(L, "toFloat", integer_to_float);
-    set_function(L, "toI64", integer_to_i64);
-    set_function(L, "toU64", integer_to_u64);
-    set_function(L, "fitsNumber", integer_fits_number);
-    set_function(L, "fitsI64", integer_fits_i64);
-    set_function(L, "fitsU64", integer_fits_u64);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, RATIONAL_METATABLE);
-    lua_pushstring(L, "Rational");
-    lua_setfield(L, -2, "__type");
-    set_function(L, "__tostring", rational_tostring);
-    set_function(L, "__eq", rational_eq);
-    set_function(L, "__lt", rational_lt);
-    set_function(L, "__le", rational_le);
-    set_function(L, "__unm", rational_unm);
-    set_function(L, "__add", rational_add);
-    set_function(L, "__sub", rational_sub);
-    set_function(L, "__mul", rational_mul);
-    set_function(L, "__div", rational_div);
-    set_function(L, "__idiv", rational_idiv);
-    set_function(L, "__mod", rational_mod);
-    set_function(L, "__pow", rational_pow);
-
-    set_function(L, "clone", rational_clone);
-    set_function(L, "abs", rational_abs);
-    set_function(L, "sign", rational_sign);
-    set_function(L, "cmp", rational_cmp);
-    set_function(L, "inverse", rational_inverse);
-    set_function(L, "canonical", rational_canonical);
-    set_function(L, "numerator", rational_numerator);
-    set_function(L, "denominator", rational_denominator);
-    set_function(L, "isZero", rational_is_zero);
-    set_function(L, "isOne", rational_is_one);
-    set_function(L, "isInteger", rational_is_integer);
-    set_function(L, "floor", rational_floor);
-    set_function(L, "ceil", rational_ceil);
-    set_function(L, "trunc", rational_trunc);
-    set_function(L, "round", rational_round);
-    set_function(L, "toString", rational_to_string);
-    set_function(L, "toDecimal", rational_to_decimal);
-    set_function(L, "toNumber", rational_to_number);
-    set_function(L, "toInteger", rational_to_integer);
-    set_function(L, "toFloat", rational_to_float);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, FLOAT_METATABLE);
-    lua_pushstring(L, "Float");
-    lua_setfield(L, -2, "__type");
-    set_function(L, "__tostring", float_tostring);
-    set_function(L, "__eq", float_eq);
-    set_function(L, "__lt", float_lt);
-    set_function(L, "__le", float_le);
-    set_function(L, "__unm", float_unm);
-    set_function(L, "__add", float_add);
-    set_function(L, "__sub", float_sub);
-    set_function(L, "__mul", float_mul);
-    set_function(L, "__div", float_div);
-    set_function(L, "__idiv", float_idiv);
-    set_function(L, "__mod", float_mod);
-    set_function(L, "__pow", float_pow);
-
-    set_function(L, "clone", float_clone);
-    set_function(L, "abs", float_abs);
-    set_function(L, "sign", float_sign);
-    set_function(L, "cmp", float_cmp);
-    set_function(L, "sqrt", float_sqrt);
-    set_function(L, "floor", float_floor);
-    set_function(L, "ceil", float_ceil);
-    set_function(L, "trunc", float_trunc);
-    set_function(L, "round", float_round);
-    set_function(L, "precision", float_precision);
-    set_function(L, "withPrecision", float_with_precision);
-    set_function(L, "isZero", float_is_zero);
-    set_function(L, "isFinite", float_is_finite);
-    set_function(L, "isNaN", float_is_nan);
-    set_function(L, "isInfinite", float_is_infinite);
-    set_function(L, "toString", float_to_string);
-    set_function(L, "toNumber", float_to_number);
-    set_function(L, "toInteger", float_to_integer);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, NUMBER_METATABLE);
-    lua_pushstring(L, "Number");
-    lua_setfield(L, -2, "__type");
-    set_function(L, "__tostring", number_tostring);
-    set_function(L, "__eq", number_eq);
-    set_function(L, "__lt", number_lt);
-    set_function(L, "__le", number_le);
-    set_function(L, "__unm", number_unm);
-    set_function(L, "__add", number_add);
-    set_function(L, "__sub", number_sub);
-    set_function(L, "__mul", number_mul);
-    set_function(L, "__div", number_div);
-    set_function(L, "__idiv", number_idiv);
-    set_function(L, "__mod", number_mod);
-    set_function(L, "__pow", number_pow);
-
-    set_function(L, "clone", number_clone);
-    set_function(L, "kind", number_kind);
-    set_function(L, "isInteger", number_is_integer_kind);
-    set_function(L, "isFloat", number_is_float_kind);
-    set_function(L, "integer", number_integer_value);
-    set_function(L, "float", number_float_value);
-    set_function(L, "abs", number_abs);
-    set_function(L, "sign", number_sign);
-    set_function(L, "cmp", number_cmp);
-    set_function(L, "floor", number_floor);
-    set_function(L, "ceil", number_ceil);
-    set_function(L, "trunc", number_trunc);
-    set_function(L, "round", number_round);
-    set_function(L, "toString", number_to_string);
-    set_function(L, "toNumber", number_to_number);
-    set_function(L, "toInteger", number_to_integer);
-    set_function(L, "toFloat", number_to_float);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
+    eryxUdata_registerudata(L, &integerDef);
+    eryxUdata_registerudata(L, &rationalDef);
+    eryxUdata_registerudata(L, &floatDef);
+    eryxUdata_registerudata(L, &numberDef);
     lua_newtable(L);
 
     lua_newtable(L);

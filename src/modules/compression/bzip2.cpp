@@ -1,5 +1,8 @@
 #include "module_api.h"
 //
+#include <cstring>
+#include <vector>
+
 #include "bzlib.h"
 #include "lua.h"
 #include "lualib.h"
@@ -10,6 +13,9 @@ static const LuauModuleInfo INFO = {
     .entry = "luauopen_bzip2",
 };
 LUAU_MODULE_INFO()
+
+udataRef* bzip2Compressor;
+udataRef* bzip2Decompressor;
 
 // ---------------------------------------------------------------------------
 // compress(data, block_size?) -> buffer
@@ -89,24 +95,13 @@ static int l_compress_bound(lua_State* L) {
 
 static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;  // 32 KB
 
-static const char* MT_BZ2_COMPRESS = "bzip2.Compressor";
-static const char* MT_BZ2_DECOMPRESS = "bzip2.Decompressor";
-
 struct LuaBz2Compressor {
     bz_stream strm;
     bool closed;
 };
 
-static void bz2_compressor_dtor(void* ud) {
-    auto* c = (LuaBz2Compressor*)ud;
-    if (!c->closed) {
-        BZ2_bzCompressEnd(&c->strm);
-        c->closed = true;
-    }
-}
-
 static LuaBz2Compressor* check_bz2_compressor(lua_State* L) {
-    auto* c = (LuaBz2Compressor*)luaL_checkudata(L, 1, MT_BZ2_COMPRESS);
+    auto* c = (LuaBz2Compressor*)eryxUdata_checkudata(L, bzip2Compressor, 1);
     if (c->closed) luaL_error(L, "bzip2: compressor is closed");
     return c;
 }
@@ -202,17 +197,22 @@ static int l_bz2_compressor_finish(lua_State* L) {
     return 1;
 }
 
-static int l_bz2_compressor_close(lua_State* L) {
-    auto* c = (LuaBz2Compressor*)luaL_checkudata(L, 1, MT_BZ2_COMPRESS);
+static void l_bz2_compressor_destructor(lua_State* L, void* ud) {
+    auto* c = (LuaBz2Compressor*)ud;
     if (!c->closed) {
         BZ2_bzCompressEnd(&c->strm);
         c->closed = true;
     }
+}
+
+static int l_bz2_compressor_close(lua_State* L) {
+    auto* c = (LuaBz2Compressor*)eryxUdata_checkudata(L, bzip2Compressor, 1);
+    l_bz2_compressor_destructor(L, c);
     return 0;
 }
 
 static int l_bz2_compressor_tostring(lua_State* L) {
-    auto* c = (LuaBz2Compressor*)luaL_checkudata(L, 1, MT_BZ2_COMPRESS);
+    auto* c = (LuaBz2Compressor*)eryxUdata_checkudata(L, bzip2Compressor, 1);
     lua_pushfstring(L, "bzip2.Compressor(%s)", c->closed ? "closed" : "open");
     return 1;
 }
@@ -222,8 +222,7 @@ static int l_create_bz2_compressor(lua_State* L) {
     int blockSize = (int)luaL_optinteger(L, 1, 9);
     if (blockSize < 1 || blockSize > 9) luaL_error(L, "bzip2: block_size must be 1-9");
 
-    auto* c =
-        (LuaBz2Compressor*)lua_newuserdatadtor(L, sizeof(LuaBz2Compressor), bz2_compressor_dtor);
+    auto* c = (LuaBz2Compressor*)eryxUdata_pushudata(L, bzip2Compressor);
     memset(&c->strm, 0, sizeof(bz_stream));
     c->closed = false;
 
@@ -233,8 +232,6 @@ static int l_create_bz2_compressor(lua_State* L) {
         luaL_error(L, "bzip2: compressInit failed (%d)", ret);
     }
 
-    luaL_getmetatable(L, MT_BZ2_COMPRESS);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -248,16 +245,8 @@ struct LuaBz2Decompressor {
     bool finished;
 };
 
-static void bz2_decompressor_dtor(void* ud) {
-    auto* d = (LuaBz2Decompressor*)ud;
-    if (!d->closed) {
-        BZ2_bzDecompressEnd(&d->strm);
-        d->closed = true;
-    }
-}
-
 static LuaBz2Decompressor* check_bz2_decompressor(lua_State* L) {
-    auto* d = (LuaBz2Decompressor*)luaL_checkudata(L, 1, MT_BZ2_DECOMPRESS);
+    auto* d = (LuaBz2Decompressor*)eryxUdata_checkudata(L, bzip2Decompressor, 1);
     if (d->closed) luaL_error(L, "bzip2: decompressor is closed");
     return d;
 }
@@ -307,17 +296,22 @@ static int l_bz2_decompressor_write(lua_State* L) {
     return 2;
 }
 
-static int l_bz2_decompressor_close(lua_State* L) {
-    auto* d = (LuaBz2Decompressor*)luaL_checkudata(L, 1, MT_BZ2_DECOMPRESS);
+static void l_bz2_decompressor_destructor(lua_State* L, void* ud) {
+    auto* d = (LuaBz2Decompressor*)ud;
     if (!d->closed) {
         BZ2_bzDecompressEnd(&d->strm);
         d->closed = true;
     }
+}
+
+static int l_bz2_decompressor_close(lua_State* L) {
+    auto* d = (LuaBz2Decompressor*)eryxUdata_checkudata(L, bzip2Decompressor, 1);
+    l_bz2_decompressor_destructor(L, d);
     return 0;
 }
 
 static int l_bz2_decompressor_tostring(lua_State* L) {
-    auto* d = (LuaBz2Decompressor*)luaL_checkudata(L, 1, MT_BZ2_DECOMPRESS);
+    auto* d = (LuaBz2Decompressor*)eryxUdata_checkudata(L, bzip2Decompressor, 1);
     const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
     lua_pushfstring(L, "bzip2.Decompressor(%s)", state);
     return 1;
@@ -327,8 +321,7 @@ static int l_bz2_decompressor_tostring(lua_State* L) {
 static int l_create_bz2_decompressor(lua_State* L) {
     int small = lua_toboolean(L, 1);
 
-    auto* d = (LuaBz2Decompressor*)lua_newuserdatadtor(L, sizeof(LuaBz2Decompressor),
-                                                       bz2_decompressor_dtor);
+    auto* d = (LuaBz2Decompressor*)eryxUdata_pushudata(L, bzip2Decompressor);
     memset(&d->strm, 0, sizeof(bz_stream));
     d->closed = false;
     d->finished = false;
@@ -339,59 +332,67 @@ static int l_create_bz2_decompressor(lua_State* L) {
         luaL_error(L, "bzip2: decompressInit failed (%d)", ret);
     }
 
-    luaL_getmetatable(L, MT_BZ2_DECOMPRESS);
-    lua_setmetatable(L, -2);
     return 1;
 }
+
+luaL_Reg bzip2CompressorMethods[] = {
+    { "write", l_bz2_compressor_write },
+    { "flush", l_bz2_compressor_flush },
+    { "finish", l_bz2_compressor_finish },
+    { "close", l_bz2_compressor_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg bzip2CompressorMetamethods[] = {
+    { "__tostring", l_bz2_compressor_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef bzip2CompressorDef = {
+    .name = "Bzip2Compressor",
+    .size = sizeof(LuaBz2Compressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = bzip2CompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = bzip2CompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_bz2_compressor_destructor,
+};
+
+luaL_Reg bzip2DecompressorMethods[] = {
+    { "write", l_bz2_decompressor_write },
+    { "close", l_bz2_decompressor_close },
+    { nullptr, nullptr },
+};
+
+luaL_Reg bzip2DecompressorMetamethods[] = {
+    { "__tostring", l_bz2_decompressor_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef bzip2DecompressorDef = {
+    .name = "Bzip2Decompressor",
+    .size = sizeof(LuaBz2Decompressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = bzip2DecompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = bzip2DecompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_bz2_decompressor_destructor,
+};
 
 // ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_bzip2(lua_State* L) {
-    // Register Compressor metatable
-    luaL_newmetatable(L, MT_BZ2_COMPRESS);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_bz2_compressor_write },
-            { "flush", l_bz2_compressor_flush },
-            { "finish", l_bz2_compressor_finish },
-            { "close", l_bz2_compressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_bz2_compressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_bz2_compressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+    bzip2Compressor = eryxUdata_registerudata(L, &bzip2CompressorDef);
+    bzip2Decompressor = eryxUdata_registerudata(L, &bzip2DecompressorDef);
 
-    // Register Decompressor metatable
-    luaL_newmetatable(L, MT_BZ2_DECOMPRESS);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_bz2_decompressor_write },
-            { "close", l_bz2_decompressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_bz2_decompressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_bz2_decompressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {

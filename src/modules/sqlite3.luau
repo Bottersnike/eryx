@@ -148,7 +148,7 @@ export type Database = setmetatable<
 	}
 >
 
--- ── Constructors ──────────────────────────────────────────────────────────────
+-- -- Constructors --------------------------------------------------------------
 
 --[=[
 	Opens (or creates) a SQLite database at the given path.

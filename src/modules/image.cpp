@@ -198,6 +198,7 @@ number?) -> () strokeRect: (rect: Rect, color: Color, thickness: number?) -> ()
 #include <cstring>
 #include <fstream>
 #include <limits>
+#include <new>
 #include <string>
 #include <utility>
 #include <vector>
@@ -340,7 +341,7 @@ typedef struct LuaImage {
     bool view;
 } LuaImage;
 
-static const char* IMAGE_METATABLE = "Image";
+udataRef* imageRef;
 
 static const char* format_name(PixelFormat format) {
     switch (format) {
@@ -605,10 +606,17 @@ static void image_release(LuaImage* i) {
     i->closed = true;
 }
 
-static void image_dtor(void* ud) { image_release((LuaImage*)ud); }
+static void image_dtor(lua_State* L, void* ud) {
+    (void)L;
+    image_release((LuaImage*)ud);
+}
+
+static LuaImage* check_image_any(lua_State* L, int idx) {
+    return (LuaImage*)eryxUdata_checkudata(L, imageRef, idx);
+}
 
 static LuaImage* check_image(lua_State* L, int idx) {
-    LuaImage* i = (LuaImage*)luaL_checkudata(L, idx, IMAGE_METATABLE);
+    LuaImage* i = check_image_any(L, idx);
     if (i->closed || !i->pixels) {
         luaL_error(L, "attempt to use a closed image");
     }
@@ -810,11 +818,6 @@ static void write_blended_pixel(LuaImage* dst, int x, int y, Color src, const Bl
     write_pixel(dst, x, y, blend_colors(dstColor, src, opts, maskAlpha));
 }
 
-static void attach_metatable(lua_State* L) {
-    luaL_getmetatable(L, IMAGE_METATABLE);
-    lua_setmetatable(L, -2);
-}
-
 static void push_optional_string_field(lua_State* L, const char* field, const std::string& value) {
     if (value.empty()) return;
     lua_pushlstring(L, value.data(), value.size());
@@ -933,7 +936,8 @@ static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t heigh
                                     PixelFormat format, size_t stride, int metadataRef) {
     checked_image_size(L, width, height, format, stride);
 
-    LuaImage* i = (LuaImage*)lua_newuserdatadtor(L, sizeof(LuaImage), image_dtor);
+    LuaImage* i = (LuaImage*)eryxUdata_pushudata(L, imageRef);
+    new (i) LuaImage{};
     i->width = width;
     i->height = height;
     i->format = format;
@@ -944,7 +948,6 @@ static LuaImage* new_image_userdata(lua_State* L, uint32_t width, uint32_t heigh
     i->metadataRef = metadataRef;
     i->closed = false;
     i->view = false;
-    attach_metatable(L);
     return i;
 }
 
@@ -1765,7 +1768,7 @@ static int image_rect(lua_State* L) {
 }
 
 static int image_tostring(lua_State* L) {
-    LuaImage* i = (LuaImage*)luaL_checkudata(L, 1, IMAGE_METATABLE);
+    LuaImage* i = check_image_any(L, 1);
     if (i->closed) {
         lua_pushstring(L, "Image(closed)");
     } else {
@@ -1774,67 +1777,84 @@ static int image_tostring(lua_State* L) {
     return 1;
 }
 
-static int image_index(lua_State* L) {
-    LuaImage* i = (LuaImage*)luaL_checkudata(L, 1, IMAGE_METATABLE);
-    const char* key = luaL_checkstring(L, 2);
+static int image_close(lua_State* L) {
+    LuaImage* i = check_image_any(L, 1);
+    image_release(i);
+    return 0;
+}
 
-    if (strcmp(key, "closed") == 0) {
-        lua_pushboolean(L, i->closed);
-        return 1;
-    }
+static LuaImage* check_image_field(lua_State* L) {
+    LuaImage* i = check_image_any(L, 1);
+    return i->closed ? nullptr : i;
+}
 
-    if (i->closed) {
-        lua_pushvalue(L, 2);
-        lua_rawget(L, lua_upvalueindex(1));
-        return 1;
-    }
-
-    if (strcmp(key, "width") == 0) {
-        lua_pushinteger(L, i->width);
-        return 1;
-    }
-    if (strcmp(key, "height") == 0) {
-        lua_pushinteger(L, i->height);
-        return 1;
-    }
-    if (strcmp(key, "format") == 0) {
-        lua_pushstring(L, format_name(i->format));
-        return 1;
-    }
-    if (strcmp(key, "channels") == 0) {
-        lua_pushinteger(L, format_channels(i->format));
-        return 1;
-    }
-    if (strcmp(key, "stride") == 0) {
-        lua_pushinteger(L, (int)i->stride);
-        return 1;
-    }
-    if (strcmp(key, "bounds") == 0) {
-        push_rect(L, { 0, 0, (int)i->width, (int)i->height });
-        return 1;
-    }
-    if (strcmp(key, "colorSpace") == 0) {
-        lua_pushstring(L, "srgb");
-        return 1;
-    }
-    if (strcmp(key, "metadata") == 0) {
-        lua_rawgeti(L, LUA_REGISTRYINDEX, i->metadataRef);
-        return 1;
-    }
-    if (strcmp(key, "buffer") == 0 || strcmp(key, "pixelBuffer") == 0) {
-        lua_rawgeti(L, LUA_REGISTRYINDEX, i->bufferRef);
-        return 1;
-    }
-
-    lua_pushvalue(L, 2);
-    lua_rawget(L, lua_upvalueindex(1));
+static int image_get_closed(lua_State* L) {
+    LuaImage* i = check_image_any(L, 1);
+    lua_pushboolean(L, i->closed);
     return 1;
 }
 
-static int image_close(lua_State* L) {
-    LuaImage* i = (LuaImage*)luaL_checkudata(L, 1, IMAGE_METATABLE);
-    image_release(i);
-    return 0;
+static int image_get_width(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushinteger(L, i->width);
+    return 1;
+}
+
+static int image_get_height(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushinteger(L, i->height);
+    return 1;
+}
+
+static int image_get_format(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushstring(L, format_name(i->format));
+    return 1;
+}
+
+static int image_get_channels(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushinteger(L, format_channels(i->format));
+    return 1;
+}
+
+static int image_get_stride(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushinteger(L, (int)i->stride);
+    return 1;
+}
+
+static int image_get_bounds(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    push_rect(L, { 0, 0, (int)i->width, (int)i->height });
+    return 1;
+}
+
+static int image_get_colorSpace(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_pushstring(L, "srgb");
+    return 1;
+}
+
+static int image_get_metadata(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, i->metadataRef);
+    return 1;
+}
+
+static int image_get_buffer(lua_State* L) {
+    LuaImage* i = check_image_field(L);
+    if (!i) return 0;
+    lua_rawgeti(L, LUA_REGISTRYINDEX, i->bufferRef);
+    return 1;
 }
 
 static int image_getPixel(lua_State* L) {
@@ -2630,77 +2650,68 @@ static int image_save(lua_State* L) {
     return 0;
 }
 
+static luaL_Reg imageMethods[] = {
+    { "close", image_close },
+    { "getPixel", image_getPixel },
+    { "setPixel", image_setPixel },
+    { "save", image_save },
+    { "encode", image_encode },
+    { "clone", image_clone },
+    { "crop", image_crop },
+    { "subimage", image_subimage },
+    { "convert", image_convert },
+    { "resize", image_resize },
+    { "thumbnail", image_thumbnail },
+    { "flipX", image_flipX },
+    { "flipY", image_flipY },
+    { "rotate90", image_rotate90 },
+    { "rotate180", image_rotate180 },
+    { "rotate270", image_rotate270 },
+    { "blit", image_blit },
+    { "draw", image_draw },
+    { "clear", image_clear },
+    { "fillRect", image_fillRect },
+    { "strokeRect", image_strokeRect },
+    { "line", image_line },
+    { "invert", image_invert },
+    { "grayscale", image_grayscale },
+    { "brightness", image_brightness },
+    { "contrast", image_contrast },
+    { "opacity", image_opacity },
+    { "threshold", image_threshold },
+    { "colorMatrix", image_colorMatrix },
+    { nullptr, nullptr },
+};
+
+static udataField imageFields[] = {
+    { "closed", image_get_closed, nullptr },      { "width", image_get_width, nullptr },
+    { "height", image_get_height, nullptr },      { "format", image_get_format, nullptr },
+    { "channels", image_get_channels, nullptr },  { "stride", image_get_stride, nullptr },
+    { "bounds", image_get_bounds, nullptr },      { "colorSpace", image_get_colorSpace, nullptr },
+    { "metadata", image_get_metadata, nullptr },  { "buffer", image_get_buffer, nullptr },
+    { "pixelBuffer", image_get_buffer, nullptr }, { nullptr, nullptr, nullptr },
+};
+
+static luaL_Reg imageMetamethods[] = {
+    { "__tostring", image_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef imageDef = {
+    .name = "Image",
+    .size = sizeof(LuaImage),
+    .fields = imageFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = imageMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = imageMethods,
+    .destructor = image_dtor,
+};
+
 LUAU_MODULE_EXPORT int luauopen_image(lua_State* L) {
-    luaL_newmetatable(L, IMAGE_METATABLE);
-
-    lua_pushcfunction(L, image_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
-
-    lua_newtable(L);
-
-    lua_pushcfunction(L, image_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, image_getPixel, "getPixel");
-    lua_setfield(L, -2, "getPixel");
-    lua_pushcfunction(L, image_setPixel, "setPixel");
-    lua_setfield(L, -2, "setPixel");
-    lua_pushcfunction(L, image_save, "save");
-    lua_setfield(L, -2, "save");
-    lua_pushcfunction(L, image_encode, "encode");
-    lua_setfield(L, -2, "encode");
-    lua_pushcfunction(L, image_clone, "clone");
-    lua_setfield(L, -2, "clone");
-    lua_pushcfunction(L, image_crop, "crop");
-    lua_setfield(L, -2, "crop");
-    lua_pushcfunction(L, image_subimage, "subimage");
-    lua_setfield(L, -2, "subimage");
-    lua_pushcfunction(L, image_convert, "convert");
-    lua_setfield(L, -2, "convert");
-    lua_pushcfunction(L, image_resize, "resize");
-    lua_setfield(L, -2, "resize");
-    lua_pushcfunction(L, image_thumbnail, "thumbnail");
-    lua_setfield(L, -2, "thumbnail");
-    lua_pushcfunction(L, image_flipX, "flipX");
-    lua_setfield(L, -2, "flipX");
-    lua_pushcfunction(L, image_flipY, "flipY");
-    lua_setfield(L, -2, "flipY");
-    lua_pushcfunction(L, image_rotate90, "rotate90");
-    lua_setfield(L, -2, "rotate90");
-    lua_pushcfunction(L, image_rotate180, "rotate180");
-    lua_setfield(L, -2, "rotate180");
-    lua_pushcfunction(L, image_rotate270, "rotate270");
-    lua_setfield(L, -2, "rotate270");
-    lua_pushcfunction(L, image_blit, "blit");
-    lua_setfield(L, -2, "blit");
-    lua_pushcfunction(L, image_draw, "draw");
-    lua_setfield(L, -2, "draw");
-    lua_pushcfunction(L, image_clear, "clear");
-    lua_setfield(L, -2, "clear");
-    lua_pushcfunction(L, image_fillRect, "fillRect");
-    lua_setfield(L, -2, "fillRect");
-    lua_pushcfunction(L, image_strokeRect, "strokeRect");
-    lua_setfield(L, -2, "strokeRect");
-    lua_pushcfunction(L, image_line, "line");
-    lua_setfield(L, -2, "line");
-    lua_pushcfunction(L, image_invert, "invert");
-    lua_setfield(L, -2, "invert");
-    lua_pushcfunction(L, image_grayscale, "grayscale");
-    lua_setfield(L, -2, "grayscale");
-    lua_pushcfunction(L, image_brightness, "brightness");
-    lua_setfield(L, -2, "brightness");
-    lua_pushcfunction(L, image_contrast, "contrast");
-    lua_setfield(L, -2, "contrast");
-    lua_pushcfunction(L, image_opacity, "opacity");
-    lua_setfield(L, -2, "opacity");
-    lua_pushcfunction(L, image_threshold, "threshold");
-    lua_setfield(L, -2, "threshold");
-    lua_pushcfunction(L, image_colorMatrix, "colorMatrix");
-    lua_setfield(L, -2, "colorMatrix");
-
-    lua_pushcclosure(L, image_index, "__index", 1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
+    imageRef = eryxUdata_registerudata(L, &imageDef);
 
     lua_newtable(L);
 

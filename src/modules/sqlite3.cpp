@@ -5,6 +5,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -12,7 +13,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "module_helpers.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -21,12 +21,12 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-// ── Metatable names ───────────────────────────────────────────────────────────
+// -- Userdata refs -------------------------------------------------------------
 
-static const char* MT_DATABASE = "SqliteDatabase";
-static const char* MT_STATEMENT = "SqliteStatement";
+udataRef* sqliteDatabaseRef;
+udataRef* sqliteStatementRef;
 
-// ── Userdata structs ──────────────────────────────────────────────────────────
+// -- Userdata structs ----------------------------------------------------------
 
 struct LuaDatabase {
     sqlite3* db;
@@ -41,19 +41,37 @@ struct LuaStatement {
     bool busy;
 };
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers -------------------------------------------------------------------
 
 static LuaDatabase* check_db(lua_State* L, int idx) {
-    return (LuaDatabase*)luaL_checkudata(L, idx, MT_DATABASE);
+    return (LuaDatabase*)eryxUdata_checkudata(L, sqliteDatabaseRef, idx);
 }
 
 static LuaStatement* check_stmt(lua_State* L, int idx) {
-    return (LuaStatement*)luaL_checkudata(L, idx, MT_STATEMENT);
+    return (LuaStatement*)eryxUdata_checkudata(L, sqliteStatementRef, idx);
 }
 
-// Forward declarations - dtors are defined later but referenced by lua_newuserdatadtor
-static void db_dtor(void* ud);
-static void stmt_dtor(void* ud);
+static void db_dtor(lua_State* L, void* ud);
+static void stmt_dtor(lua_State* L, void* ud);
+
+static LuaDatabase* push_database(lua_State* L, sqlite3* db) {
+    auto* ud = (LuaDatabase*)eryxUdata_pushudata(L, sqliteDatabaseRef);
+    new (ud) LuaDatabase{};
+    ud->db = db;
+    ud->busy = false;
+    ud->inTransaction = false;
+    return ud;
+}
+
+static LuaStatement* push_statement(lua_State* L, sqlite3_stmt* stmt, LuaDatabase* owner) {
+    auto* ud = (LuaStatement*)eryxUdata_pushudata(L, sqliteStatementRef);
+    new (ud) LuaStatement{};
+    ud->stmt = stmt;
+    ud->db = owner ? owner->db : sqlite3_db_handle(stmt);
+    ud->owner = owner;
+    ud->busy = false;
+    return ud;
+}
 
 static void check_db_open(lua_State* L, LuaDatabase* ud) {
     if (!ud->db) luaL_error(L, "attempt to use a closed database");
@@ -432,13 +450,7 @@ static bool begin_sql_async(lua_State* L, SqlAsyncOp* op, int selfIdx) {
                    } else {
                        switch (op->kind) {
                            case SqlAsyncKind::Open: {
-                               LuaDatabase* ud = (LuaDatabase*)lua_newuserdatadtor(
-                                   L, sizeof(LuaDatabase), db_dtor);
-                               ud->db = op->openedDb;
-                               ud->busy = false;
-                               ud->inTransaction = false;
-                               luaL_getmetatable(L, MT_DATABASE);
-                               lua_setmetatable(L, -2);
+                               push_database(L, op->openedDb);
                                nresults = 1;
                                break;
                            }
@@ -459,14 +471,7 @@ static bool begin_sql_async(lua_State* L, SqlAsyncOp* op, int selfIdx) {
                                break;
 
                            case SqlAsyncKind::Prepare: {
-                               LuaStatement* sud = (LuaStatement*)lua_newuserdatadtor(
-                                   L, sizeof(LuaStatement), stmt_dtor);
-                               sud->stmt = op->preparedStmt;
-                               sud->db = op->db->db;
-                               sud->owner = op->db;
-                               sud->busy = false;
-                               luaL_getmetatable(L, MT_STATEMENT);
-                               lua_setmetatable(L, -2);
+                               push_statement(L, op->preparedStmt, op->db);
                                nresults = 1;
                                break;
                            }
@@ -605,7 +610,7 @@ static void push_row(lua_State* L, sqlite3_stmt* stmt) {
     }
 }
 
-// ── Module functions ──────────────────────────────────────────────────────────
+// -- Module functions ----------------------------------------------------------
 
 static int sql_open(lua_State* L) {
     std::string path = luaL_checkpathlike(L, 1);
@@ -625,10 +630,10 @@ static int sql_version(lua_State* L) {
     return 1;
 }
 
-// ── Database methods ──────────────────────────────────────────────────────────
+// -- Database methods ----------------------------------------------------------
 
-// Destructor called by Luau GC (lua_newuserdatadtor).
-static void db_dtor(void* ud) {
+static void db_dtor(lua_State* L, void* ud) {
+    (void)L;
     LuaDatabase* d = (LuaDatabase*)ud;
     if (d->db) {
         sqlite3_close_v2(d->db);
@@ -769,14 +774,7 @@ static int db_prepare(lua_State* L) {
             luaL_error(L, "sqlite3 prepare error: %s", sqlite3_errmsg(ud->db));
         }
 
-        LuaStatement* sud = (LuaStatement*)lua_newuserdatadtor(L, sizeof(LuaStatement), stmt_dtor);
-        sud->stmt = stmt;
-        sud->db = ud->db;
-        sud->owner = ud;
-        sud->busy = false;
-
-        luaL_getmetatable(L, MT_STATEMENT);
-        lua_setmetatable(L, -2);
+        push_statement(L, stmt, ud);
         return 1;
     }
 
@@ -858,15 +856,10 @@ static int db_transaction(lua_State* L) {
     return lua_gettop(L) - top_before;
 }
 
-static int db_index(lua_State* L) {
-    // Fall through to metatable for methods
-    return eryx_metatable_index(L);
-}
+// -- Statement methods ---------------------------------------------------------
 
-// ── Statement methods ─────────────────────────────────────────────────────────
-
-// Destructor called by Luau GC (lua_newuserdatadtor).
-static void stmt_dtor(void* ud) {
+static void stmt_dtor(lua_State* L, void* ud) {
+    (void)L;
     LuaStatement* s = (LuaStatement*)ud;
     if (s->stmt) {
         sqlite3_finalize(s->stmt);
@@ -1045,63 +1038,61 @@ static int stmt_run(lua_State* L) {
     return lua_yield(L, 0);
 }
 
-static int stmt_index(lua_State* L) {
-    // Fall through to metatable for methods
-    return eryx_metatable_index(L);
-}
+// -- Module entry --------------------------------------------------------------
 
-// ── Module entry ──────────────────────────────────────────────────────────────
+luaL_Reg dbMethods[] = {
+    { "exec", db_exec },       { "query", db_query },
+    { "prepare", db_prepare }, { "close", db_close },
+    { "isOpen", db_isopen },   { "lastInsertId", db_lastinsertid },
+    { "changes", db_changes }, { "transaction", db_transaction },
+    { nullptr, nullptr },
+};
+
+luaL_Reg dbMetamethods[] = {
+    { "__tostring", db_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef dbDef = {
+    .name = "SqliteDatabase",
+    .size = sizeof(LuaDatabase),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = dbMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = dbMethods,
+    .destructor = db_dtor,
+};
+
+luaL_Reg stmtMethods[] = {
+    { "bind", stmt_bind }, { "step", stmt_step }, { "reset", stmt_reset },
+    { "all", stmt_all },   { "run", stmt_run },   { nullptr, nullptr },
+};
+
+luaL_Reg stmtMetamethods[] = {
+    { "__tostring", stmt_tostring },
+    { "__iter", stmt_iter },
+    { nullptr, nullptr },
+};
+
+udataDef stmtDef = {
+    .name = "SqliteStatement",
+    .size = sizeof(LuaStatement),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = stmtMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = stmtMethods,
+    .destructor = stmt_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_sqlite3(lua_State* L) {
-    // -- SqliteDatabase metatable --
-    luaL_newmetatable(L, MT_DATABASE);
-    lua_pushcfunction(L, db_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, db_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
-    lua_pushcfunction(L, db_exec, "exec");
-    lua_setfield(L, -2, "exec");
-    lua_pushcfunction(L, db_query, "query");
-    lua_setfield(L, -2, "query");
-    lua_pushcfunction(L, db_prepare, "prepare");
-    lua_setfield(L, -2, "prepare");
-    lua_pushcfunction(L, db_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, db_isopen, "isOpen");
-    lua_setfield(L, -2, "isOpen");
-    lua_pushcfunction(L, db_lastinsertid, "lastInsertId");
-    lua_setfield(L, -2, "lastInsertId");
-    lua_pushcfunction(L, db_changes, "changes");
-    lua_setfield(L, -2, "changes");
-    lua_pushcfunction(L, db_transaction, "transaction");
-    lua_setfield(L, -2, "transaction");
-    lua_pop(L, 1);
-
-    // -- SqliteStatement metatable --
-    luaL_newmetatable(L, MT_STATEMENT);
-    lua_pushcfunction(L, stmt_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, stmt_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, stmt_iter, "__iter");
-    lua_setfield(L, -2, "__iter");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
-    lua_pushcfunction(L, stmt_bind, "bind");
-    lua_setfield(L, -2, "bind");
-    lua_pushcfunction(L, stmt_step, "step");
-    lua_setfield(L, -2, "step");
-    lua_pushcfunction(L, stmt_reset, "reset");
-    lua_setfield(L, -2, "reset");
-    lua_pushcfunction(L, stmt_all, "all");
-    lua_setfield(L, -2, "all");
-    lua_pushcfunction(L, stmt_run, "run");
-    lua_setfield(L, -2, "run");
-    lua_pop(L, 1);
+    sqliteDatabaseRef = eryxUdata_registerudata(L, &dbDef);
+    sqliteStatementRef = eryxUdata_registerudata(L, &stmtDef);
 
     // -- Module table --
     lua_newtable(L);

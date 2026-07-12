@@ -16,13 +16,35 @@ extern "C" {
 #include <fstream>
 #include <iomanip>
 #include <memory>
+#include <mutex>
 #include <sstream>
+#include <unordered_map>
 
 #include "../vfs.hpp"
 #include "embedded_modules.h"
+#include "userdata.hpp"
 
 constexpr int RETHROW_MAGIC = -3558;
 static const char* ERYX_PENDING_ERROR_SKIP = "_ERYX_PENDING_ERROR_SKIP";
+static std::unordered_map<lua_State*, udataRef*> exceptionRefs;
+static std::mutex exceptionRefsMutex;
+
+static udataRef* exception_ref(lua_State* L) {
+    std::lock_guard<std::mutex> lock(exceptionRefsMutex);
+    auto it = exceptionRefs.find(lua_mainthread(L));
+    if (it != exceptionRefs.end()) {
+        return it->second;
+    }
+
+    return nullptr;
+}
+
+static void exception_forget_ref(lua_State* L) {
+    lua_State* GL = lua_mainthread(L);
+
+    std::lock_guard<std::mutex> lock(exceptionRefsMutex);
+    exceptionRefs.erase(GL);
+}
 
 struct ExceptionFormatStyle {
     bool ansi = false;
@@ -226,14 +248,35 @@ static void format_exception_into(std::ostringstream& ss, const char* type,
     }
 }
 
+ERYX_API LuaException* eryx_exception_push_userdata(lua_State* L) {
+    udataRef* ref = exception_ref(L);
+    if (!ref) {
+        luaL_error(L, "Exception userdata is not registered");
+    }
+
+    auto* exception = (LuaException*)eryxUdata_pushudata(L, ref);
+    new (exception) LuaException();
+    return exception;
+}
+
+static LuaException* check_exception(lua_State* L, int idx) {
+    udataRef* ref = exception_ref(L);
+    if (!ref) {
+        luaL_error(L, "Exception userdata is not registered");
+    }
+
+    return (LuaException*)eryxUdata_checkudata(L, ref, idx);
+}
+
 int exception_tostring(lua_State* L) {
-    LuaException* exception = (LuaException*)luaL_checkudata(L, 1, EXCEPTION_METATABLE);
-    lua_pushfstring(L, "Exception(%s, %s)", exception->type, exception->message.c_str());
+    LuaException* exception = check_exception(L, 1);
+    lua_pushfstring(L, "Exception(%s, %s)", exception->type ? exception->type : "",
+                    exception->message.c_str());
     return 1;
 }
 
-int exception_gc(lua_State* L) {
-    LuaException* exception = (LuaException*)luaL_checkudata(L, 1, EXCEPTION_METATABLE);
+static void exception_dtor(lua_State* L, void* ud) {
+    LuaException* exception = (LuaException*)ud;
     if (exception) {
         if (exception->dataRef != LUA_NOREF) {
             lua_unref(L, exception->dataRef);
@@ -241,67 +284,63 @@ int exception_gc(lua_State* L) {
         }
         exception->~LuaException();
     }
-    return 0;
 }
 
-int exception_index(lua_State* L) {
-    LuaException* exception = (LuaException*)luaL_checkudata(L, 1, EXCEPTION_METATABLE);
-    const char* key = luaL_checkstring(L, 2);
+static int exception_get_message(lua_State* L) {
+    LuaException* exception = check_exception(L, 1);
+    lua_pushstring(L, exception->message.c_str());
+    return 1;
+}
 
-    if (strcmp(key, "message") == 0) {
-        lua_pushstring(L, exception->message.c_str());
-        return 1;
-    }
-    if (strcmp(key, "type") == 0) {
+static int exception_get_type(lua_State* L) {
+    LuaException* exception = check_exception(L, 1);
+    if (exception->type) {
         lua_pushstring(L, exception->type);
-        return 1;
+    } else {
+        lua_pushnil(L);
     }
-    if (strcmp(key, "data") == 0) {
-        if (exception->dataRef != LUA_NOREF) {
-            lua_getref(L, exception->dataRef);
-        } else {
-            lua_pushnil(L);
-        }
-        return 1;
+    return 1;
+}
+
+static int exception_get_data(lua_State* L) {
+    LuaException* exception = check_exception(L, 1);
+    if (exception->dataRef != LUA_NOREF) {
+        lua_getref(L, exception->dataRef);
+    } else {
+        lua_pushnil(L);
     }
-    if (strcmp(key, "parent") == 0) {
-        push_exception_snapshot(L, exception->parent.get());
-        return 1;
+    return 1;
+}
+
+static int exception_get_parent(lua_State* L) {
+    LuaException* exception = check_exception(L, 1);
+    push_exception_snapshot(L, exception->parent.get());
+    return 1;
+}
+
+static int exception_get_traceback(lua_State* L) {
+    LuaException* exception = check_exception(L, 1);
+    lua_createtable(L, exception->traceback.size(), 0);
+
+    for (size_t i = 0; i < exception->traceback.size(); i++) {
+        const LuaFrame& f = exception->traceback[i];
+
+        lua_createtable(L, 0, 4);
+
+        lua_pushlstring(L, f.source.c_str(), f.source.size());
+        lua_setfield(L, -2, "source");
+
+        lua_pushlstring(L, f.short_src.c_str(), f.short_src.size());
+        lua_setfield(L, -2, "short_src");
+
+        lua_pushinteger(L, f.line);
+        lua_setfield(L, -2, "line");
+
+        lua_pushlstring(L, f.function.c_str(), f.function.size());
+        lua_setfield(L, -2, "functionName");
+
+        lua_rawseti(L, -2, (lua_Integer)i + 1);
     }
-    if (strcmp(key, "traceback") == 0) {
-        lua_createtable(L, exception->traceback.size(), 0);
-
-        for (size_t i = 0; i < exception->traceback.size(); i++) {
-            const LuaFrame& f = exception->traceback[i];
-
-            // frame table
-            lua_createtable(L, 0, 4);
-
-            // source
-            lua_pushlstring(L, f.source.c_str(), f.source.size());
-            lua_setfield(L, -2, "source");
-
-            // short_src
-            lua_pushlstring(L, f.short_src.c_str(), f.short_src.size());
-            lua_setfield(L, -2, "short_src");
-
-            // line
-            lua_pushinteger(L, f.line);
-            lua_setfield(L, -2, "line");
-
-            // function
-            lua_pushlstring(L, f.function.c_str(), f.function.size());
-            lua_setfield(L, -2, "functionName");
-
-            // traceback[i+1] = frame
-            lua_rawseti(L, -2, (lua_Integer)i + 1);
-        }
-
-        return 1;
-    }
-
-    // Key not found
-    lua_pushnil(L);
     return 1;
 }
 
@@ -483,11 +522,8 @@ void eryx_exception_populate_tb(lua_State* L, LuaException* exception, int initi
 
 void eryx_exception_push_exception(lua_State* L, const char* type, const char* message,
                                    const void* extra) {
-    lua_checkstack(L, 3);  // need space for userdata + metatable + getfield
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-    luaL_getmetatable(L, EXCEPTION_METATABLE);
-    lua_setmetatable(L, -2);
+    lua_checkstack(L, 1);
+    LuaException* exception = eryx_exception_push_userdata(L);
     exception->type = type;
     exception->message = message;
     exception->extra = extra;
@@ -775,23 +811,38 @@ static int eryx_error(lua_State* L) {
 }
 
 void exception_lib_register(lua_State* L) {
-    luaL_newmetatable(L, EXCEPTION_METATABLE);
+    static udataField exceptionFields[] = {
+        { "message", exception_get_message, nullptr },
+        { "type", exception_get_type, nullptr },
+        { "data", exception_get_data, nullptr },
+        { "parent", exception_get_parent, nullptr },
+        { "traceback", exception_get_traceback, nullptr },
+        { nullptr, nullptr, nullptr },
+    };
 
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
+    static luaL_Reg exceptionMetamethods[] = {
+        { "__tostring", exception_tostring },
+        { nullptr, nullptr },
+    };
 
-    lua_pushcfunction(L, exception_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
+    static udataDef exceptionDef = {
+        .name = "Exception",
+        .size = sizeof(LuaException),
+        .fields = exceptionFields,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = exceptionMetamethods,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = nullptr,
+        .destructor = exception_dtor,
+    };
 
-    lua_pushcfunction(L, exception_gc, "gc");
-    lua_setfield(L, -2, "__gc");
-    lua_pushcfunction(L, exception_index, "index");
-    lua_setfield(L, -2, "__index");
-
-    lua_pushstring(L, "Exception");
-    lua_setfield(L, -2, "__type");
-
-    lua_pop(L, 1);
+    udataRef* exceptionRef = eryxUdata_registerudata(L, &exceptionDef);
+    {
+        std::lock_guard<std::mutex> lock(exceptionRefsMutex);
+        exceptionRefs[lua_mainthread(L)] = exceptionRef;
+    }
 
     lua_pushcfunction(L, eryx_error, "error");
     lua_setglobal(L, "error");
@@ -802,3 +853,5 @@ void exception_lib_register(lua_State* L) {
     lua_pushcclosurek(L, eryx_xpcall, "xpcall", 0, eryx_xpcall_cont);
     lua_setglobal(L, "xpcall");
 }
+
+void exception_lib_unregister(lua_State* L) { exception_forget_ref(L); }

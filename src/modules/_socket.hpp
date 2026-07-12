@@ -16,11 +16,10 @@ using SOCKET = int;
 #define SOCKET_ERROR (-1)
 #endif
 
+#include "../runtime/userdata.hpp"
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-
-static const char* SOCKET_METATABLE = "Socket";
 
 struct LuaSocket {
     SOCKET fd;
@@ -30,13 +29,12 @@ struct LuaSocket {
     double timeout;  // seconds, <0 means blocking (default)
 };
 
-/**
- * @brief Check for a Socket userdata on the stack
- *
- * @param L Lua state
- * @param idx Stack index
- * @return LuaSocket* Validated Socket
- */
 static LuaSocket* check_socket(lua_State* L, int idx) {
-    return (LuaSocket*)luaL_checkudata(L, idx, SOCKET_METATABLE);
+    udataRef* socketRef = eryxUdata_getudata(L, "Socket");
+    if (!socketRef) {
+        luaL_error(L, "Socket userdata type is not registered in this environment");
+        return nullptr;
+    }
+
+    return (LuaSocket*)eryxUdata_checkudata(L, socketRef, idx);
 }

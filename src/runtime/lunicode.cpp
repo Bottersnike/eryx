@@ -12,10 +12,10 @@
 #include "generated/unicode_name.hpp"
 #include "generated/unicode_type.hpp"
 #include "lua.h"
-#include "lua_helpers.hpp"
 #include "lualib.h"
+#include "userdata.hpp"
 
-constexpr const char* UnicodeStringMetatable = "Eryx.UnicodeString";
+constexpr const char* UnicodeStringType = "UnicodeString";
 constexpr const char* CategoryNames[] = {
     "Cn", "Lu", "Ll", "Lt", "Mn", "Mc", "Me", "Nd", "Nl", "No", "Zs", "Zl", "Zp", "Cc", "Cf", "Cs",
     "Co", "Cn", "Lm", "Lo", "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "Sm", "Sc", "Sk", "So",
@@ -488,13 +488,19 @@ static std::string normaliseText(lua_State* L, int sourceIndex, int formatIndex)
 // Requires a UnicodeString userdata at a Lua stack index and returns its C++ storage.
 // Used by methods that only operate on already-constructed UnicodeString values.
 static UnicodeString* checkUnicodeString(lua_State* L, int index) {
-    return static_cast<UnicodeString*>(luaL_checkudata(L, index, UnicodeStringMetatable));
+    udataRef* ref = eryxUdata_getudata(L, UnicodeStringType);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", UnicodeStringType);
+        return nullptr;
+    }
+    return static_cast<UnicodeString*>(eryxUdata_checkudata(L, ref, index));
 }
 
 // Returns UnicodeString storage if the stack value has the right metatable, otherwise null.
 // Used by coercion and mixed string/UnicodeString operations.
 static UnicodeString* testUnicodeString(lua_State* L, int index) {
-    return eryx_testudata<UnicodeString>(L, index, UnicodeStringMetatable);
+    udataRef* ref = eryxUdata_getudata(L, UnicodeStringType);
+    return ref ? static_cast<UnicodeString*>(eryxUdata_testudata(L, ref, index)) : nullptr;
 }
 
 // Returns cached grapheme offsets, computing them on first use.
@@ -507,9 +513,11 @@ static const std::vector<size_t>& graphemeOffsetsFor(UnicodeString* value) {
     return value->graphemeOffsets;
 }
 
-// Runs the C++ destructor for UnicodeString userdata allocated with lua_newuserdatadtor.
+// Runs the C++ destructor for UnicodeString userdata allocated by eryxUdata_pushudata.
 // Used by pushUnicodeString so the cached vectors and backing string are released correctly.
-static void unicodestring_dtor(void* ud) { ((UnicodeString*)ud)->~UnicodeString(); }
+static void unicodestring_dtor(lua_State*, void* ud) {
+    static_cast<UnicodeString*>(ud)->~UnicodeString();
+}
 
 // Allocates and pushes a UnicodeString userdata from UTF-8 bytes after validation.
 // Used by constructors and every operation that returns a UnicodeString.
@@ -517,10 +525,13 @@ static UnicodeString* pushUnicodeString(lua_State* L, std::string value) {
     std::vector<size_t> offsets;
     if (!buildOffsets(value, offsets)) luaL_error(L, "invalid UTF-8 string");
 
-    void* storage = lua_newuserdatadtor(L, sizeof(UnicodeString), unicodestring_dtor);
+    udataRef* ref = eryxUdata_getudata(L, UnicodeStringType);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", UnicodeStringType);
+        return nullptr;
+    }
+    void* storage = eryxUdata_pushudata(L, ref);
     auto* result = new (storage) UnicodeString{ std::move(value), std::move(offsets), {} };
-    luaL_getmetatable(L, UnicodeStringMetatable);
-    lua_setmetatable(L, -2);
     return result;
 }
 
@@ -1172,64 +1183,75 @@ static int unicode_fromutf32(lua_State* L) {
     return 1;
 }
 
-// Registers a named C closure in the table on top of the Lua stack.
-// Used by unicode_string_lib_register while building the metatable and unicode namespace.
-static void setFunction(lua_State* L, const char* name, lua_CFunction function) {
-    lua_pushcfunction(L, function, name);
-    lua_setfield(L, -2, name);
+static int ustring_get_version(lua_State* L) {
+    lua_pushstring(L, eryx::unicode::data::Version);
+    return 1;
 }
+
+static luaL_Reg unicodeStringMetamethods[] = {
+    { "__tostring", ustring_mt_tostring }, { "__len", ustring_mt_len }, { "__eq", ustring_mt_eq },
+    { "__concat", ustring_mt_concat },     { nullptr, nullptr },
+};
+
+static luaL_Reg unicodeStringMethods[] = {
+    { "fromname", unicode_fromname },
+    { "category", unicode_category },
+    { "detectbom", unicode_detectbom },
+    { "fromutf16", unicode_fromutf16 },
+    { "fromutf32", unicode_fromutf32 },
+    { "tonumber", ustring_tonumber },
+    { "name", ustring_name },
+    { "normalise", ustring_normalise },
+    { "isnormalised", ustring_isnormalised },
+    { "foldcase", ustring_foldcase },
+    { "touppercase", ustring_touppercase },
+    { "tolowercase", ustring_tolowercase },
+    { "totitlecase", ustring_totitlecase },
+    { "len", unicode_len },
+    { "sub", unicode_sub },
+    { "codepoint", ustring_codepoint },
+    { "codepoints", ustring_codepoints },
+    { "graphemes", ustring_graphemes },
+    { "find", ustring_find },
+    { "rep", ustring_rep },
+    { "reverse", ustring_reverse },
+    { "split", ustring_split },
+    { "toutf16", ustring_toutf16 },
+    { "toutf32", ustring_toutf32 },
+    { nullptr, nullptr },
+};
+
+static udataField unicodeStringFields[] = {
+    { "version", ustring_get_version, nullptr },
+    { nullptr, nullptr, nullptr },
+};
+
+static udataDef unicodeStringDef = {
+    .name = UnicodeStringType,
+    .size = sizeof(UnicodeString),
+    .fields = unicodeStringFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = unicodeStringMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = unicodeStringMethods,
+    .destructor = unicodestring_dtor,
+};
 
 // Installs the UnicodeString metatable, global u(...) constructor, and unicode namespace table.
 // Called by the runtime wrapper during library initialization.
 void unicode_string_lib_register(lua_State* L) {
-    luaL_newmetatable(L, UnicodeStringMetatable);
-    lua_pushstring(L, "UnicodeString");
-    lua_setfield(L, -2, "__type");
-    lua_pushstring(L, "UnicodeString");
-    lua_setfield(L, -2, "__metatable");
-    setFunction(L, "__tostring", ustring_mt_tostring);
-    setFunction(L, "__len", ustring_mt_len);
-    setFunction(L, "__eq", ustring_mt_eq);
-    setFunction(L, "__concat", ustring_mt_concat);
+    eryxUdata_registerudata(L, &unicodeStringDef);
 
-    // This is both the public unicode namespace and UnicodeString's method table, mirroring how
-    // Lua strings use the string library as their __index table.
+    // This is the public unicode namespace; UnicodeString exposes the same functions via udataDef.
     lua_newtable(L);
     lua_pushstring(L, eryx::unicode::data::Version);
     lua_setfield(L, -2, "version");
-    setFunction(L, "fromname", unicode_fromname);
-    setFunction(L, "category", unicode_category);
-    setFunction(L, "detectbom", unicode_detectbom);
-    setFunction(L, "fromutf16", unicode_fromutf16);
-    setFunction(L, "fromutf32", unicode_fromutf32);
-
-    setFunction(L, "tonumber", ustring_tonumber);
-    setFunction(L, "name", ustring_name);
-    setFunction(L, "normalise", ustring_normalise);
-    setFunction(L, "isnormalised", ustring_isnormalised);
-    setFunction(L, "foldcase", ustring_foldcase);
-    setFunction(L, "touppercase", ustring_touppercase);
-    setFunction(L, "tolowercase", ustring_tolowercase);
-    setFunction(L, "totitlecase", ustring_totitlecase);
-
-    setFunction(L, "len", unicode_len);
-    setFunction(L, "sub", unicode_sub);
-    setFunction(L, "codepoint", ustring_codepoint);
-    setFunction(L, "codepoints", ustring_codepoints);
-    setFunction(L, "graphemes", ustring_graphemes);
-    setFunction(L, "find", ustring_find);
-    setFunction(L, "rep", ustring_rep);
-    setFunction(L, "reverse", ustring_reverse);
-    setFunction(L, "split", ustring_split);
-    setFunction(L, "toutf16", ustring_toutf16);
-    setFunction(L, "toutf32", ustring_toutf32);
+    eryxUdata_addmethodstotable(L, &unicodeStringDef, -1);
 
     lua_setreadonly(L, -1, true);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -3, "__index");
     lua_setglobal(L, "unicode");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
 
     lua_pushcfunction(L, unicode_u, "u");
     lua_setglobal(L, "u");

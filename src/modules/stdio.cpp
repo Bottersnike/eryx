@@ -31,7 +31,7 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-// ── Async stdin state ─────────────────────────────────────────────────────────
+// -- Async stdin state ---------------------------------------------------------
 
 struct AsyncReadData {
     EryxRuntime* rt;
@@ -368,7 +368,7 @@ static void async_write_after_cb(uv_work_t* req, int status) {
     delete data;
 }
 
-// ── Synchronous functions ─────────────────────────────────────────────────────
+// -- Synchronous functions -----------------------------------------------------
 
 // stdio.readSync(bytes?: number) -> string?
 static int stdio_readSync(lua_State* L) {
@@ -581,7 +581,7 @@ static int stdio_flusherrSync(lua_State* L) {
     return 0;
 }
 
-// ── Asynchronous functions ────────────────────────────────────────────────────
+// -- Asynchronous functions ----------------------------------------------------
 
 // stdio.read(bytes?: number) -> string?  (yields)
 static int stdio_read(lua_State* L) {
@@ -766,7 +766,7 @@ static int stdio_flusherr(lua_State* L) {
     return lua_yield(L, 0);
 }
 
-// ── Utility functions ─────────────────────────────────────────────────────────
+// -- Utility functions ---------------------------------------------------------
 
 // stdio.isatty() -> { stdin: boolean, stdout: boolean, stderr: boolean }
 static int stdio_isatty(lua_State* L) {
@@ -923,7 +923,7 @@ static int stdio_stderr_writeSync(lua_State* L) {
     return stdio_writeerrSync(L);
 }
 
-// ── Module entry ──────────────────────────────────────────────────────────────
+// -- Module entry --------------------------------------------------------------
 
 LUAU_MODULE_EXPORT int luauopen_stdio(lua_State* L) {
     lua_newtable(L);

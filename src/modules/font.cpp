@@ -49,9 +49,9 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-static constexpr const char* TYPEFACE_MT = "Typeface";
-static constexpr const char* FONT_MT = "Font";
-static constexpr const char* SHAPED_RUN_MT = "ShapedRun";
+static udataRef* typefaceRef;
+static udataRef* fontRef;
+static udataRef* shapedRunRef;
 
 static FT_Library g_ft = nullptr;
 
@@ -404,37 +404,52 @@ enum class TextAlign {
     Right,
 };
 
-static void typeface_dtor(void* ud) {
+static void typeface_dtor(lua_State* L, void* ud) {
+    (void)L;
     auto* face = static_cast<TypefaceUD*>(ud);
     face->~TypefaceUD();
 }
 
-static void font_dtor(void* ud) {
+static void font_dtor(lua_State* L, void* ud) {
+    (void)L;
     auto* font = static_cast<FontUD*>(ud);
     font->~FontUD();
 }
 
-static void shaped_run_dtor(void* ud) {
+static void shaped_run_dtor(lua_State* L, void* ud) {
+    (void)L;
     auto* run = static_cast<ShapedRunUD*>(ud);
     run->~ShapedRunUD();
 }
 
 static TypefaceUD* check_typeface(lua_State* L, int idx) {
-    TypefaceUD* tf = static_cast<TypefaceUD*>(luaL_checkudata(L, idx, TYPEFACE_MT));
+    TypefaceUD* tf = static_cast<TypefaceUD*>(eryxUdata_checkudata(L, typefaceRef, idx));
     if (!tf->source) luaL_error(L, "attempt to use a closed typeface");
     return tf;
 }
 
 static FontUD* check_font(lua_State* L, int idx) {
-    FontUD* font = static_cast<FontUD*>(luaL_checkudata(L, idx, FONT_MT));
+    FontUD* font = static_cast<FontUD*>(eryxUdata_checkudata(L, fontRef, idx));
     if (!font->face || !font->hbFont) luaL_error(L, "attempt to use a closed font");
     return font;
 }
 
 static ShapedRunUD* check_shaped_run(lua_State* L, int idx) {
-    ShapedRunUD* run = static_cast<ShapedRunUD*>(luaL_checkudata(L, idx, SHAPED_RUN_MT));
+    ShapedRunUD* run = static_cast<ShapedRunUD*>(eryxUdata_checkudata(L, shapedRunRef, idx));
     if (run->closed) luaL_error(L, "attempt to use a closed shaped run");
     return run;
+}
+
+static TypefaceUD* check_typeface_any(lua_State* L, int idx = 1) {
+    return static_cast<TypefaceUD*>(eryxUdata_checkudata(L, typefaceRef, idx));
+}
+
+static FontUD* check_font_any(lua_State* L, int idx = 1) {
+    return static_cast<FontUD*>(eryxUdata_checkudata(L, fontRef, idx));
+}
+
+static ShapedRunUD* check_shaped_run_any(lua_State* L, int idx = 1) {
+    return static_cast<ShapedRunUD*>(eryxUdata_checkudata(L, shapedRunRef, idx));
 }
 
 static void ensure_ft(lua_State* L) {
@@ -553,25 +568,19 @@ static void push_variations(lua_State* L, const std::vector<VariationAxis>& vari
 }
 
 static void push_typeface(lua_State* L, std::shared_ptr<FaceSource> source) {
-    void* ud = lua_newuserdatadtor(L, sizeof(TypefaceUD), typeface_dtor);
+    void* ud = eryxUdata_pushudata(L, typefaceRef);
     new (ud) TypefaceUD{ std::move(source) };
-    luaL_getmetatable(L, TYPEFACE_MT);
-    lua_setmetatable(L, -2);
 }
 
 static void push_font(lua_State* L, std::shared_ptr<FaceSource> source, FT_Face face,
                       hb_font_t* hbFont, double size) {
-    void* ud = lua_newuserdatadtor(L, sizeof(FontUD), font_dtor);
+    void* ud = eryxUdata_pushudata(L, fontRef);
     new (ud) FontUD{ std::move(source), face, hbFont, size };
-    luaL_getmetatable(L, FONT_MT);
-    lua_setmetatable(L, -2);
 }
 
 static void push_shaped_run(lua_State* L, ShapedRunUD run) {
-    void* ud = lua_newuserdatadtor(L, sizeof(ShapedRunUD), shaped_run_dtor);
+    void* ud = eryxUdata_pushudata(L, shapedRunRef);
     new (ud) ShapedRunUD(std::move(run));
-    luaL_getmetatable(L, SHAPED_RUN_MT);
-    lua_setmetatable(L, -2);
 }
 
 static void apply_variations(lua_State* L, FT_Face face, hb_font_t* hbFont, int optionsIdx,
@@ -993,13 +1002,13 @@ static int typeface_at(lua_State* L) {
 }
 
 static int typeface_close(lua_State* L) {
-    TypefaceUD* tf = static_cast<TypefaceUD*>(luaL_checkudata(L, 1, TYPEFACE_MT));
+    TypefaceUD* tf = check_typeface_any(L);
     tf->source.reset();
     return 0;
 }
 
 static int typeface_index(lua_State* L) {
-    TypefaceUD* tf = static_cast<TypefaceUD*>(luaL_checkudata(L, 1, TYPEFACE_MT));
+    TypefaceUD* tf = check_typeface_any(L);
     const char* key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "closed") == 0) {
@@ -1008,8 +1017,6 @@ static int typeface_index(lua_State* L) {
     }
 
     if (!tf->source) {
-        lua_getfield(L, lua_upvalueindex(1), key);
-        if (!lua_isnil(L, -1)) return 1;
         luaL_error(L, "attempt to use a closed typeface");
     }
     FaceSource& s = *tf->source;
@@ -1065,12 +1072,11 @@ static int typeface_index(lua_State* L) {
         return 1;
     }
 
-    lua_getfield(L, lua_upvalueindex(1), key);
-    return 1;
+    return 0;
 }
 
 static int typeface_tostring(lua_State* L) {
-    TypefaceUD* tf = static_cast<TypefaceUD*>(luaL_checkudata(L, 1, TYPEFACE_MT));
+    TypefaceUD* tf = check_typeface_any(L);
     if (!tf->source) {
         lua_pushstring(L, "Typeface(closed)");
         return 1;
@@ -1947,7 +1953,7 @@ static int font_render_text(lua_State* L) {
 }
 
 static int font_index(lua_State* L) {
-    FontUD* font = static_cast<FontUD*>(luaL_checkudata(L, 1, FONT_MT));
+    FontUD* font = check_font_any(L);
     const char* key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "closed") == 0) {
@@ -1956,8 +1962,6 @@ static int font_index(lua_State* L) {
     }
 
     if (!font->face || !font->hbFont) {
-        lua_getfield(L, lua_upvalueindex(1), key);
-        if (!lua_isnil(L, -1)) return 1;
         luaL_error(L, "attempt to use a closed font");
     }
 
@@ -1974,18 +1978,17 @@ static int font_index(lua_State* L) {
         return 1;
     }
 
-    lua_getfield(L, lua_upvalueindex(1), key);
-    return 1;
+    return 0;
 }
 
 static int font_close(lua_State* L) {
-    FontUD* font = static_cast<FontUD*>(luaL_checkudata(L, 1, FONT_MT));
+    FontUD* font = check_font_any(L);
     font->close();
     return 0;
 }
 
 static int font_tostring(lua_State* L) {
-    FontUD* font = static_cast<FontUD*>(luaL_checkudata(L, 1, FONT_MT));
+    FontUD* font = check_font_any(L);
     if (!font->face || !font->hbFont) {
         lua_pushstring(L, "Font(closed)");
         return 1;
@@ -1998,7 +2001,7 @@ static int font_tostring(lua_State* L) {
 }
 
 static int shaped_run_index(lua_State* L) {
-    ShapedRunUD* run = static_cast<ShapedRunUD*>(luaL_checkudata(L, 1, SHAPED_RUN_MT));
+    ShapedRunUD* run = check_shaped_run_any(L);
     const char* key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "closed") == 0) {
@@ -2007,8 +2010,6 @@ static int shaped_run_index(lua_State* L) {
     }
 
     if (run->closed) {
-        lua_getfield(L, lua_upvalueindex(1), key);
-        if (!lua_isnil(L, -1)) return 1;
         luaL_error(L, "attempt to use a closed shaped run");
     }
 
@@ -2029,12 +2030,11 @@ static int shaped_run_index(lua_State* L) {
         return 1;
     }
 
-    lua_getfield(L, lua_upvalueindex(1), key);
-    return 1;
+    return 0;
 }
 
 static int shaped_run_close(lua_State* L) {
-    ShapedRunUD* run = static_cast<ShapedRunUD*>(luaL_checkudata(L, 1, SHAPED_RUN_MT));
+    ShapedRunUD* run = check_shaped_run_any(L);
     run->text.clear();
     run->glyphs.clear();
     run->advanceX = 0;
@@ -2045,7 +2045,7 @@ static int shaped_run_close(lua_State* L) {
 }
 
 static int shaped_run_tostring(lua_State* L) {
-    ShapedRunUD* run = static_cast<ShapedRunUD*>(luaL_checkudata(L, 1, SHAPED_RUN_MT));
+    ShapedRunUD* run = check_shaped_run_any(L);
     if (run->closed) {
         lua_pushstring(L, "ShapedRun(closed)");
         return 1;
@@ -2598,98 +2598,93 @@ static int font_list_system_families(lua_State* L) {
     return 1;
 }
 
-static void create_typeface_mt(lua_State* L) {
-    luaL_newmetatable(L, TYPEFACE_MT);
-    lua_pushstring(L, "Typeface");
-    lua_setfield(L, -2, "__type");
-    lua_pushcfunction(L, typeface_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
+static luaL_Reg typefaceMethods[] = {
+    { "hasGlyph", typeface_has_glyph },    { "glyphId", typeface_glyph_id },
+    { "hasText", typeface_has_text },      { "missingGlyphs", typeface_missing_glyphs },
+    { "names", typeface_names },           { "table", typeface_table },
+    { "codepoints", typeface_codepoints }, { "at", typeface_at },
+    { "close", typeface_close },           { nullptr, nullptr },
+};
 
-    lua_newtable(L);
-    lua_pushcfunction(L, typeface_has_glyph, "hasGlyph");
-    lua_setfield(L, -2, "hasGlyph");
-    lua_pushcfunction(L, typeface_glyph_id, "glyphId");
-    lua_setfield(L, -2, "glyphId");
-    lua_pushcfunction(L, typeface_has_text, "hasText");
-    lua_setfield(L, -2, "hasText");
-    lua_pushcfunction(L, typeface_missing_glyphs, "missingGlyphs");
-    lua_setfield(L, -2, "missingGlyphs");
-    lua_pushcfunction(L, typeface_names, "names");
-    lua_setfield(L, -2, "names");
-    lua_pushcfunction(L, typeface_table, "table");
-    lua_setfield(L, -2, "table");
-    lua_pushcfunction(L, typeface_codepoints, "codepoints");
-    lua_setfield(L, -2, "codepoints");
-    lua_pushcfunction(L, typeface_at, "at");
-    lua_setfield(L, -2, "at");
-    lua_pushcfunction(L, typeface_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_setreadonly(L, -1, true);
+static luaL_Reg typefaceMetamethods[] = {
+    { "__tostring", typeface_tostring },
+    { nullptr, nullptr },
+};
 
-    lua_pushvalue(L, -1);
-    lua_pushcclosure(L, typeface_index, "__index", 1);
-    lua_setfield(L, -3, "__index");
-    lua_pop(L, 2);
-}
+static udataDef typefaceDef = {
+    .name = "Typeface",
+    .size = sizeof(TypefaceUD),
+    .fields = nullptr,
+    .indexFallback = typeface_index,
+    .newindexFallback = nullptr,
+    .metamethods = typefaceMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = typefaceMethods,
+    .destructor = typeface_dtor,
+};
 
-static void create_font_mt(lua_State* L) {
-    luaL_newmetatable(L, FONT_MT);
-    lua_pushstring(L, "Font");
-    lua_setfield(L, -2, "__type");
-    lua_pushcfunction(L, font_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
+static luaL_Reg fontMethods[] = {
+    { "shape", font_shape },
+    { "measure", font_measure },
+    { "bounds", font_bounds },
+    { "glyphMetrics", font_glyph_metrics },
+    { "outlineGlyph", font_outline_glyph },
+    { "rasterizeGlyph", font_rasterize_glyph },
+    { "renderGlyph", font_render_glyph },
+    { "render", font_render_text },
+    { "close", font_close },
+    { nullptr, nullptr },
+};
 
-    lua_newtable(L);
-    lua_pushcfunction(L, font_shape, "shape");
-    lua_setfield(L, -2, "shape");
-    lua_pushcfunction(L, font_measure, "measure");
-    lua_setfield(L, -2, "measure");
-    lua_pushcfunction(L, font_bounds, "bounds");
-    lua_setfield(L, -2, "bounds");
-    lua_pushcfunction(L, font_glyph_metrics, "glyphMetrics");
-    lua_setfield(L, -2, "glyphMetrics");
-    lua_pushcfunction(L, font_outline_glyph, "outlineGlyph");
-    lua_setfield(L, -2, "outlineGlyph");
-    lua_pushcfunction(L, font_rasterize_glyph, "rasterizeGlyph");
-    lua_setfield(L, -2, "rasterizeGlyph");
-    lua_pushcfunction(L, font_render_glyph, "renderGlyph");
-    lua_setfield(L, -2, "renderGlyph");
-    lua_pushcfunction(L, font_render_text, "render");
-    lua_setfield(L, -2, "render");
-    lua_pushcfunction(L, font_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_setreadonly(L, -1, true);
+static luaL_Reg fontMetamethods[] = {
+    { "__tostring", font_tostring },
+    { nullptr, nullptr },
+};
 
-    lua_pushvalue(L, -1);
-    lua_pushcclosure(L, font_index, "__index", 1);
-    lua_setfield(L, -3, "__index");
-    lua_pop(L, 2);
-}
+static udataDef fontDef = {
+    .name = "Font",
+    .size = sizeof(FontUD),
+    .fields = nullptr,
+    .indexFallback = font_index,
+    .newindexFallback = nullptr,
+    .metamethods = fontMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = fontMethods,
+    .destructor = font_dtor,
+};
 
-static void create_shaped_run_mt(lua_State* L) {
-    luaL_newmetatable(L, SHAPED_RUN_MT);
-    lua_pushstring(L, "ShapedRun");
-    lua_setfield(L, -2, "__type");
-    lua_pushcfunction(L, shaped_run_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
+static luaL_Reg shapedRunMethods[] = {
+    { "close", shaped_run_close },
+    { nullptr, nullptr },
+};
 
-    lua_newtable(L);
-    lua_pushcfunction(L, shaped_run_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_setreadonly(L, -1, true);
-    lua_pushvalue(L, -1);
-    lua_pushcclosure(L, shaped_run_index, "__index", 1);
-    lua_setfield(L, -3, "__index");
-    lua_pop(L, 2);
-}
+static luaL_Reg shapedRunMetamethods[] = {
+    { "__tostring", shaped_run_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef shapedRunDef = {
+    .name = "ShapedRun",
+    .size = sizeof(ShapedRunUD),
+    .fields = nullptr,
+    .indexFallback = shaped_run_index,
+    .newindexFallback = nullptr,
+    .metamethods = shapedRunMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = shapedRunMethods,
+    .destructor = shaped_run_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_font(lua_State* L) {
     ensure_ft(L);
     FT_Library_SetLcdFilter(g_ft, FT_LCD_FILTER_DEFAULT);
 
-    create_typeface_mt(L);
-    create_font_mt(L);
-    create_shaped_run_mt(L);
+    typefaceRef = eryxUdata_registerudata(L, &typefaceDef);
+    fontRef = eryxUdata_registerudata(L, &fontDef);
+    shapedRunRef = eryxUdata_registerudata(L, &shapedRunDef);
 
     lua_newtable(L);
     lua_pushcfunction(L, font_open_file, "openFile");

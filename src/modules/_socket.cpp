@@ -43,8 +43,7 @@
 #include "../runtime/lexception.hpp"
 #include "uv.h"
 
-// Forward declaration - dtor is defined later but referenced by lua_newuserdatadtor
-static void sock_dtor(void* ud);
+udataRef* socketRef;
 
 // ---------------------------------------------------------------------------
 // Platform socket compatibility
@@ -471,14 +470,12 @@ static void execute_ready_op(SocketPendingOp* op) {
             SOCKET client = accept(op->socket->fd, (struct sockaddr*)&addr, &addrlen);
             if (client != INVALID_SOCKET) {
                 make_nonblocking(client);
-                LuaSocket* cs = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
+                LuaSocket* cs = (LuaSocket*)eryxUdata_pushudata(L, socketRef);
                 cs->fd = client;
                 cs->family = op->socket->family;
                 cs->type = op->socket->type;
                 cs->proto = op->socket->proto;
                 cs->timeout = op->socket->timeout;
-                luaL_getmetatable(L, SOCKET_METATABLE);
-                lua_setmetatable(L, -2);
                 push_sockaddr(L, (struct sockaddr*)&addr, addrlen);
                 nresults = 3;
             }
@@ -641,14 +638,12 @@ static int sock_accept(lua_State* L) {
 
     if (client != INVALID_SOCKET) {
         make_nonblocking(client);
-        LuaSocket* cs = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
+        LuaSocket* cs = (LuaSocket*)eryxUdata_pushudata(L, socketRef);
         cs->fd = client;
         cs->family = s->family;
         cs->type = s->type;
         cs->proto = s->proto;
         cs->timeout = s->timeout;
-        luaL_getmetatable(L, SOCKET_METATABLE);
-        lua_setmetatable(L, -2);
         push_sockaddr(L, (struct sockaddr*)&addr, addrlen);
         return 3;
     }
@@ -967,25 +962,24 @@ static int sock_tostring(lua_State* L) {
     return 1;
 }
 
-static int sock_gc(lua_State* L) {
-    LuaSocket* s = (LuaSocket*)luaL_checkudata(L, 1, SOCKET_METATABLE);
-    if (s) {
-        if (s->fd != INVALID_SOCKET) {
-            sock_fd_close(s->fd);
-            s->fd = INVALID_SOCKET;
-        }
-        s->~LuaSocket();
-    }
-    return 0;
-}
-
-// Destructor called by Luau GC (lua_newuserdatadtor)
-static void sock_dtor(void* ud) {
+static void sock_dtor(lua_State* L, void* ud) {
     auto* s = (LuaSocket*)ud;
     if (s->fd != INVALID_SOCKET) {
         sock_fd_close(s->fd);
         s->fd = INVALID_SOCKET;
     }
+}
+
+static int sock_get_readable(lua_State* L) {
+    check_socket(L, 1);
+    lua_pushboolean(L, 1);
+    return 1;
+}
+
+static int sock_get_writable(lua_State* L) {
+    check_socket(L, 1);
+    lua_pushboolean(L, 1);
+    return 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,15 +997,12 @@ static int socket_socket(lua_State* L) {
     // All sockets are permanently non-blocking at the OS level
     make_nonblocking(fd);
 
-    LuaSocket* s = (LuaSocket*)lua_newuserdatadtor(L, sizeof(LuaSocket), sock_dtor);
+    LuaSocket* s = (LuaSocket*)eryxUdata_pushudata(L, socketRef);
     s->fd = fd;
     s->family = family;
     s->type = type;
     s->proto = proto;
     s->timeout = -1.0;  // virtual "blocking" by default
-
-    luaL_getmetatable(L, SOCKET_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -1124,93 +1115,58 @@ static int socket_ntohl(lua_State* L) {
 // ---------------------------------------------------------------------------
 // Registration
 // ---------------------------------------------------------------------------
-static void register_socket_metatable(lua_State* L) {
-    luaL_newmetatable(L, SOCKET_METATABLE);
+udataField socketFields[] = {
+    { "readable", sock_get_readable, nullptr },
+    { "writable", sock_get_writable, nullptr },
+    { nullptr, nullptr, nullptr },
+};
 
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
+luaL_Reg socketMethods[] = {
+    { "bind", sock_bind },
+    { "listen", sock_listen },
+    { "accept", sock_accept },
+    { "connect", sock_connect },
+    { "close", sock_close },
+    { "shutdown", sock_shutdown },
+    { "send", sock_send },
+    { "write", sock_write_stream },
+    { "writeSync", sock_write_stream },
+    { "sendAll", sock_sendall },
+    { "sendTo", sock_sendto },
+    { "recv", sock_recv },
+    { "read", sock_read_string_stream },
+    { "readSync", sock_read_string_stream },
+    { "readBuffer", sock_read_stream },
+    { "readBufferSync", sock_read_stream },
+    { "recvFrom", sock_recvfrom },
+    { "setSockOpt", sock_setsockopt },
+    { "getSockOpt", sock_getsockopt },
+    { "setBlocking", sock_setblocking },
+    { "setTimeout", sock_settimeout },
+    { "getPeerName", sock_getpeername },
+    { "getSockName", sock_getsockname },
+    { "fileNo", sock_fileno },
+    { "closeSync", sock_close },
+    { nullptr, nullptr },
+};
 
-    lua_pushcfunction(L, sock_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
+luaL_Reg socketMetamethods[] = {
+    { "__tostring", sock_tostring },
+    { nullptr, nullptr },
+};
 
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, "readable");
-    lua_pushboolean(L, 1);
-    lua_setfield(L, -2, "writable");
-
-    lua_pushcfunction(L, sock_bind, "bind");
-    lua_setfield(L, -2, "bind");
-
-    lua_pushcfunction(L, sock_listen, "listen");
-    lua_setfield(L, -2, "listen");
-
-    lua_pushcfunction(L, sock_accept, "accept");
-    lua_setfield(L, -2, "accept");
-
-    lua_pushcfunction(L, sock_connect, "connect");
-    lua_setfield(L, -2, "connect");
-
-    lua_pushcfunction(L, sock_close, "close");
-    lua_setfield(L, -2, "close");
-
-    lua_pushcfunction(L, sock_shutdown, "shutdown");
-    lua_setfield(L, -2, "shutdown");
-
-    lua_pushcfunction(L, sock_send, "send");
-    lua_setfield(L, -2, "send");
-    lua_pushcfunction(L, sock_write_stream, "write");
-    lua_setfield(L, -2, "write");
-    lua_pushcfunction(L, sock_write_stream, "writeSync");
-    lua_setfield(L, -2, "writeSync");
-
-    lua_pushcfunction(L, sock_sendall, "sendAll");
-    lua_setfield(L, -2, "sendAll");
-
-    lua_pushcfunction(L, sock_sendto, "sendTo");
-    lua_setfield(L, -2, "sendTo");
-
-    lua_pushcfunction(L, sock_recv, "recv");
-    lua_setfield(L, -2, "recv");
-    lua_pushcfunction(L, sock_read_string_stream, "read");
-    lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, sock_read_string_stream, "readSync");
-    lua_setfield(L, -2, "readSync");
-    lua_pushcfunction(L, sock_read_stream, "readBuffer");
-    lua_setfield(L, -2, "readBuffer");
-    lua_pushcfunction(L, sock_read_stream, "readBufferSync");
-    lua_setfield(L, -2, "readBufferSync");
-
-    lua_pushcfunction(L, sock_recvfrom, "recvFrom");
-    lua_setfield(L, -2, "recvFrom");
-
-    lua_pushcfunction(L, sock_setsockopt, "setSockOpt");
-    lua_setfield(L, -2, "setSockOpt");
-
-    lua_pushcfunction(L, sock_getsockopt, "getSockOpt");
-    lua_setfield(L, -2, "getSockOpt");
-
-    lua_pushcfunction(L, sock_setblocking, "setBlocking");
-    lua_setfield(L, -2, "setBlocking");
-
-    lua_pushcfunction(L, sock_settimeout, "setTimeout");
-    lua_setfield(L, -2, "setTimeout");
-
-    lua_pushcfunction(L, sock_getpeername, "getPeerName");
-    lua_setfield(L, -2, "getPeerName");
-
-    lua_pushcfunction(L, sock_getsockname, "getSockName");
-    lua_setfield(L, -2, "getSockName");
-
-    lua_pushcfunction(L, sock_fileno, "fileNo");
-    lua_setfield(L, -2, "fileNo");
-
-    lua_pushcfunction(L, sock_close, "closeSync");
-    lua_setfield(L, -2, "closeSync");
-
-    lua_pop(L, 1);
-}
+udataDef socketDef = {
+    .name = "Socket",
+    .size = sizeof(LuaSocket),
+    .fields = socketFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = socketMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = socketMethods,
+    .destructor = sock_dtor,
+};
 
 #define SETCONST(name)              \
     do {                            \
@@ -1225,7 +1181,7 @@ LUAU_MODULE_EXPORT int luauopen__socket(lua_State* L) {
     if (rc != 0) luaL_error(L, "WSAStartup failed: %d", rc);
 #endif
 
-    register_socket_metatable(L);
+    socketRef = eryxUdata_registerudata(L, &socketDef);
 
     lua_newtable(L);
 

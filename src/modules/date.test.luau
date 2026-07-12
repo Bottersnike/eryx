@@ -3,7 +3,7 @@ local test = require("@eryx/test")
 
 local suite = test.Suite.new("date")
 
--- ── Utility ──────────────────────────────────────────────────────────────────
+-- -- Utility ------------------------------------------------------------------
 
 suite:test("isLeap: 2000 (div 400)", function()
 	test.expect(date.isLeap(2000)):toBeTrue()
@@ -45,7 +45,7 @@ suite:test("timezones: contains the system timezone", function()
 	test.expect(date.timezones()):toContain(date.timezone())
 end)
 
--- ── Duration constructors ────────────────────────────────────────────────────
+-- -- Duration constructors ----------------------------------------------------
 
 suite:test("seconds: totalSeconds", function()
 	test.expect(date.seconds(90).totalSeconds):toBe(90)
@@ -92,7 +92,7 @@ suite:test("nanoseconds: 1e9 ns = 1 whole second", function()
 	test.expect(d.nanoseconds):toBe(0)
 end)
 
--- ── Duration arithmetic ──────────────────────────────────────────────────────
+-- -- Duration arithmetic ------------------------------------------------------
 
 suite:test("duration +", function()
 	test.expect((date.seconds(30) + date.seconds(30)).totalSeconds):toBe(60)
@@ -128,7 +128,7 @@ suite:test("duration tostring returns a string", function()
 	test.expect(tostring(date.seconds(1))):toBeType("string")
 end)
 
--- ── fromTimestamp ────────────────────────────────────────────────────────────
+-- -- fromTimestamp ------------------------------------------------------------
 
 -- All tests pin to UTC to avoid machine-local-timezone dependence.
 -- Unix epoch: 1970-01-01T00:00:00Z (Thursday, ISO weekday 4)
@@ -178,7 +178,7 @@ suite:test("fromTimestamp: fractional seconds -> nanoseconds", function()
 	test.expect(date.fromTimestamp(0.5, "UTC").nanosecond):toBe(500_000_000)
 end)
 
--- ── fromIso ──────────────────────────────────────────────────────────────────
+-- -- fromIso ------------------------------------------------------------------
 
 suite:test("fromIso: epoch toUnix = 0", function()
 	test.expect(date.fromIso("1970-01-01T00:00:00+00:00"):toUnix()):toBe(0)
@@ -203,7 +203,7 @@ suite:test("fromIso: invalid string throws", function()
 	end):toError()
 end)
 
--- ── fromFields ───────────────────────────────────────────────────────────────
+-- -- fromFields ---------------------------------------------------------------
 
 suite:test("fromFields: fields round-trip", function()
 	local dt = date.fromFields({ year = 2024, month = 3, day = 15, hour = 10, minute = 30, second = 45 }, "UTC")
@@ -237,7 +237,7 @@ suite:test("fromFields: invalid timezone throws", function()
 	end):toError()
 end)
 
--- ── parse ────────────────────────────────────────────────────────────────────
+-- -- parse --------------------------------------------------------------------
 
 suite:test("parse: %Y-%m-%d %H:%M:%S", function()
 	local dt = date.parse("2024-03-15 10:30:45", "%Y-%m-%d %H:%M:%S", "UTC")
@@ -258,7 +258,7 @@ suite:test("parse: mismatched format throws", function()
 	end):toError()
 end)
 
--- ── DateTime methods ─────────────────────────────────────────────────────────
+-- -- DateTime methods ---------------------------------------------------------
 
 suite:test("format: %Y-%m-%d", function()
 	test.expect(date.fromTimestamp(0, "UTC"):format("%Y-%m-%d")):toBe("1970-01-01")
@@ -360,7 +360,7 @@ suite:test("diff: earlier - later is negative", function()
 	test.expect(d1:diff(d2).totalSeconds):toBe(-3600)
 end)
 
--- ── withZone ─────────────────────────────────────────────────────────────────
+-- -- withZone -----------------------------------------------------------------
 
 suite:test("withZone: UTC instant unchanged", function()
 	test.expect(date.fromTimestamp(0, "UTC"):withZone("America/New_York"):toUnix()):toBe(0)
@@ -374,7 +374,7 @@ suite:test("withZone: invalid zone throws", function()
 	end):toError()
 end)
 
--- ── DateTime operators ───────────────────────────────────────────────────────
+-- -- DateTime operators -------------------------------------------------------
 
 suite:test("dt + duration advances instant", function()
 	local dt = date.fromTimestamp(0, "UTC") + date.seconds(3600)
@@ -402,7 +402,7 @@ suite:test("dt tostring returns a string", function()
 	test.expect(tostring(date.fromTimestamp(0, "UTC"))):toBeType("string")
 end)
 
--- ── now ──────────────────────────────────────────────────────────────────────
+-- -- now ----------------------------------------------------------------------
 
 suite:test("now: UTC zone", function()
 	test.expect(date.now("UTC").zone):toBe("UTC")

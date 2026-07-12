@@ -14,6 +14,9 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
+udataRef* brotliCompressor;
+udataRef* brotliDecompressor;
+
 // ---------------------------------------------------------------------------
 // compress(data, quality?, lgwin?, mode?) -> buffer
 //   quality : 0 (fastest) - 11 (best). Default BROTLI_DEFAULT_QUALITY (11).
@@ -90,10 +93,6 @@ static int l_max_compressed_size(lua_State* L) {
 // ---------------------------------------------------------------------------
 
 static constexpr size_t STREAM_CHUNK_SIZE = 32 * 1024;  // 32 KB
-
-static const char* MT_BROTLI_COMPRESS = "brotli.Compressor";
-static const char* MT_BROTLI_DECOMPRESS = "brotli.Decompressor";
-
 struct LuaBrotliCompressor {
     BrotliEncoderState* state;
     bool closed;
@@ -109,7 +108,7 @@ static void brotli_compressor_dtor(void* ud) {
 }
 
 static LuaBrotliCompressor* check_brotli_compressor(lua_State* L) {
-    auto* c = (LuaBrotliCompressor*)luaL_checkudata(L, 1, MT_BROTLI_COMPRESS);
+    auto* c = (LuaBrotliCompressor*)eryxUdata_checkudata(L, brotliCompressor, 1);
     if (c->closed) luaL_error(L, "brotli: compressor is closed");
     return c;
 }
@@ -205,19 +204,23 @@ static int l_brotli_compressor_finish(lua_State* L) {
     return 1;
 }
 
-static int l_brotli_compressor_close(lua_State* L) {
-    auto* c = (LuaBrotliCompressor*)luaL_checkudata(L, 1, MT_BROTLI_COMPRESS);
+static void l_brotli_compressor_destructor(lua_State* L, void* ud) {
+    auto* c = (LuaBrotliCompressor*)ud;
     if (!c->closed && c->state) {
         BrotliEncoderDestroyInstance(c->state);
         c->state = nullptr;
         c->closed = true;
     }
+}
+static int l_brotli_compressor_close(lua_State* L) {
+    auto* c = (LuaBrotliCompressor*)eryxUdata_checkudata(L, brotliCompressor, 1);
+    l_brotli_compressor_destructor(L, c);
     return 0;
 }
 
 static int l_brotli_compressor_tostring(lua_State* L) {
-    auto* c = (LuaBrotliCompressor*)luaL_checkudata(L, 1, MT_BROTLI_COMPRESS);
-    lua_pushfstring(L, "brotli.Compressor(%s)", c->closed ? "closed" : "open");
+    auto* ud = (LuaBrotliCompressor*)eryxUdata_checkudata(L, brotliCompressor, 1);
+    lua_pushfstring(L, "brotli.Compressor(%s)", ud->closed ? "closed" : "open");
     return 1;
 }
 
@@ -227,8 +230,8 @@ static int l_create_brotli_compressor(lua_State* L) {
     int lgwin = (int)luaL_optinteger(L, 2, BROTLI_DEFAULT_WINDOW);
     int mode = (int)luaL_optinteger(L, 3, BROTLI_DEFAULT_MODE);
 
-    auto* c = (LuaBrotliCompressor*)lua_newuserdatadtor(L, sizeof(LuaBrotliCompressor),
-                                                        brotli_compressor_dtor);
+    auto* c = (LuaBrotliCompressor*)eryxUdata_pushudata(L, brotliCompressor);
+
     c->state = BrotliEncoderCreateInstance(nullptr, nullptr, nullptr);
     c->closed = false;
 
@@ -241,8 +244,6 @@ static int l_create_brotli_compressor(lua_State* L) {
     BrotliEncoderSetParameter(c->state, BROTLI_PARAM_LGWIN, (uint32_t)lgwin);
     BrotliEncoderSetParameter(c->state, BROTLI_PARAM_MODE, (uint32_t)mode);
 
-    luaL_getmetatable(L, MT_BROTLI_COMPRESS);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -266,7 +267,7 @@ static void brotli_decompressor_dtor(void* ud) {
 }
 
 static LuaBrotliDecompressor* check_brotli_decompressor(lua_State* L) {
-    auto* d = (LuaBrotliDecompressor*)luaL_checkudata(L, 1, MT_BROTLI_DECOMPRESS);
+    auto* d = (LuaBrotliDecompressor*)eryxUdata_checkudata(L, brotliDecompressor, 1);
     if (d->closed) luaL_error(L, "brotli: decompressor is closed");
     return d;
 }
@@ -316,18 +317,22 @@ static int l_brotli_decompressor_write(lua_State* L) {
     return 2;
 }
 
-static int l_brotli_decompressor_close(lua_State* L) {
-    auto* d = (LuaBrotliDecompressor*)luaL_checkudata(L, 1, MT_BROTLI_DECOMPRESS);
+static void l_brotli_decompressor_destructor(lua_State* L, void* ud) {
+    auto* d = (LuaBrotliDecompressor*)ud;
     if (!d->closed && d->state) {
         BrotliDecoderDestroyInstance(d->state);
         d->state = nullptr;
         d->closed = true;
     }
+}
+static int l_brotli_decompressor_close(lua_State* L) {
+    auto* d = (LuaBrotliDecompressor*)eryxUdata_checkudata(L, brotliDecompressor, 1);
+    l_brotli_decompressor_destructor(L, d);
     return 0;
 }
 
 static int l_brotli_decompressor_tostring(lua_State* L) {
-    auto* d = (LuaBrotliDecompressor*)luaL_checkudata(L, 1, MT_BROTLI_DECOMPRESS);
+    auto* d = (LuaBrotliDecompressor*)eryxUdata_checkudata(L, brotliDecompressor, 1);
     const char* state = d->closed ? "closed" : (d->finished ? "finished" : "open");
     lua_pushfstring(L, "brotli.Decompressor(%s)", state);
     return 1;
@@ -335,8 +340,8 @@ static int l_brotli_decompressor_tostring(lua_State* L) {
 
 // brotli.createDecompressor() -> Decompressor
 static int l_create_brotli_decompressor(lua_State* L) {
-    auto* d = (LuaBrotliDecompressor*)lua_newuserdatadtor(L, sizeof(LuaBrotliDecompressor),
-                                                          brotli_decompressor_dtor);
+    auto* d = (LuaBrotliDecompressor*)eryxUdata_pushudata(L, brotliDecompressor);
+
     d->state = BrotliDecoderCreateInstance(nullptr, nullptr, nullptr);
     d->closed = false;
     d->finished = false;
@@ -346,8 +351,6 @@ static int l_create_brotli_decompressor(lua_State* L) {
         luaL_error(L, "brotli: failed to create decoder");
     }
 
-    luaL_getmetatable(L, MT_BROTLI_DECOMPRESS);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -355,50 +358,56 @@ static int l_create_brotli_decompressor(lua_State* L) {
 // Module entry
 // ---------------------------------------------------------------------------
 
-LUAU_MODULE_EXPORT int luauopen_brotli(lua_State* L) {
-    // Register Compressor metatable
-    luaL_newmetatable(L, MT_BROTLI_COMPRESS);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_brotli_compressor_write },
-            { "flush", l_brotli_compressor_flush },
-            { "finish", l_brotli_compressor_finish },
-            { "close", l_brotli_compressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_brotli_compressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_brotli_compressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+luaL_Reg brotliCompressorMethods[] = {
+    { "write", l_brotli_compressor_write },
+    { "flush", l_brotli_compressor_flush },
+    { "finish", l_brotli_compressor_finish },
+    { "close", l_brotli_compressor_close },
+    { nullptr, nullptr },
+};
+luaL_Reg brotliCompressorMetamethods[] = {
+    { "__tostring", l_brotli_compressor_tostring },
+    { nullptr, nullptr },
+};
+udataDef brotliCompressorDef = {
+    .name = "BrotliCompressor",
+    .size = sizeof(LuaBrotliCompressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = brotliCompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = brotliCompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_brotli_compressor_destructor,
+};
 
-    // Register Decompressor metatable
-    luaL_newmetatable(L, MT_BROTLI_DECOMPRESS);
-    {
-        static const luaL_Reg methods[] = {
-            { "write", l_brotli_decompressor_write },
-            { "close", l_brotli_decompressor_close },
-            { nullptr, nullptr },
-        };
-        lua_newtable(L);
-        for (const luaL_Reg* m = methods; m->name; m++) {
-            lua_pushcfunction(L, m->func, m->name);
-            lua_setfield(L, -2, m->name);
-        }
-        lua_setfield(L, -2, "__index");
-        lua_pushcfunction(L, l_brotli_decompressor_close, "__gc");
-        lua_setfield(L, -2, "__gc");
-        lua_pushcfunction(L, l_brotli_decompressor_tostring, "__tostring");
-        lua_setfield(L, -2, "__tostring");
-    }
-    lua_pop(L, 1);
+luaL_Reg brotliDecompressorMethods[] = {
+    { "write", l_brotli_decompressor_write },
+    { "close", l_brotli_decompressor_close },
+    { nullptr, nullptr },
+};
+luaL_Reg brotliDecompressorMetamethods[] = {
+    { "__tostring", l_brotli_decompressor_tostring },
+    { nullptr, nullptr },
+};
+udataDef brotliDecompressorDef = {
+    .name = "BrotliDecompressor",
+    .size = sizeof(LuaBrotliDecompressor),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = brotliDecompressorMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = brotliDecompressorMethods,
+    .bothcallMethods = nullptr,
+    .destructor = l_brotli_decompressor_destructor,
+};
+
+LUAU_MODULE_EXPORT int luauopen_brotli(lua_State* L) {
+    brotliCompressor = eryxUdata_registerudata(L, &brotliCompressorDef);
+    brotliDecompressor = eryxUdata_registerudata(L, &brotliDecompressorDef);
+
     lua_newtable(L);
 
     static const luaL_Reg fns[] = {

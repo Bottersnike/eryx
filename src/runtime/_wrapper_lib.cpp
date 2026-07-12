@@ -2426,6 +2426,7 @@ ERYX_API void eryx_destroy_environment(lua_State* L) {
         return;
     }
 
+    exception_lib_unregister(L);
     eryxUdata_destroyEnvironment(L);
     lua_close(L);
 }

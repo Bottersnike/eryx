@@ -76,15 +76,28 @@ void eryxUdata_addmethodstotable(lua_State* L, udataDef* definition, int tableIn
  * @brief Create a new userdata and push it to the stack
  *
  * @param L Lua state
- * @param ref Userdata reference
+ * @param ref
+ * Userdata reference
  * @return void* Allocated memory for the userdata
  */
 void* eryxUdata_pushudata(lua_State* L, udataRef* ref);
 
 /**
+ * @brief Find a registered userdata type by name for the current environment
+ *
+ * @param L Lua
+ * state
+ * @param name Userdata type name
+ * @return udataRef* Matching userdata reference, or
+ * nullptr if not found
+ */
+udataRef* eryxUdata_getudata(lua_State* L, const char* name);
+
+/**
  * @brief Test if an item on the stack is a particular userdata
  *
  * @param L Lua state
+ *
  * @param ref Userdata reference
  * @param index Stack index
  * @return void* Located userdata memory, or nullptr if the type does not match

@@ -4,10 +4,9 @@
 #include <string>
 #include <vector>
 
+#include "../pch.hpp"
 #include "lua.h"     // IWYU pragma: export
 #include "lualib.h"  // IWYU pragma: export
-
-static const char* EXCEPTION_METATABLE = "Exception";
 
 // Built-in error types
 static const char* ETYPE_RUNTIME = "runtime";
@@ -53,6 +52,7 @@ typedef struct _LuaException {
 } LuaException;
 
 LuaException* eryx_get_exception(lua_State* L, int idx);
+ERYX_API LuaException* eryx_exception_push_userdata(lua_State* L);
 std::unique_ptr<LuaExceptionSnapshot> eryx_copy_exception(const LuaException* exception);
 
 void eryx_exception_push_keyboard_interrupt(lua_State* L);
@@ -67,5 +67,6 @@ std::string eryx_format_exception(lua_State* L, int idx, bool useAnsi = false);
 void eryx_coerce_to_exception(lua_State* L);
 
 void exception_lib_register(lua_State* L);
+void exception_lib_unregister(lua_State* L);
 
 std::string getSourceLine(const char* source, int line);

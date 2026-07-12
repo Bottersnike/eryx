@@ -44,7 +44,7 @@ local function prefixSemicolon(line: string): string
 	return lead .. ";" .. line:sub(#lead + 1)
 end
 
--- ── Pretty mode ─────────────────────────────────────────────────────────────
+-- -- Pretty mode -------------------------------------------------------------
 -- Mutually recursive; forward declared so helpers below can reference them.
 local typeToString: (any) -> string
 local typePackToString: (any) -> string
@@ -699,7 +699,7 @@ blockToString = function(block: any, level: number): string
 	return table.concat(lines, "\n")
 end
 
--- ── Preserve mode ───────────────────────────────────────────────────────────
+-- -- Preserve mode -----------------------------------------------------------
 -- Every inter-token gap in the source is stored exactly once across the tokens'
 -- `leadingText`/`trailingText`. Collecting every token, ordering by source
 -- position, and concatenating `leadingText .. text .. trailingText` reproduces
@@ -740,7 +740,7 @@ local function preservePrint(root: any): string
 	return table.concat(buf)
 end
 
--- ── Public API ──────────────────────────────────────────────────────────────
+-- -- Public API --------------------------------------------------------------
 local function isNode(value: any): boolean
 	return type(value) == "table" and type(value.type) == "string"
 end

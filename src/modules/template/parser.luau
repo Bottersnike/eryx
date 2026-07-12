@@ -49,7 +49,7 @@ export type TemplateError = {
 	filepath: string?,
 }
 
--- ── AST Node Types ──────────────────────────────────────────────────────────
+-- -- AST Node Types ----------------------------------------------------------
 -- Every node carries source-map fields (`line`, `col`, `filepath`) so that
 -- the evaluator can report meaningful locations when errors occur at runtime.
 
@@ -265,7 +265,7 @@ export type AstNode =
 	| AstEof
 export type AstSuite = { AstNode }
 
--- ── Character Classification Helpers ────────────────────────────────────────
+-- -- Character Classification Helpers ----------------------------------------
 
 local function _isName(lexeme: string): boolean
 	return lexeme == "_" or ((string.byte(lexeme) - 97) % 256) < 26 or ((string.byte(lexeme) - 65) % 256) < 26
@@ -274,7 +274,7 @@ local function _isDigit(lexeme: string): boolean
 	return ((string.byte(lexeme) - 48) % 256) < 10
 end
 
--- ── Parser Class ────────────────────────────────────────────────────────────
+-- -- Parser Class ------------------------------------------------------------
 
 local Parser = {}
 Parser.__index = Parser

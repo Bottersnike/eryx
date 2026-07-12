@@ -20,7 +20,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "module_helpers.hpp"
 
 static const LuauModuleInfo INFO = {
     .abiVersion = 1,
@@ -459,8 +458,8 @@ ZonedInstant parse_custom(lua_State* L, const std::string& s, const std::string&
 }
 }  // namespace tzdate
 
-static const char* DATETIME_METATABLE = "DateTime";
-static const char* DURATION_METATABLE = "Duration";
+static udataRef* dateTimeRef;
+static udataRef* durationRef;
 
 typedef struct {
     tzdate::ZonedInstant instant;
@@ -469,12 +468,41 @@ typedef struct {
     tzdate::Duration duration;
 } LuaDuration;
 
-// ── DateTime constructors ─────────────────────────────────────────────────────
+static LuaDateTime* check_datetime(lua_State* L, int idx = 1) {
+    return (LuaDateTime*)eryxUdata_checkudata(L, dateTimeRef, idx);
+}
+
+static LuaDuration* check_duration(lua_State* L, int idx = 1) {
+    return (LuaDuration*)eryxUdata_checkudata(L, durationRef, idx);
+}
+
+static LuaDateTime* push_datetime(lua_State* L) {
+    LuaDateTime* dt = (LuaDateTime*)eryxUdata_pushudata(L, dateTimeRef);
+    new (dt) LuaDateTime();
+    return dt;
+}
+
+static LuaDuration* push_duration(lua_State* L) {
+    LuaDuration* dur = (LuaDuration*)eryxUdata_pushudata(L, durationRef);
+    new (dur) LuaDuration();
+    return dur;
+}
+
+static void datetime_dtor(lua_State* L, void* ud) {
+    (void)L;
+    ((LuaDateTime*)ud)->~LuaDateTime();
+}
+
+static void duration_dtor(lua_State* L, void* ud) {
+    (void)L;
+    ((LuaDuration*)ud)->~LuaDuration();
+}
+
+// -- DateTime constructors -----------------------------------------------------
 
 static int date_now(lua_State* L) {
     const char* stz = luaL_optstring(L, 1, nullptr);
-    LuaDateTime* dt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (dt) LuaDateTime();
+    LuaDateTime* dt = push_datetime(L);
 
     if (stz) {
         tzdate::resolve_zone(L, stz);  // validates; throws on bad name
@@ -482,26 +510,19 @@ static int date_now(lua_State* L) {
     } else {
         dt->instant = tzdate::date_now();
     }
-
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int date_fromiso(lua_State* L) {
     const char* siso = luaL_checkstring(L, 1);
 
-    LuaDateTime* dt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (dt) LuaDateTime();
+    LuaDateTime* dt = push_datetime(L);
 
     try {
         dt->instant = tzdate::parse_iso(siso);
     } catch (const std::exception& e) {
         luaL_error(L, "%s", e.what());
     }
-
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -509,14 +530,10 @@ static int date_fromtimestamp(lua_State* L) {
     double ts = luaL_checknumber(L, 1);
     const char* stz = luaL_optstring(L, 2, nullptr);
 
-    LuaDateTime* dt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (dt) LuaDateTime();
+    LuaDateTime* dt = push_datetime(L);
 
     dt->instant.utc = tzdate::SysTime{ std::chrono::nanoseconds{ int64_t(ts * 1e9) } };
     dt->instant.zone = stz ? std::string(stz) : tzdate::current_timezone();
-
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -554,72 +571,50 @@ static int date_fromfields(lua_State* L) {
 
     std::string zone = stz ? std::string(stz) : tzdate::current_timezone();
 
-    LuaDateTime* dt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (dt) LuaDateTime();
+    LuaDateTime* dt = push_datetime(L);
 
     try {
         dt->instant = tzdate::from_fields(L, f, zone);
     } catch (const std::exception& e) {
         luaL_error(L, "%s", e.what());
     }
-
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-// ── Duration constructors ─────────────────────────────────────────────────────
+// -- Duration constructors -----------------------------------------------------
 
 static int date_nanoseconds(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::nanoseconds(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int date_milliseconds(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::milliseconds(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int date_seconds(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::seconds(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int date_minutes(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::minutes(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int date_hours(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::hours(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int date_days(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::days(luaL_checkinteger(L, 1));
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
-// ── Module-level utilities ────────────────────────────────────────────────────
+// -- Module-level utilities ----------------------------------------------------
 
 static int date_timezone(lua_State* L) {
     lua_pushstring(L, tzdate::current_timezone().c_str());
@@ -635,10 +630,10 @@ static int date_timezones(lua_State* L) {
     return 1;
 }
 
-// ── DateTime metamethods ──────────────────────────────────────────────────────
+// -- DateTime metamethods ------------------------------------------------------
 
 static int dt_tostring(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     auto f = tzdate::get_fields(L, dt->instant);
     lua_pushfstring(L, "DateTime(%04d-%s-%02d %02d:%02d:%02d %s)", f.year,
                     tzdate::MONTHS_SHORT[f.month - 1], f.day, f.hour, f.minute, f.second,
@@ -647,92 +642,80 @@ static int dt_tostring(lua_State* L) {
 }
 
 static int dt_add(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
-    LuaDateTime* newDt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (newDt) LuaDateTime();
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
+    LuaDateTime* dt = check_datetime(L, 1);
+    LuaDuration* dur = check_duration(L, 2);
+    LuaDateTime* newDt = push_datetime(L);
     newDt->instant = tzdate::add(dt->instant, dur->duration);
     return 1;
 }
 
 static int dt_sub(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
-    LuaDateTime* newDt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (newDt) LuaDateTime();
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
+    LuaDateTime* dt = check_datetime(L, 1);
+    LuaDuration* dur = check_duration(L, 2);
+    LuaDateTime* newDt = push_datetime(L);
     newDt->instant = tzdate::sub(dt->instant, dur->duration);
     return 1;
 }
 
 static int dt_eq(lua_State* L) {
-    LuaDateTime* a = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDateTime* b = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
+    LuaDateTime* a = check_datetime(L, 1);
+    LuaDateTime* b = check_datetime(L, 2);
     lua_pushboolean(L, a->instant.utc == b->instant.utc);
     return 1;
 }
 static int dt_lt(lua_State* L) {
-    LuaDateTime* a = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDateTime* b = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
+    LuaDateTime* a = check_datetime(L, 1);
+    LuaDateTime* b = check_datetime(L, 2);
     lua_pushboolean(L, a->instant.utc < b->instant.utc);
     return 1;
 }
 static int dt_le(lua_State* L) {
-    LuaDateTime* a = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDateTime* b = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
+    LuaDateTime* a = check_datetime(L, 1);
+    LuaDateTime* b = check_datetime(L, 2);
     lua_pushboolean(L, a->instant.utc <= b->instant.utc);
     return 1;
 }
 
-// ── DateTime methods (stored on metatable, reached via __index fallback) ──────
+// -- DateTime methods (stored on metatable, reached via __index fallback) ------
 
 static int dt_toisostring(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     lua_pushstring(L, tzdate::format_iso(L, dt->instant).c_str());
     return 1;
 }
 
 static int dt_tounix(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     lua_pushnumber(L, double(tzdate::to_unix_seconds(dt->instant)));
     return 1;
 }
 
 static int dt_tounixms(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     lua_pushnumber(L, double(tzdate::to_unix_ms(dt->instant)));
     return 1;
 }
 
 static int dt_withzone(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     const char* stz = luaL_checkstring(L, 2);
     tzdate::resolve_zone(L, stz);  // validate
 
-    LuaDateTime* newDt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (newDt) LuaDateTime();
+    LuaDateTime* newDt = push_datetime(L);
     newDt->instant = tzdate::set_timezone(dt->instant, stz);
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int dt_diff(lua_State* L) {
-    LuaDateTime* a = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDateTime* b = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
-    LuaDuration* dur = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (dur) LuaDuration();
+    LuaDateTime* a = check_datetime(L, 1);
+    LuaDateTime* b = check_datetime(L, 2);
+    LuaDuration* dur = push_duration(L);
     dur->duration = tzdate::diff(a->instant, b->instant);
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int dt_index(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     const char* key = luaL_checkstring(L, 2);
 
     // Fields that require computing DateFields
@@ -781,12 +764,11 @@ static int dt_index(lua_State* L) {
         return 1;
     }
 
-    // Fall through to metatable for methods
-    return eryx_metatable_index(L);
+    return 0;
 }
 
 static int dt_format(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     const char* fmt = luaL_checkstring(L, 2);
     try {
         lua_pushstring(L, tzdate::format_custom(L, dt->instant, fmt).c_str());
@@ -797,7 +779,7 @@ static int dt_format(lua_State* L) {
 }
 
 static int dt_formatutc(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     const char* fmt = luaL_checkstring(L, 2);
     try {
         lua_pushstring(L, tzdate::format_utc(dt->instant, fmt).c_str());
@@ -808,44 +790,35 @@ static int dt_formatutc(lua_State* L) {
 }
 
 static int dt_startofday(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
-    LuaDateTime* out = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (out) LuaDateTime();
+    LuaDateTime* dt = check_datetime(L, 1);
+    LuaDateTime* out = push_datetime(L);
     out->instant = tzdate::start_of_day(L, dt->instant);
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int dt_addmonths(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     int months = (int)luaL_checkinteger(L, 2);
-    LuaDateTime* out = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (out) LuaDateTime();
+    LuaDateTime* out = push_datetime(L);
     out->instant = tzdate::add_months(L, dt->instant, months);
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int dt_addyears(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     int years = (int)luaL_checkinteger(L, 2);
-    LuaDateTime* out = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (out) LuaDateTime();
+    LuaDateTime* out = push_datetime(L);
     out->instant = tzdate::add_years(L, dt->instant, years);
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 // date.parse(str, fmt, zone?) - parse using a std::chrono format string
 static int dt_relative(lua_State* L) {
-    LuaDateTime* dt = (LuaDateTime*)luaL_checkudata(L, 1, DATETIME_METATABLE);
+    LuaDateTime* dt = check_datetime(L, 1);
     tzdate::ZonedInstant base;
 
     if (lua_gettop(L) >= 2 && !lua_isnil(L, 2)) {
-        LuaDateTime* other = (LuaDateTime*)luaL_checkudata(L, 2, DATETIME_METATABLE);
+        LuaDateTime* other = check_datetime(L, 2);
         base = other->instant;
     } else {
         base = tzdate::date_now();
@@ -859,15 +832,12 @@ static int date_parse(lua_State* L) {
     const char* s = luaL_checkstring(L, 1);
     const char* fmt = luaL_checkstring(L, 2);
     const char* stz = luaL_optstring(L, 3, nullptr);
-    LuaDateTime* dt = (LuaDateTime*)lua_newuserdata(L, sizeof(LuaDateTime));
-    new (dt) LuaDateTime();
+    LuaDateTime* dt = push_datetime(L);
     try {
         dt->instant = tzdate::parse_custom(L, s, fmt, stz ? std::string(stz) : std::string{});
     } catch (const std::exception& e) {
         luaL_error(L, "%s", e.what());
     }
-    luaL_getmetatable(L, DATETIME_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -883,10 +853,10 @@ static int date_daysinmonth(lua_State* L) {
     return 1;
 }
 
-// ── Duration metamethods ──────────────────────────────────────────────────────
+// -- Duration metamethods ------------------------------------------------------
 
 static int dur_tostring(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
+    LuaDuration* dur = check_duration(L, 1);
     int h = int(std::chrono::duration_cast<std::chrono::hours>(dur->duration).count());
     int m =
         int(std::chrono::duration_cast<std::chrono::minutes>(dur->duration % std::chrono::hours(1))
@@ -900,23 +870,17 @@ static int dur_tostring(lua_State* L) {
 }
 
 static int dur_add(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
-    LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (out) LuaDuration();
+    LuaDuration* a = check_duration(L, 1);
+    LuaDuration* b = check_duration(L, 2);
+    LuaDuration* out = push_duration(L);
     out->duration = a->duration + b->duration;
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int dur_sub(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
-    LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (out) LuaDuration();
+    LuaDuration* a = check_duration(L, 1);
+    LuaDuration* b = check_duration(L, 2);
+    LuaDuration* out = push_duration(L);
     out->duration = a->duration - b->duration;
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int dur_mul(lua_State* L) {
@@ -924,77 +888,65 @@ static int dur_mul(lua_State* L) {
     LuaDuration* dur;
     double factor;
     if (lua_isuserdata(L, 1)) {
-        dur = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
+        dur = check_duration(L, 1);
         factor = luaL_checknumber(L, 2);
     } else {
         factor = luaL_checknumber(L, 1);
-        dur = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
+        dur = check_duration(L, 2);
     }
-    LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (out) LuaDuration();
+    LuaDuration* out = push_duration(L);
     out->duration = std::chrono::nanoseconds{ int64_t(double(dur->duration.count()) * factor) };
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int dur_div(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
+    LuaDuration* a = check_duration(L, 1);
     if (lua_isuserdata(L, 2)) {
         // dur / dur = ratio (number)
-        LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
+        LuaDuration* b = check_duration(L, 2);
         lua_pushnumber(L, double(a->duration.count()) / double(b->duration.count()));
     } else {
         double factor = luaL_checknumber(L, 2);
-        LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-        new (out) LuaDuration();
+        LuaDuration* out = push_duration(L);
         out->duration = std::chrono::nanoseconds{ int64_t(double(a->duration.count()) / factor) };
-        luaL_getmetatable(L, DURATION_METATABLE);
-        lua_setmetatable(L, -2);
     }
     return 1;
 }
 static int dur_unm(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (out) LuaDuration();
+    LuaDuration* dur = check_duration(L, 1);
+    LuaDuration* out = push_duration(L);
     out->duration = -dur->duration;
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 static int dur_eq(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
+    LuaDuration* a = check_duration(L, 1);
+    LuaDuration* b = check_duration(L, 2);
     lua_pushboolean(L, a->duration == b->duration);
     return 1;
 }
 static int dur_lt(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
+    LuaDuration* a = check_duration(L, 1);
+    LuaDuration* b = check_duration(L, 2);
     lua_pushboolean(L, a->duration < b->duration);
     return 1;
 }
 static int dur_le(lua_State* L) {
-    LuaDuration* a = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* b = (LuaDuration*)luaL_checkudata(L, 2, DURATION_METATABLE);
+    LuaDuration* a = check_duration(L, 1);
+    LuaDuration* b = check_duration(L, 2);
     lua_pushboolean(L, a->duration <= b->duration);
     return 1;
 }
 
-// ── Duration methods ──────────────────────────────────────────────────────────
+// -- Duration methods ----------------------------------------------------------
 
 static int dur_abs(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
-    LuaDuration* out = (LuaDuration*)lua_newuserdata(L, sizeof(LuaDuration));
-    new (out) LuaDuration();
+    LuaDuration* dur = check_duration(L, 1);
+    LuaDuration* out = push_duration(L);
     out->duration = dur->duration < tzdate::Duration{} ? -dur->duration : dur->duration;
-    luaL_getmetatable(L, DURATION_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
 static int dur_index(lua_State* L) {
-    LuaDuration* dur = (LuaDuration*)luaL_checkudata(L, 1, DURATION_METATABLE);
+    LuaDuration* dur = check_duration(L, 1);
     const char* key = luaL_checkstring(L, 2);
 
     if (strcmp(key, "totalNanoseconds") == 0) {
@@ -1056,83 +1008,86 @@ static int dur_index(lua_State* L) {
         auto remainder = dur->duration % std::chrono::seconds(1);
         lua_pushnumber(L, std::chrono::duration<double>(remainder).count());
     } else {
-        // Fall through to metatable for methods
-        return eryx_metatable_index(L);
+        return 0;
     }
 
     return 1;
 }
 
-// ── Module entry ──────────────────────────────────────────────────────────────
+// -- Module entry --------------------------------------------------------------
+
+static luaL_Reg dateTimeMethods[] = {
+    { "toIsoString", dt_toisostring },
+    { "toUnix", dt_tounix },
+    { "toUnixMs", dt_tounixms },
+    { "withZone", dt_withzone },
+    { "diff", dt_diff },
+    { "format", dt_format },
+    { "formatUtc", dt_formatutc },
+    { "startOfDay", dt_startofday },
+    { "addMonths", dt_addmonths },
+    { "addYears", dt_addyears },
+    { "relative", dt_relative },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg dateTimeMetamethods[] = {
+    { "__tostring", dt_tostring },
+    { "__add", dt_add },
+    { "__sub", dt_sub },
+    { "__eq", dt_eq },
+    { "__lt", dt_lt },
+    { "__le", dt_le },
+    { nullptr, nullptr },
+};
+
+static udataDef dateTimeDef = {
+    .name = "DateTime",
+    .size = sizeof(LuaDateTime),
+    .fields = nullptr,
+    .indexFallback = dt_index,
+    .newindexFallback = nullptr,
+    .metamethods = dateTimeMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = dateTimeMethods,
+    .destructor = datetime_dtor,
+};
+
+static luaL_Reg durationMethods[] = {
+    { "abs", dur_abs },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg durationMetamethods[] = {
+    { "__tostring", dur_tostring },
+    { "__add", dur_add },
+    { "__sub", dur_sub },
+    { "__mul", dur_mul },
+    { "__div", dur_div },
+    { "__unm", dur_unm },
+    { "__eq", dur_eq },
+    { "__lt", dur_lt },
+    { "__le", dur_le },
+    { nullptr, nullptr },
+};
+
+static udataDef durationDef = {
+    .name = "Duration",
+    .size = sizeof(LuaDuration),
+    .fields = nullptr,
+    .indexFallback = dur_index,
+    .newindexFallback = nullptr,
+    .metamethods = durationMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = durationMethods,
+    .destructor = duration_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_date(lua_State* L) {
-    // DateTime metatable
-    luaL_newmetatable(L, DATETIME_METATABLE);
-    lua_pushcfunction(L, dt_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, dt_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, dt_add, "add");
-    lua_setfield(L, -2, "__add");
-    lua_pushcfunction(L, dt_sub, "sub");
-    lua_setfield(L, -2, "__sub");
-    lua_pushcfunction(L, dt_eq, "eq");
-    lua_setfield(L, -2, "__eq");
-    lua_pushcfunction(L, dt_lt, "lt");
-    lua_setfield(L, -2, "__lt");
-    lua_pushcfunction(L, dt_le, "le");
-    lua_setfield(L, -2, "__le");
-    // Methods (reached via __index fallback)
-    lua_pushcfunction(L, dt_toisostring, "toIsoString");
-    lua_setfield(L, -2, "toIsoString");
-    lua_pushcfunction(L, dt_tounix, "toUnix");
-    lua_setfield(L, -2, "toUnix");
-    lua_pushcfunction(L, dt_tounixms, "toUnixMs");
-    lua_setfield(L, -2, "toUnixMs");
-    lua_pushcfunction(L, dt_withzone, "withZone");
-    lua_setfield(L, -2, "withZone");
-    lua_pushcfunction(L, dt_diff, "diff");
-    lua_setfield(L, -2, "diff");
-    lua_pushcfunction(L, dt_format, "format");
-    lua_setfield(L, -2, "format");
-    lua_pushcfunction(L, dt_formatutc, "formatUtc");
-    lua_setfield(L, -2, "formatUtc");
-    lua_pushcfunction(L, dt_startofday, "startOfDay");
-    lua_setfield(L, -2, "startOfDay");
-    lua_pushcfunction(L, dt_addmonths, "addMonths");
-    lua_setfield(L, -2, "addMonths");
-    lua_pushcfunction(L, dt_addyears, "addYears");
-    lua_setfield(L, -2, "addYears");
-    lua_pushcfunction(L, dt_relative, "relative");
-    lua_setfield(L, -2, "relative");
-    lua_pop(L, 1);
-
-    // Duration metatable
-    luaL_newmetatable(L, DURATION_METATABLE);
-    lua_pushcfunction(L, dur_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, dur_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, dur_add, "add");
-    lua_setfield(L, -2, "__add");
-    lua_pushcfunction(L, dur_sub, "sub");
-    lua_setfield(L, -2, "__sub");
-    lua_pushcfunction(L, dur_mul, "mul");
-    lua_setfield(L, -2, "__mul");
-    lua_pushcfunction(L, dur_div, "div");
-    lua_setfield(L, -2, "__div");
-    lua_pushcfunction(L, dur_unm, "unm");
-    lua_setfield(L, -2, "__unm");
-    lua_pushcfunction(L, dur_eq, "eq");
-    lua_setfield(L, -2, "__eq");
-    lua_pushcfunction(L, dur_lt, "lt");
-    lua_setfield(L, -2, "__lt");
-    lua_pushcfunction(L, dur_le, "le");
-    lua_setfield(L, -2, "__le");
-    // Methods
-    lua_pushcfunction(L, dur_abs, "abs");
-    lua_setfield(L, -2, "abs");
-    lua_pop(L, 1);
+    dateTimeRef = eryxUdata_registerudata(L, &dateTimeDef);
+    durationRef = eryxUdata_registerudata(L, &durationDef);
 
     // Module table
     lua_newtable(L);

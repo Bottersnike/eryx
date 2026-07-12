@@ -12,7 +12,6 @@
 #include "lua.h"
 #include "lualib.h"
 #include "module_api.h"
-#include "module_helpers.hpp"
 #include "wx/aboutdlg.h"
 #include "wx/app.h"
 #include "wx/artprov.h"
@@ -257,6 +256,7 @@ struct GuiWindow {
     wxTopLevelWindow* topLevel = nullptr;
     wxFrame* frame = nullptr;
     wxDialog* dialog = nullptr;
+    bool closing = false;
     bool modalLoopActive = false;
     int modalResult = wxID_CANCEL;
     int minWidth = -1;
@@ -348,14 +348,25 @@ static void ensure_wx(lua_State* L) {
 
 template <typename T>
 static T* check_udata(lua_State* L, int idx, const char* mt) {
-    return static_cast<T*>(luaL_checkudata(L, idx, mt));
+    udataRef* ref = eryxUdata_getudata(L, mt);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", mt);
+        return nullptr;
+    }
+    return static_cast<T*>(eryxUdata_checkudata(L, ref, idx));
+}
+
+template <typename T>
+static T* test_udata(lua_State* L, int idx, const char* mt) {
+    udataRef* ref = eryxUdata_getudata(L, mt);
+    return ref ? static_cast<T*>(eryxUdata_testudata(L, ref, idx)) : nullptr;
 }
 
 static GuiBase* check_any(lua_State* L, int idx) {
-    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_LAYOUT)) return p;
-    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_SPACER)) return p;
-    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_WIDGET)) return p;
-    if (auto* p = eryx_testudata<GuiBase>(L, idx, MT_STATUS)) return p;
+    if (auto* p = test_udata<GuiBase>(L, idx, MT_LAYOUT)) return p;
+    if (auto* p = test_udata<GuiBase>(L, idx, MT_SPACER)) return p;
+    if (auto* p = test_udata<GuiBase>(L, idx, MT_WIDGET)) return p;
+    if (auto* p = test_udata<GuiBase>(L, idx, MT_STATUS)) return p;
     luaL_error(L, "gui widget, spacer, or layout expected");
     return nullptr;
 }
@@ -455,6 +466,21 @@ static EryxRuntimeRunResult pump_runtime_once(EryxRuntime* rt) {
     return eryx_runtime_run_once(&host, &running, nullptr, UV_RUN_NOWAIT);
 }
 
+static bool process_wx_once(wxEventLoopBase* loop) {
+    bool didWork = wxTheApp->HasPendingEvents();
+
+    wxTheApp->ProcessPendingEvents();
+    for (int i = 0; i < 64 && loop->Pending(); ++i) {
+        didWork = true;
+        if (!loop->Dispatch()) {
+            g_appQuitRequested = true;
+            break;
+        }
+    }
+    loop->ProcessIdle();
+    return didWork;
+}
+
 static std::string lower_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(),
                    [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
@@ -542,8 +568,8 @@ static GuiWindow* check_dialog(lua_State* L, int idx) {
     return check_udata<GuiWindow>(L, idx, MT_DIALOG);
 }
 static GuiWindow* check_top_level(lua_State* L, int idx) {
-    if (auto* window = eryx_testudata<GuiWindow>(L, idx, MT_WINDOW)) return window;
-    if (auto* dialog = eryx_testudata<GuiWindow>(L, idx, MT_DIALOG)) return dialog;
+    if (auto* window = test_udata<GuiWindow>(L, idx, MT_WINDOW)) return window;
+    if (auto* dialog = test_udata<GuiWindow>(L, idx, MT_DIALOG)) return dialog;
     luaL_error(L, "gui.Window or gui.Dialog expected");
     return nullptr;
 }
@@ -1367,7 +1393,7 @@ static void bind_menu_callbacks(lua_State* L, GuiWindow* window, GuiMenuBar* bar
         auto* menu = check_menu(L, -1);
         for (int itemRef : menu->itemRefs) {
             lua_getref(L, itemRef);
-            if (auto* action = eryx_testudata<GuiBase>(L, -1, MT_ACTION)) {
+            if (auto* action = test_udata<GuiBase>(L, -1, MT_ACTION)) {
                 auto* actual = reinterpret_cast<GuiAction*>(action);
                 if (actual->callbackRef != LUA_NOREF && actual->item) {
                     window->frame->Bind(
@@ -1384,14 +1410,24 @@ static void bind_menu_callbacks(lua_State* L, GuiWindow* window, GuiMenuBar* bar
     }
 }
 
+static void invalidate_window_status_bar(lua_State* L, GuiWindow* window) {
+    if (!window || window->statusBarRef == LUA_NOREF) return;
+
+    lua_getref(L, window->statusBarRef);
+    if (auto* status = test_udata<GuiStatusBar>(L, -1, MT_STATUS)) {
+        if (!window->frame || status->owner == window->frame) {
+            status->bar = nullptr;
+            status->owner = nullptr;
+        }
+    }
+    lua_pop(L, 1);
+}
+
 static void init_top_level_bindings(lua_State* L, GuiWindow* window) {
     pin_self(L, window->base, -1);
     ++g_liveWindows;
 
     window->topLevel->Bind(wxEVT_CLOSE_WINDOW, [window](wxCloseEvent& event) {
-        if (window->onCloseRef != LUA_NOREF) {
-            queue_close_callback(window->base.rt, window->onCloseRef);
-        }
         if (window->dialog && window->modalLoopActive) {
             window->modalLoopActive = false;
             window->modalResult = wxID_CANCEL;
@@ -1399,10 +1435,24 @@ static void init_top_level_bindings(lua_State* L, GuiWindow* window) {
             event.Veto();
             return;
         }
+        if (!window->closing) {
+            window->closing = true;
+            if (window->onCloseRef != LUA_NOREF) {
+                queue_close_callback(window->base.rt, window->onCloseRef);
+            }
+        }
+        if (window->dialog && !window->dialog->IsModal()) {
+            window->dialog->Destroy();
+            return;
+        }
         event.Skip();
     });
     window->topLevel->Bind(wxEVT_DESTROY, [window](wxWindowDestroyEvent&) {
+        window->closing = true;
         if (window->topLevel) {
+            if (window->base.rt) {
+                invalidate_window_status_bar(window->base.rt->GL, window);
+            }
             window->topLevel = nullptr;
             window->frame = nullptr;
             window->dialog = nullptr;
@@ -1428,7 +1478,7 @@ static void attach_menubar(lua_State* L, GuiWindow* window, GuiMenuBar* bar) {
 
         for (int itemRef : menu->itemRefs) {
             lua_getref(L, itemRef);
-            if (eryx_testudata(L, -1, MT_ACTION)) {
+            if (test_udata<GuiAction>(L, -1, MT_ACTION)) {
                 auto* action = check_action(L, -1);
                 if (!action->item) {
                     action->item = new wxMenuItem(menu->menu, action->id, to_wx(action->label));
@@ -1453,6 +1503,8 @@ static void attach_menubar(lua_State* L, GuiWindow* window, GuiMenuBar* bar) {
 static void destroy_window(lua_State* L, GuiWindow* window) {
     if (!window->topLevel) return;
     wxTopLevelWindow* topLevel = window->topLevel;
+    window->closing = true;
+    invalidate_window_status_bar(L, window);
     window->topLevel = nullptr;
     window->frame = nullptr;
     window->dialog = nullptr;
@@ -1460,10 +1512,10 @@ static void destroy_window(lua_State* L, GuiWindow* window) {
     unpin_self(L, window->base);
 }
 
-static void gui_base_dtor(void* userdata) {
+static void gui_base_dtor(lua_State* L, void* userdata) {
     auto* base = static_cast<GuiBase*>(userdata);
-    if (!base || !base->rt) return;
-    lua_State* L = base->rt->GL;
+    if (!base) return;
+    L = base->rt ? base->rt->GL : L;
 
     switch (base->kind) {
         case GuiKind::Window:
@@ -1569,11 +1621,14 @@ static void gui_base_dtor(void* userdata) {
 
 template <typename T>
 static T* push_object(lua_State* L, const char* mt) {
-    auto* object = static_cast<T*>(lua_newuserdatadtor(L, sizeof(T), gui_base_dtor));
+    udataRef* ref = eryxUdata_getudata(L, mt);
+    if (!ref) {
+        luaL_error(L, "%s userdata is not registered", mt);
+        return nullptr;
+    }
+    auto* object = static_cast<T*>(eryxUdata_pushudata(L, ref));
     new (object) T();
     object->base.rt = eryx_get_runtime(L);
-    luaL_getmetatable(L, mt);
-    lua_setmetatable(L, -2);
     return object;
 }
 
@@ -1601,19 +1656,15 @@ static int app_run(lua_State* L) {
     wxEventLoopActivator activate(loop);
     EryxRuntime* rt = eryx_get_runtime(L);
 
-    while (g_liveWindows > 0 ||
-           (g_appQuitRequested && (wxTheApp->HasPendingEvents() || loop->Pending()))) {
-        wxTheApp->ProcessPendingEvents();
-        while (loop->Pending()) {
-            if (!loop->Dispatch()) {
-                g_appQuitRequested = true;
-                break;
-            }
-        }
-        loop->ProcessIdle();
+    bool finalDrainDone = false;
+    while (g_liveWindows > 0 || !finalDrainDone) {
+        bool wxDidWork = process_wx_once(loop);
 
         EryxRuntimeRunResult result = pump_runtime_once(rt);
-        if (result == EryxRuntimeRunResult::NoWork && !loop->Pending()) {
+        if (g_liveWindows == 0) {
+            finalDrainDone = true;
+        }
+        if (result == EryxRuntimeRunResult::NoWork && !wxDidWork && !loop->Pending()) {
             wxMilliSleep(8);
         }
     }
@@ -2106,17 +2157,10 @@ static int dialog_show_modal(lua_State* L) {
     EryxRuntime* rt = eryx_get_runtime(L);
 
     while (dialog->modalLoopActive && dialog->dialog && dialog->dialog->IsShown()) {
-        wxTheApp->ProcessPendingEvents();
-        while (loop->Pending()) {
-            if (!loop->Dispatch()) {
-                dialog->modalLoopActive = false;
-                break;
-            }
-        }
-        loop->ProcessIdle();
+        bool wxDidWork = process_wx_once(loop);
 
         EryxRuntimeRunResult result = pump_runtime_once(rt);
-        if (result == EryxRuntimeRunResult::NoWork && !loop->Pending()) {
+        if (result == EryxRuntimeRunResult::NoWork && !wxDidWork && !loop->Pending()) {
             wxMilliSleep(8);
         }
     }
@@ -2939,7 +2983,7 @@ static int menu_add(lua_State* L) {
         return 0;
     }
 
-    if (!eryx_testudata(L, 2, MT_ACTION)) {
+    if (!test_udata<GuiAction>(L, 2, MT_ACTION)) {
         luaL_error(L, "menu:add expects gui.Action or nil");
     }
     menu->itemRefs.push_back(store_value_ref(L, 2));
@@ -3276,27 +3320,15 @@ static int get_clipboard_text(lua_State* L) {
     return 1;
 }
 
-static void register_methods(lua_State* L, const char* mt, const luaL_Reg* methods) {
-    luaL_newmetatable(L, mt);
-    for (const luaL_Reg* reg = methods; reg && reg->name; ++reg) {
-        lua_pushcfunction(L, reg->func, reg->name);
-        lua_setfield(L, -2, reg->name);
-    }
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-}
-
 }  // namespace
 
 LUAU_MODULE_EXPORT int luauopen_gui(lua_State* L) {
-    static const luaL_Reg appMethods[] = {
+    static luaL_Reg appMethods[] = {
         { "run", app_run },
         { "quit", app_quit },
         { nullptr, nullptr },
     };
-    static const luaL_Reg windowMethods[] = {
+    static luaL_Reg windowMethods[] = {
         { "minimumSize", window_minimum_size },
         { "setTitle", window_set_title },
         { "setLayout", window_set_layout },
@@ -3307,7 +3339,7 @@ LUAU_MODULE_EXPORT int luauopen_gui(lua_State* L) {
         { "close", window_close },
         { nullptr, nullptr },
     };
-    static const luaL_Reg dialogMethods[] = {
+    static luaL_Reg dialogMethods[] = {
         { "minimumSize", window_minimum_size },
         { "setTitle", window_set_title },
         { "setLayout", window_set_layout },
@@ -3317,14 +3349,14 @@ LUAU_MODULE_EXPORT int luauopen_gui(lua_State* L) {
         { "close", window_close },
         { nullptr, nullptr },
     };
-    static const luaL_Reg layoutMethods[] = {
+    static luaL_Reg layoutMethods[] = {
         { "add", layout_add },
         { "padding", layout_padding },
         { "gap", layout_gap },
         { nullptr, nullptr },
     };
-    static const luaL_Reg spacerMethods[] = { { nullptr, nullptr } };
-    static const luaL_Reg widgetMethods[] = {
+    static luaL_Reg spacerMethods[] = { { nullptr, nullptr } };
+    static luaL_Reg widgetMethods[] = {
         { "enabled", widget_enabled },
         { "text", widget_text },
         { "checked", widget_checked },
@@ -3355,34 +3387,167 @@ LUAU_MODULE_EXPORT int luauopen_gui(lua_State* L) {
         { "setFilter", table_set_filter },
         { nullptr, nullptr },
     };
-    static const luaL_Reg statusMethods[] = {
+    static luaL_Reg statusMethods[] = {
         { "setText", status_set_text },
         { "setFields", status_set_fields },
         { nullptr, nullptr },
     };
-    static const luaL_Reg menuMethods[] = {
+    static luaL_Reg menuMethods[] = {
         { "add", menu_add },
         { "addSeparator", menu_add_separator },
         { nullptr, nullptr },
     };
-    static const luaL_Reg menubarMethods[] = {
+    static luaL_Reg menubarMethods[] = {
         { "add", menubar_add },
         { nullptr, nullptr },
     };
-    static const luaL_Reg actionMethods[] = { { nullptr, nullptr } };
-    static const luaL_Reg bitmapMethods[] = { { nullptr, nullptr } };
+    static luaL_Reg actionMethods[] = { { nullptr, nullptr } };
+    static luaL_Reg bitmapMethods[] = { { nullptr, nullptr } };
 
-    register_methods(L, MT_APP, appMethods);
-    register_methods(L, MT_WINDOW, windowMethods);
-    register_methods(L, MT_DIALOG, dialogMethods);
-    register_methods(L, MT_LAYOUT, layoutMethods);
-    register_methods(L, MT_SPACER, spacerMethods);
-    register_methods(L, MT_WIDGET, widgetMethods);
-    register_methods(L, MT_STATUS, statusMethods);
-    register_methods(L, MT_MENU, menuMethods);
-    register_methods(L, MT_MENUBAR, menubarMethods);
-    register_methods(L, MT_ACTION, actionMethods);
-    register_methods(L, MT_BITMAP, bitmapMethods);
+    static udataDef appDef = {
+        .name = MT_APP,
+        .size = sizeof(GuiAppHandle),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = appMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef windowDef = {
+        .name = MT_WINDOW,
+        .size = sizeof(GuiWindow),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = windowMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef dialogDef = {
+        .name = MT_DIALOG,
+        .size = sizeof(GuiWindow),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = dialogMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef layoutDef = {
+        .name = MT_LAYOUT,
+        .size = sizeof(GuiLayout),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = layoutMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef spacerDef = {
+        .name = MT_SPACER,
+        .size = sizeof(GuiSpacer),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = spacerMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef widgetDef = {
+        .name = MT_WIDGET,
+        .size = sizeof(GuiWidget),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = widgetMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef statusDef = {
+        .name = MT_STATUS,
+        .size = sizeof(GuiStatusBar),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = statusMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef menuDef = {
+        .name = MT_MENU,
+        .size = sizeof(GuiMenu),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = menuMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef menubarDef = {
+        .name = MT_MENUBAR,
+        .size = sizeof(GuiMenuBar),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = menubarMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef actionDef = {
+        .name = MT_ACTION,
+        .size = sizeof(GuiAction),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = actionMethods,
+        .destructor = gui_base_dtor,
+    };
+    static udataDef bitmapDef = {
+        .name = MT_BITMAP,
+        .size = sizeof(GuiBitmap),
+        .fields = nullptr,
+        .indexFallback = nullptr,
+        .newindexFallback = nullptr,
+        .metamethods = nullptr,
+        .dotcallMethods = nullptr,
+        .namecallMethods = nullptr,
+        .bothcallMethods = bitmapMethods,
+        .destructor = gui_base_dtor,
+    };
+
+    eryxUdata_registerudata(L, &appDef);
+    eryxUdata_registerudata(L, &windowDef);
+    eryxUdata_registerudata(L, &dialogDef);
+    eryxUdata_registerudata(L, &layoutDef);
+    eryxUdata_registerudata(L, &spacerDef);
+    eryxUdata_registerudata(L, &widgetDef);
+    eryxUdata_registerudata(L, &statusDef);
+    eryxUdata_registerudata(L, &menuDef);
+    eryxUdata_registerudata(L, &menubarDef);
+    eryxUdata_registerudata(L, &actionDef);
+    eryxUdata_registerudata(L, &bitmapDef);
 
     lua_newtable(L);
 

@@ -327,7 +327,7 @@ window.eryx = (() => {
 // ---------------------------------------------------------------------------
 // WebViewHandle -- per-window userdata
 // ---------------------------------------------------------------------------
-static const char* WEBVIEW_HANDLE_MT = "WebViewHandle";
+static udataRef* webviewHandleRef;
 
 struct WebViewHandle {
     HWND hWnd;
@@ -354,6 +354,10 @@ LRESULT CALLBACK WndProc(HWND, UINT, WPARAM, LPARAM);
 static void pump_messages(uv_timer_t* handle);
 static void ensure_msg_pump(EryxRuntime* rt);
 static void stop_msg_pump_if_empty();
+
+static WebViewHandle* check_webview(lua_State* L, int idx = 1) {
+    return (WebViewHandle*)eryxUdata_checkudata(L, webviewHandleRef, idx);
+}
 
 // ---------------------------------------------------------------------------
 // Win32 message pump via UV timer
@@ -417,7 +421,7 @@ static std::string wide_to_utf8(const wchar_t* ws) {
 }
 
 // ---------------------------------------------------------------------------
-// Destroy a window handle (shared by :destroy() and __gc)
+// Destroy a window handle (shared by :destroy() and the userdata destructor)
 // ---------------------------------------------------------------------------
 static void destroy_webview(WebViewHandle* wh) {
     if (!wh->alive) return;
@@ -487,7 +491,7 @@ static void destroy_webview(WebViewHandle* wh) {
 
 // handle:navigate(url)
 static int wv_navigate(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -505,7 +509,7 @@ static int wv_navigate(lua_State* L) {
 
 // handle:navigateToString(html)
 static int wv_navigate_to_string(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -569,7 +573,7 @@ static std::vector<uint8_t> base64_decode(const char* str, size_t len) {
     return out;
 }
 static int wv_post_message(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -596,7 +600,7 @@ static int wv_post_message(lua_State* L) {
 
 // handle:executeScript(script)
 static int wv_execute_script(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -611,7 +615,7 @@ static int wv_execute_script(lua_State* L) {
 // handle:addInitScript(script)
 // Injects JavaScript that runs before page scripts on every navigation.
 static int wv_add_init_script(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -629,7 +633,7 @@ static int wv_add_init_script(lua_State* L) {
 
 // handle:setTitle(title)
 static int wv_set_title(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -641,7 +645,7 @@ static int wv_set_title(lua_State* L) {
 
 // handle:show() / handle:hide()
 static int wv_show(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -651,7 +655,7 @@ static int wv_show(lua_State* L) {
 }
 
 static int wv_hide(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -662,7 +666,7 @@ static int wv_hide(lua_State* L) {
 
 // handle:resize(width, height)
 static int wv_resize(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -675,7 +679,7 @@ static int wv_resize(lua_State* L) {
 
 // handle:onMessage(callback)
 static int wv_on_message(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -695,7 +699,7 @@ static int wv_on_message(lua_State* L) {
 
 // handle:onClose(callback)
 static int wv_on_close(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -714,7 +718,7 @@ static int wv_on_close(lua_State* L) {
 
 // handle:setBorderless(borderless)
 static int wv_set_borderless(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -736,7 +740,7 @@ static int wv_set_borderless(lua_State* L) {
 
 // handle:setResizable(resizable)
 static int wv_set_resizable(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -757,7 +761,7 @@ static int wv_set_resizable(lua_State* L) {
 
 // handle:move(x, y)
 static int wv_move(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -770,7 +774,7 @@ static int wv_move(lua_State* L) {
 
 // handle:center()
 static int wv_center(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -796,7 +800,7 @@ static int wv_center(lua_State* L) {
 // handle:setTransparent(transparent)
 // Enables or disables true per-pixel window transparency.
 static int wv_set_transparent(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -835,7 +839,7 @@ static int wv_set_transparent(lua_State* L) {
 
 // handle:setOpacity(alpha)  -- 0.0 to 1.0
 static int wv_set_opacity(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     if (!wh->alive) {
         luaL_error(L, "webview is destroyed");
         return 0;
@@ -853,74 +857,16 @@ static int wv_set_opacity(lua_State* L) {
 
 // handle:destroy()
 static int wv_destroy(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+    auto* wh = check_webview(L);
     destroy_webview(wh);
     return 0;
 }
 
-// handle.__gc
-static int wv_gc(lua_State* L) {
-    auto* wh = (WebViewHandle*)luaL_checkudata(L, 1, WEBVIEW_HANDLE_MT);
+static void wv_dtor(lua_State* L, void* ud) {
+    (void)L;
+    auto* wh = (WebViewHandle*)ud;
     destroy_webview(wh);
     wh->~WebViewHandle();  // call destructor for placement-new'd COM pointers
-    return 0;
-}
-
-// Destructor called by Luau GC (lua_newuserdatadtor).
-// rt->GL is used for lua_unref so refs are released during normal GC,
-// not just lua_close.
-static void wv_dtor(void* ud) {
-    auto* wh = (WebViewHandle*)ud;
-    if (wh->alive) {
-        wh->alive = false;
-        g_liveWindows.erase(wh);
-
-        if (wh->hWnd) {
-            SetWindowLongPtrA(wh->hWnd, GWLP_USERDATA, 0);
-        }
-        if (wh->controller) {
-            wh->controller->Close();
-            wh->controller = nullptr;
-        }
-        wh->webview = nullptr;
-        if (wh->hWnd) {
-            DestroyWindow(wh->hWnd);
-            wh->hWnd = nullptr;
-        }
-        // Synchronous message drain for Chromium teardown
-        for (int i = 0; i < 20; i++) {
-            MSG msg;
-            bool hadMessages = false;
-            while (PeekMessageA(&msg, NULL, 0, 0, PM_REMOVE)) {
-                TranslateMessage(&msg);
-                DispatchMessage(&msg);
-                hadMessages = true;
-            }
-            if (!hadMessages && i > 0) break;
-            Sleep(10);
-        }
-    }
-
-    // Release Lua refs via rt->GL (safe during normal GC and lua_close)
-    lua_State* GL = wh->rt->GL;
-    if (wh->messageCallbackRef != LUA_NOREF) {
-        lua_unref(GL, wh->messageCallbackRef);
-        wh->messageCallbackRef = LUA_NOREF;
-    }
-    if (wh->closeCallbackRef != LUA_NOREF) {
-        lua_unref(GL, wh->closeCallbackRef);
-        wh->closeCallbackRef = LUA_NOREF;
-    }
-    if (wh->callerThreadRef != LUA_NOREF) {
-        lua_unref(GL, wh->callerThreadRef);
-        wh->callerThreadRef = LUA_NOREF;
-    }
-    if (wh->selfRef != LUA_NOREF) {
-        lua_unref(GL, wh->selfRef);
-        wh->selfRef = LUA_NOREF;
-    }
-
-    wh->~WebViewHandle();  // COM pointers
 }
 
 // ---------------------------------------------------------------------------
@@ -1048,11 +994,8 @@ static int wv_create(lua_State* L) {
 
     auto* rt = eryx_get_runtime(L);
 
-    // Allocate the userdata with a destructor for GC cleanup
-    auto* wh = (WebViewHandle*)lua_newuserdatadtor(L, sizeof(WebViewHandle), wv_dtor);
+    auto* wh = (WebViewHandle*)eryxUdata_pushudata(L, webviewHandleRef);
     new (wh) WebViewHandle();  // placement-new for COM pointers
-    luaL_getmetatable(L, WEBVIEW_HANDLE_MT);
-    lua_setmetatable(L, -2);
 
     wh->rt = rt;
     wh->alive = false;
@@ -1249,70 +1192,43 @@ static int wv_create(lua_State* L) {
 // ---------------------------------------------------------------------------
 // Module entry
 // ---------------------------------------------------------------------------
+static luaL_Reg webviewMethods[] = {
+    { "navigate", wv_navigate },
+    { "navigateToString", wv_navigate_to_string },
+    { "postMessage", wv_post_message },
+    { "executeScript", wv_execute_script },
+    { "addInitScript", wv_add_init_script },
+    { "setTitle", wv_set_title },
+    { "show", wv_show },
+    { "hide", wv_hide },
+    { "resize", wv_resize },
+    { "onMessage", wv_on_message },
+    { "onClose", wv_on_close },
+    { "setResizable", wv_set_resizable },
+    { "setBorderless", wv_set_borderless },
+    { "move", wv_move },
+    { "center", wv_center },
+    { "setTransparent", wv_set_transparent },
+    { "setOpacity", wv_set_opacity },
+    { "destroy", wv_destroy },
+    { nullptr, nullptr },
+};
+
+static udataDef webviewDef = {
+    .name = "WebViewHandle",
+    .size = sizeof(WebViewHandle),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = webviewMethods,
+    .destructor = wv_dtor,
+};
+
 LUAU_MODULE_EXPORT int luauopen_webview(lua_State* L) {
-    // Register the WebViewHandle metatable
-    luaL_newmetatable(L, WEBVIEW_HANDLE_MT);
-
-    lua_pushcfunction(L, wv_navigate, "navigate");
-    lua_setfield(L, -2, "navigate");
-
-    lua_pushcfunction(L, wv_navigate_to_string, "navigateToString");
-    lua_setfield(L, -2, "navigateToString");
-
-    lua_pushcfunction(L, wv_post_message, "postMessage");
-    lua_setfield(L, -2, "postMessage");
-
-    lua_pushcfunction(L, wv_execute_script, "executeScript");
-    lua_setfield(L, -2, "executeScript");
-
-    lua_pushcfunction(L, wv_add_init_script, "addInitScript");
-    lua_setfield(L, -2, "addInitScript");
-
-    lua_pushcfunction(L, wv_set_title, "setTitle");
-    lua_setfield(L, -2, "setTitle");
-
-    lua_pushcfunction(L, wv_show, "show");
-    lua_setfield(L, -2, "show");
-
-    lua_pushcfunction(L, wv_hide, "hide");
-    lua_setfield(L, -2, "hide");
-
-    lua_pushcfunction(L, wv_resize, "resize");
-    lua_setfield(L, -2, "resize");
-
-    lua_pushcfunction(L, wv_on_message, "onMessage");
-    lua_setfield(L, -2, "onMessage");
-
-    lua_pushcfunction(L, wv_on_close, "onClose");
-    lua_setfield(L, -2, "onClose");
-
-    lua_pushcfunction(L, wv_set_resizable, "setResizable");
-    lua_setfield(L, -2, "setResizable");
-
-    lua_pushcfunction(L, wv_set_borderless, "setBorderless");
-    lua_setfield(L, -2, "setBorderless");
-
-    lua_pushcfunction(L, wv_move, "move");
-    lua_setfield(L, -2, "move");
-
-    lua_pushcfunction(L, wv_center, "center");
-    lua_setfield(L, -2, "center");
-
-    lua_pushcfunction(L, wv_set_transparent, "setTransparent");
-    lua_setfield(L, -2, "setTransparent");
-
-    lua_pushcfunction(L, wv_set_opacity, "setOpacity");
-    lua_setfield(L, -2, "setOpacity");
-
-    lua_pushcfunction(L, wv_destroy, "destroy");
-    lua_setfield(L, -2, "destroy");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-
-    lua_pop(L, 1);  // pop metatable
+    webviewHandleRef = eryxUdata_registerudata(L, &webviewDef);
 
     // Build the module table
     lua_newtable(L);

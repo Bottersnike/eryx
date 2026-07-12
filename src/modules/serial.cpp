@@ -28,6 +28,7 @@
 
 #include <cctype>
 #include <cstring>
+#include <new>
 #include <string>
 #include <vector>
 
@@ -94,7 +95,7 @@ static std::string serial_strerror(int err) { return strerror(err); }
 // SerialPort userdata
 // ---------------------------------------------------------------------------
 
-static const char* SERIAL_METATABLE = "SerialPort";
+static udataRef* serialPortRef;
 
 struct SerialPortState {
 #ifdef _WIN32
@@ -106,15 +107,16 @@ struct SerialPortState {
     EryxRuntime* rt = nullptr;
 };
 
-// Forward declaration — dtor referenced by lua_newuserdatadtor before its definition.
-static void serial_port_dtor(void* ud);
+static void serial_port_dtor(lua_State* L, void* ud);
 
 static SerialPortState* check_port(lua_State* L, int idx = 1) {
-    void* ud = luaL_checkudata(L, idx, SERIAL_METATABLE);
-    if (!ud) luaL_error(L, "expected SerialPort");
-    auto* s = (SerialPortState*)ud;
+    auto* s = (SerialPortState*)eryxUdata_checkudata(L, serialPortRef, idx);
     if (s->closed) luaL_error(L, "serial port is closed");
     return s;
+}
+
+static SerialPortState* check_port_any(lua_State* L, int idx = 1) {
+    return (SerialPortState*)eryxUdata_checkudata(L, serialPortRef, idx);
 }
 
 // ---------------------------------------------------------------------------
@@ -614,7 +616,7 @@ static int serial_open(lua_State* L) {
     COMMTIMEOUTS ct = { 0, 0, 0, 0, 0 };
     SetCommTimeouts(hPort, &ct);
 
-    auto* s = (SerialPortState*)lua_newuserdatadtor(L, sizeof(SerialPortState), serial_port_dtor);
+    auto* s = (SerialPortState*)eryxUdata_pushudata(L, serialPortRef);
     new (s) SerialPortState;
     s->hPort = hPort;
     s->closed = false;
@@ -629,15 +631,13 @@ static int serial_open(lua_State* L) {
         luaL_error(L, "%s", cfgErr.c_str());
     }
 
-    auto* s = (SerialPortState*)lua_newuserdatadtor(L, sizeof(SerialPortState), serial_port_dtor);
+    auto* s = (SerialPortState*)eryxUdata_pushudata(L, serialPortRef);
     new (s) SerialPortState;
     s->fd = fd;
     s->closed = false;
     s->rt = eryx_get_runtime(L);
 #endif
 
-    luaL_getmetatable(L, SERIAL_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -1188,7 +1188,7 @@ static int port_getSignals(lua_State* L) {
 
 static int port_close(lua_State* L) {
     SerialPortState* s = check_port(L, 1);
-    serial_port_dtor(s);
+    serial_port_dtor(L, s);
     return 0;
 }
 
@@ -1196,10 +1196,11 @@ static int port_close(lua_State* L) {
 static int port_closeSync(lua_State* L) { return port_close(L); }
 
 // ---------------------------------------------------------------------------
-// Destructor — called by Luau GC via lua_newuserdatadtor
+// Destructor
 // ---------------------------------------------------------------------------
 
-static void serial_port_dtor(void* ud) {
+static void serial_port_dtor(lua_State* L, void* ud) {
+    (void)L;
     auto* s = (SerialPortState*)ud;
     if (s->closed) return;
     s->closed = true;
@@ -1216,67 +1217,59 @@ static void serial_port_dtor(void* ud) {
 #endif
 }
 
-// ---------------------------------------------------------------------------
-// __index for SerialPort userdata
-// Handles readable/writable/closed property fields; falls through to methods table.
-// ---------------------------------------------------------------------------
+static int port_get_readable(lua_State* L) {
+    SerialPortState* s = check_port_any(L, 1);
+    lua_pushboolean(L, !s->closed);
+    return 1;
+}
 
-// Upvalue 1 = methods table
-static int serial_port_index(lua_State* L) {
-    void* ud = luaL_checkudata(L, 1, SERIAL_METATABLE);
-    auto* s = (SerialPortState*)ud;
-    const char* key = luaL_checkstring(L, 2);
+static int port_get_writable(lua_State* L) {
+    SerialPortState* s = check_port_any(L, 1);
+    lua_pushboolean(L, !s->closed);
+    return 1;
+}
 
-    if (strcmp(key, "readable") == 0) {
-        lua_pushboolean(L, !s->closed);
+static int port_get_closed(lua_State* L) {
+    SerialPortState* s = check_port_any(L, 1);
+    lua_pushboolean(L, s->closed);
+    return 1;
+}
+
+static int port_get_inWaiting(lua_State* L) {
+    SerialPortState* s = check_port_any(L, 1);
+    if (s->closed) {
+        lua_pushinteger(L, 0);
         return 1;
     }
-    if (strcmp(key, "writable") == 0) {
-        lua_pushboolean(L, !s->closed);
-        return 1;
-    }
-    if (strcmp(key, "closed") == 0) {
-        lua_pushboolean(L, s->closed);
-        return 1;
-    }
-    if (strcmp(key, "inWaiting") == 0) {
-        if (s->closed) {
-            lua_pushinteger(L, 0);
-            return 1;
-        }
 #ifdef _WIN32
-        COMSTAT cs = {};
-        DWORD errs = 0;
-        ClearCommError(s->hPort, &errs, &cs);
-        lua_pushinteger(L, (int)cs.cbInQue);
+    COMSTAT cs = {};
+    DWORD errs = 0;
+    ClearCommError(s->hPort, &errs, &cs);
+    lua_pushinteger(L, (int)cs.cbInQue);
 #else
-        int n = 0;
-        ioctl(s->fd, TIOCINQ, &n);
-        lua_pushinteger(L, n);
+    int n = 0;
+    ioctl(s->fd, TIOCINQ, &n);
+    lua_pushinteger(L, n);
 #endif
-        return 1;
-    }
-    if (strcmp(key, "outWaiting") == 0) {
-        if (s->closed) {
-            lua_pushinteger(L, 0);
-            return 1;
-        }
-#ifdef _WIN32
-        COMSTAT cs = {};
-        DWORD errs = 0;
-        ClearCommError(s->hPort, &errs, &cs);
-        lua_pushinteger(L, (int)cs.cbOutQue);
-#else
-        int n = 0;
-        ioctl(s->fd, TIOCOUTQ, &n);
-        lua_pushinteger(L, n);
-#endif
-        return 1;
-    }
+    return 1;
+}
 
-    // Fall through to the methods table (upvalue 1)
-    lua_pushvalue(L, 2);
-    lua_rawget(L, lua_upvalueindex(1));
+static int port_get_outWaiting(lua_State* L) {
+    SerialPortState* s = check_port_any(L, 1);
+    if (s->closed) {
+        lua_pushinteger(L, 0);
+        return 1;
+    }
+#ifdef _WIN32
+    COMSTAT cs = {};
+    DWORD errs = 0;
+    ClearCommError(s->hPort, &errs, &cs);
+    lua_pushinteger(L, (int)cs.cbOutQue);
+#else
+    int n = 0;
+    ioctl(s->fd, TIOCOUTQ, &n);
+    lua_pushinteger(L, n);
+#endif
     return 1;
 }
 
@@ -1284,46 +1277,43 @@ static int serial_port_index(lua_State* L) {
 // Module entry point
 // ---------------------------------------------------------------------------
 
-static void register_port_metatable(lua_State* L) {
-    luaL_newmetatable(L, SERIAL_METATABLE);
+static luaL_Reg serialPortMethods[] = {
+    { "read", port_read },
+    { "readSync", port_readSync },
+    { "readBuffer", port_readBuffer },
+    { "readBufferSync", port_readBufferSync },
+    { "write", port_write },
+    { "writeSync", port_writeSync },
+    { "flush", port_flush },
+    { "setDTR", port_setDTR },
+    { "setRTS", port_setRTS },
+    { "getSignals", port_getSignals },
+    { "close", port_close },
+    { "closeSync", port_closeSync },
+    { nullptr, nullptr },
+};
 
-    // Build methods table; captured as upvalue 1 of serial_port_index.
-    lua_newtable(L);
+static udataField serialPortFields[] = {
+    { "readable", port_get_readable, nullptr },     { "writable", port_get_writable, nullptr },
+    { "closed", port_get_closed, nullptr },         { "inWaiting", port_get_inWaiting, nullptr },
+    { "outWaiting", port_get_outWaiting, nullptr }, { nullptr, nullptr, nullptr },
+};
 
-    lua_pushcfunction(L, port_read, "read");
-    lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, port_readSync, "readSync");
-    lua_setfield(L, -2, "readSync");
-    lua_pushcfunction(L, port_readBuffer, "readBuffer");
-    lua_setfield(L, -2, "readBuffer");
-    lua_pushcfunction(L, port_readBufferSync, "readBufferSync");
-    lua_setfield(L, -2, "readBufferSync");
-    lua_pushcfunction(L, port_write, "write");
-    lua_setfield(L, -2, "write");
-    lua_pushcfunction(L, port_writeSync, "writeSync");
-    lua_setfield(L, -2, "writeSync");
-    lua_pushcfunction(L, port_flush, "flush");
-    lua_setfield(L, -2, "flush");
-    lua_pushcfunction(L, port_setDTR, "setDTR");
-    lua_setfield(L, -2, "setDTR");
-    lua_pushcfunction(L, port_setRTS, "setRTS");
-    lua_setfield(L, -2, "setRTS");
-    lua_pushcfunction(L, port_getSignals, "getSignals");
-    lua_setfield(L, -2, "getSignals");
-    lua_pushcfunction(L, port_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, port_closeSync, "closeSync");
-    lua_setfield(L, -2, "closeSync");
-
-    // __index = serial_port_index closure with methods table as upvalue
-    lua_pushcclosure(L, serial_port_index, "__index", 1);
-    lua_setfield(L, -2, "__index");
-
-    lua_pop(L, 1);
-}
+static udataDef serialPortDef = {
+    .name = "SerialPort",
+    .size = sizeof(SerialPortState),
+    .fields = serialPortFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = serialPortMethods,
+    .destructor = serial_port_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_serial(lua_State* L) {
-    register_port_metatable(L);
+    serialPortRef = eryxUdata_registerudata(L, &serialPortDef);
 
     lua_newtable(L);
     lua_pushcfunction(L, serial_open, "open");

@@ -279,7 +279,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
     bool hasVFS = vfs_open();
     fs::path root = fs::weakly_canonical(fs::current_path());
 
-    // ── VFS walk ─────────────────────────────────────────────────────────
+    // -- VFS walk ---------------------------------------------------------
     // Walk VFS directories from vfsStartDir up to the VFS root ("").
     if (hasVFS && !vfsStartDir.empty()) {
         std::string vfsDir = vfsStartDir;
@@ -329,7 +329,7 @@ ERYX_API LocatedConfig* eryx_locate_config(lua_State* L, const fs::path& startDi
         }
     }
 
-    // ── Filesystem walk ──────────────────────────────────────────────────
+    // -- Filesystem walk --------------------------------------------------
     // Walk from startDir upward on the real filesystem.
     // If we came from VFS and isolation is disabled, start from the exe
     // directory so that configs next to the exe are found.

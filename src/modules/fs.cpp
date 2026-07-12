@@ -3,6 +3,7 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <new>
 #include <string>
 #include <vector>
@@ -24,6 +25,7 @@
 #endif
 
 #include "../LuaUtil.hpp"
+#include "Luau/DenseHash.h"
 #include "module_api.h"
 
 static const LuauModuleInfo INFO = {
@@ -33,9 +35,10 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-static const char* FILE_METATABLE = "File";
-static const char* FILE_LINE_ITER_METATABLE = "FileLineIterator";
-static const char* WALK_ITER_METATABLE = "FsWalkIterator";
+static Luau::DenseHashMap<lua_State*, udataRef*> fileRefs{ nullptr };
+static Luau::DenseHashMap<lua_State*, udataRef*> fileLineIterRefs{ nullptr };
+static Luau::DenseHashMap<lua_State*, udataRef*> walkIterRefs{ nullptr };
+static std::mutex fsUdataRefsMutex;
 
 namespace fs = std::filesystem;
 
@@ -192,7 +195,47 @@ struct LuaFile {
     char path[1024];
 };
 
-static void file_dtor(void* ud) {
+static udataRef* fs_file_ref(lua_State* L) {
+    udataRef* result = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(fsUdataRefsMutex);
+        if (udataRef** ref = fileRefs.find(lua_mainthread(L))) {
+            result = *ref;
+        }
+    }
+
+    if (result) return result;
+    luaL_error(L, "File userdata is not registered");
+}
+
+static udataRef* fs_file_line_iter_ref(lua_State* L) {
+    udataRef* result = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(fsUdataRefsMutex);
+        if (udataRef** ref = fileLineIterRefs.find(lua_mainthread(L))) {
+            result = *ref;
+        }
+    }
+
+    if (result) return result;
+    luaL_error(L, "FileLineIterator userdata is not registered");
+}
+
+static udataRef* fs_walk_iter_ref(lua_State* L) {
+    udataRef* result = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(fsUdataRefsMutex);
+        if (udataRef** ref = walkIterRefs.find(lua_mainthread(L))) {
+            result = *ref;
+        }
+    }
+
+    if (result) return result;
+    luaL_error(L, "FsWalkIterator userdata is not registered");
+}
+
+static void file_dtor(lua_State* L, void* ud) {
+    (void)L;
     LuaFile* f = (LuaFile*)ud;
     if (!f->closed && f->fd >= 0) {
 #ifdef _WIN32
@@ -205,16 +248,13 @@ static void file_dtor(void* ud) {
 }
 
 static LuaFile* check_open_file(lua_State* L, int idx = 1) {
-    LuaFile* f = (LuaFile*)luaL_checkudata(L, idx, FILE_METATABLE);
-    if (!f) luaL_error(L, "expected File");
+    LuaFile* f = (LuaFile*)eryxUdata_checkudata(L, fs_file_ref(L), idx);
     if (f->closed) luaL_error(L, "attempt to use a closed file");
     return f;
 }
 
 static LuaFile* check_file_any(lua_State* L, int idx = 1) {
-    LuaFile* f = (LuaFile*)luaL_checkudata(L, idx, FILE_METATABLE);
-    if (!f) luaL_error(L, "expected File");
-    return f;
+    return (LuaFile*)eryxUdata_checkudata(L, fs_file_ref(L), idx);
 }
 
 struct FileLineIterator {
@@ -230,16 +270,22 @@ struct WalkIterator {
     std::vector<fs::directory_iterator> stack;
 };
 
-static void file_line_iter_dtor(void* ud) { ((FileLineIterator*)ud)->~FileLineIterator(); }
+static void file_line_iter_dtor(lua_State* L, void* ud) {
+    (void)L;
+    ((FileLineIterator*)ud)->~FileLineIterator();
+}
 
-static void walk_iter_dtor(void* ud) { ((WalkIterator*)ud)->~WalkIterator(); }
+static void walk_iter_dtor(lua_State* L, void* ud) {
+    (void)L;
+    ((WalkIterator*)ud)->~WalkIterator();
+}
 
 static FileLineIterator* check_line_iter(lua_State* L, int idx) {
-    return (FileLineIterator*)luaL_checkudata(L, idx, FILE_LINE_ITER_METATABLE);
+    return (FileLineIterator*)eryxUdata_checkudata(L, fs_file_line_iter_ref(L), idx);
 }
 
 static WalkIterator* check_walk_iter(lua_State* L, int idx) {
-    return (WalkIterator*)luaL_checkudata(L, idx, WALK_ITER_METATABLE);
+    return (WalkIterator*)eryxUdata_checkudata(L, fs_walk_iter_ref(L), idx);
 }
 
 // "b" suffix is accepted but ignored -- all I/O is binary.
@@ -391,15 +437,13 @@ static void open_async_cb(uv_fs_t* req) {
         return;
     }
 
-    LuaFile* f = (LuaFile*)lua_newuserdatadtor(op->L, sizeof(LuaFile), file_dtor);
+    LuaFile* f = (LuaFile*)eryxUdata_pushudata(op->L, fs_file_ref(op->L));
     f->fd = (uv_file)req->result;
     f->closed = false;
     f->canRead = op->openReadable;
     f->canWrite = op->openWritable;
     strncpy(f->path, op->openPath, sizeof(f->path) - 1);
     f->path[sizeof(f->path) - 1] = '\0';
-    luaL_getmetatable(op->L, FILE_METATABLE);
-    lua_setmetatable(op->L, -2);
     end_async(op, req, 1);
 }
 
@@ -968,10 +1012,8 @@ static int file_iter(lua_State* L) {
     lua_pushvalue(L, 1);
     lua_setfield(L, -2, "_file");
 
-    void* ud = lua_newuserdatadtor(L, sizeof(FileLineIterator), file_line_iter_dtor);
+    void* ud = eryxUdata_pushudata(L, fs_file_line_iter_ref(L));
     new (ud) FileLineIterator();
-    luaL_getmetatable(L, FILE_LINE_ITER_METATABLE);
-    lua_setmetatable(L, -2);
     lua_setfield(L, -2, "_iter");
 
     return 2;
@@ -992,39 +1034,36 @@ static int file_tostring(lua_State* L) {
 }
 
 // ---------------------------------------------------------------------------
-// File __index: fields (path, fd, isOpen, readable, writable) + method fallback
+// File fields
 // ---------------------------------------------------------------------------
 
-// Upvalue 1 = methods table
-static int file_index(lua_State* L) {
+static int file_get_path(lua_State* L) {
     LuaFile* f = check_file_any(L);
-    const char* key = luaL_checkstring(L, 2);
+    lua_pushstring(L, f->path);
+    return 1;
+}
 
-    // Resolve property fields
-    if (strcmp(key, "path") == 0) {
-        lua_pushstring(L, f->path);
-        return 1;
-    }
-    if (strcmp(key, "fd") == 0) {
-        lua_pushinteger(L, f->fd);
-        return 1;
-    }
-    if (strcmp(key, "isOpen") == 0) {
-        lua_pushboolean(L, !f->closed);
-        return 1;
-    }
-    if (strcmp(key, "readable") == 0) {
-        lua_pushboolean(L, f->canRead && !f->closed);
-        return 1;
-    }
-    if (strcmp(key, "writable") == 0) {
-        lua_pushboolean(L, f->canWrite && !f->closed);
-        return 1;
-    }
+static int file_get_fd(lua_State* L) {
+    LuaFile* f = check_file_any(L);
+    lua_pushinteger(L, f->fd);
+    return 1;
+}
 
-    // Fall back to methods table (upvalue 1)
-    lua_pushvalue(L, 2);                 // push key
-    lua_rawget(L, lua_upvalueindex(1));  // methods[key]
+static int file_get_is_open(lua_State* L) {
+    LuaFile* f = check_file_any(L);
+    lua_pushboolean(L, !f->closed);
+    return 1;
+}
+
+static int file_get_readable(lua_State* L) {
+    LuaFile* f = check_file_any(L);
+    lua_pushboolean(L, f->canRead && !f->closed);
+    return 1;
+}
+
+static int file_get_writable(lua_State* L) {
+    LuaFile* f = check_file_any(L);
+    lua_pushboolean(L, f->canWrite && !f->closed);
     return 1;
 }
 
@@ -1033,15 +1072,13 @@ static int file_index(lua_State* L) {
 // ---------------------------------------------------------------------------
 
 static void init_file_ud(lua_State* L, uv_file fd, bool readable, bool writable, const char* path) {
-    LuaFile* f = (LuaFile*)lua_newuserdatadtor(L, sizeof(LuaFile), file_dtor);
+    LuaFile* f = (LuaFile*)eryxUdata_pushudata(L, fs_file_ref(L));
     f->fd = fd;
     f->closed = false;
     f->canRead = readable;
     f->canWrite = writable;
     strncpy(f->path, path, sizeof(f->path) - 1);
     f->path[sizeof(f->path) - 1] = '\0';
-    luaL_getmetatable(L, FILE_METATABLE);
-    lua_setmetatable(L, -2);
 }
 
 static int fs_openSync(lua_State* L) {
@@ -1305,7 +1342,7 @@ static int fs_walk(lua_State* L) {
         lua_pop(L, 1);
     }
 
-    void* ud = lua_newuserdatadtor(L, sizeof(WalkIterator), walk_iter_dtor);
+    void* ud = eryxUdata_pushudata(L, fs_walk_iter_ref(L));
     WalkIterator* it = new (ud) WalkIterator();
     it->root = fs::path(root);
     it->recursive = recursive;
@@ -1315,8 +1352,6 @@ static int fs_walk(lua_State* L) {
     fs::directory_iterator first(it->root, walk_options(followSymlinks), ec);
     if (!ec) it->stack.push_back(first);
 
-    luaL_getmetatable(L, WALK_ITER_METATABLE);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -2004,72 +2039,93 @@ static int fs_setAcl(lua_State* L) {
 // Module entry point
 // ===========================================================================
 
+static udataField fileFields[] = {
+    { "path", file_get_path, nullptr },         { "fd", file_get_fd, nullptr },
+    { "isOpen", file_get_is_open, nullptr },    { "readable", file_get_readable, nullptr },
+    { "writable", file_get_writable, nullptr }, { nullptr, nullptr, nullptr },
+};
+
+static luaL_Reg fileMethods[] = {
+    { "read", file_read },
+    { "readBuffer", file_readBuffer },
+    { "write", file_write },
+    { "writeBuffer", file_writeBuffer },
+    { "flush", file_flush },
+    { "readSync", file_readSync },
+    { "readBufferSync", file_readBufferSync },
+    { "writeSync", file_writeSync },
+    { "writeBufferSync", file_writeBufferSync },
+    { "flushSync", file_flushSync },
+    { "closeSync", file_closeSync },
+    { "seek", file_seek },
+    { "tell", file_tell },
+    { "truncate", file_truncate },
+    { "size", file_size },
+    { "close", file_close },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg fileMetamethods[] = {
+    { "__tostring", file_tostring },
+    { "__iter", file_iter },
+    { nullptr, nullptr },
+};
+
+static udataDef fileDef = {
+    .name = "File",
+    .size = sizeof(LuaFile),
+    .fields = fileFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = fileMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = fileMethods,
+    .destructor = file_dtor,
+};
+
+static udataDef fileLineIterDef = {
+    .name = "FileLineIterator",
+    .size = sizeof(FileLineIterator),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = nullptr,
+    .destructor = file_line_iter_dtor,
+};
+
+static luaL_Reg walkIterMetamethods[] = {
+    { "__iter", walk_iter },
+    { nullptr, nullptr },
+};
+
+static udataDef walkIterDef = {
+    .name = "FsWalkIterator",
+    .size = sizeof(WalkIterator),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = walkIterMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = nullptr,
+    .destructor = walk_iter_dtor,
+};
+
 LUAU_MODULE_EXPORT int luauopen_fs(lua_State* L) {
-    luaL_newmetatable(L, FILE_LINE_ITER_METATABLE);
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
-    luaL_newmetatable(L, WALK_ITER_METATABLE);
-    lua_pushcfunction(L, walk_iter, "__iter");
-    lua_setfield(L, -2, "__iter");
-    lua_setreadonly(L, -1, true);
-    lua_pop(L, 1);
-
-    // -- File metatable --
-    luaL_newmetatable(L, FILE_METATABLE);
-
-    lua_pushcfunction(L, file_tostring, "__tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, file_iter, "__iter");
-    lua_setfield(L, -2, "__iter");
-
-    // Build methods table (used as upvalue for __index)
-    lua_newtable(L);  // methods table
-
-    // Yielding methods (default)
-    lua_pushcfunction(L, file_read, "read");
-    lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, file_readBuffer, "readBuffer");
-    lua_setfield(L, -2, "readBuffer");
-    lua_pushcfunction(L, file_write, "write");
-    lua_setfield(L, -2, "write");
-    lua_pushcfunction(L, file_writeBuffer, "writeBuffer");
-    lua_setfield(L, -2, "writeBuffer");
-    lua_pushcfunction(L, file_flush, "flush");
-    lua_setfield(L, -2, "flush");
-
-    // Sync variants
-    lua_pushcfunction(L, file_readSync, "readSync");
-    lua_setfield(L, -2, "readSync");
-    lua_pushcfunction(L, file_readBufferSync, "readBufferSync");
-    lua_setfield(L, -2, "readBufferSync");
-    lua_pushcfunction(L, file_writeSync, "writeSync");
-    lua_setfield(L, -2, "writeSync");
-    lua_pushcfunction(L, file_writeBufferSync, "writeBufferSync");
-    lua_setfield(L, -2, "writeBufferSync");
-    lua_pushcfunction(L, file_flushSync, "flushSync");
-    lua_setfield(L, -2, "flushSync");
-    lua_pushcfunction(L, file_closeSync, "closeSync");
-    lua_setfield(L, -2, "closeSync");
-
-    // Always-sync methods
-    lua_pushcfunction(L, file_seek, "seek");
-    lua_setfield(L, -2, "seek");
-    lua_pushcfunction(L, file_tell, "tell");
-    lua_setfield(L, -2, "tell");
-    lua_pushcfunction(L, file_truncate, "truncate");
-    lua_setfield(L, -2, "truncate");
-    lua_pushcfunction(L, file_size, "size");
-    lua_setfield(L, -2, "size");
-    lua_pushcfunction(L, file_close, "close");
-    lua_setfield(L, -2, "close");
-
-    // __index = file_index with methods table as upvalue
-    lua_pushcclosure(L, file_index, "__index", 1);  // pops methods table
-    lua_setfield(L, -2, "__index");
-
-    lua_setreadonly(L, -1, true);  // Freeze metatable
-    lua_pop(L, 1);                 // pop File metatable
+    lua_State* GL = lua_mainthread(L);
+    udataRef* fileRef = eryxUdata_registerudata(L, &fileDef);
+    udataRef* fileLineIterRef = eryxUdata_registerudata(L, &fileLineIterDef);
+    udataRef* walkIterRef = eryxUdata_registerudata(L, &walkIterDef);
+    {
+        std::lock_guard<std::mutex> lock(fsUdataRefsMutex);
+        fileRefs[GL] = fileRef;
+        fileLineIterRefs[GL] = fileLineIterRef;
+        walkIterRefs[GL] = walkIterRef;
+    }
 
     // -- Module table --
     lua_newtable(L);

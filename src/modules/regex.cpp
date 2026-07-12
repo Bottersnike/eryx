@@ -18,33 +18,20 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-// ── Metatable names ─────────────────────────────────────────────────────────
+// -- Userdata refs -----------------------------------------------------------
 
-static const char* MT_REGEX = "Regex";
-static const char* MT_MATCH = "RegexMatch";
+static udataRef* regexRef;
 
-// ── Userdata structs ────────────────────────────────────────────────────────
+// -- Userdata structs --------------------------------------------------------
 
 struct LuaRegex {
     pcre2_code* re;
 };
 
-struct LuaMatch {
-    pcre2_code* re;  // borrowed, not owned
-    pcre2_match_data* md;
-    const char* subject;  // kept alive by Lua string ref (upvalue or field)
-    size_t subject_len;
-    uint32_t capture_count;
-};
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
+// -- Helpers -----------------------------------------------------------------
 
 static LuaRegex* check_regex(lua_State* L, int idx) {
-    return (LuaRegex*)luaL_checkudata(L, idx, MT_REGEX);
-}
-
-static LuaMatch* check_match(lua_State* L, int idx) {
-    return (LuaMatch*)luaL_checkudata(L, idx, MT_MATCH);
+    return (LuaRegex*)eryxUdata_checkudata(L, regexRef, idx);
 }
 
 static void check_regex_valid(lua_State* L, LuaRegex* ud) {
@@ -161,7 +148,7 @@ static void push_match_table(lua_State* L, pcre2_code* re, pcre2_match_data* md,
     }
 }
 
-// ── Regex methods ───────────────────────────────────────────────────────────
+// -- Regex methods -----------------------------------------------------------
 
 // regex:isMatch(subject, offset?) -> bool
 static int regex_isMatch(lua_State* L) {
@@ -451,34 +438,28 @@ static int regex_namedCaptures(lua_State* L) {
     return 1;
 }
 
-// ── Regex __index ───────────────────────────────────────────────────────────
+// -- Regex cleanup -----------------------------------------------------------
 
-static int regex_index(lua_State* L) {
-    const char* key = luaL_checkstring(L, 2);
-    lua_getmetatable(L, 1);
-    lua_getfield(L, -1, key);
-    return 1;
-}
-
-// ── Regex __gc ──────────────────────────────────────────────────────────────
-
-static int regex_gc(lua_State* L) {
-    LuaRegex* ud = (LuaRegex*)lua_touserdata(L, 1);
+static void regex_destroy(LuaRegex* ud) {
     if (ud && ud->re) {
         pcre2_code_free(ud->re);
         ud->re = nullptr;
     }
-    return 0;
 }
 
-// ── Regex __tostring ────────────────────────────────────────────────────────
+static void regex_dtor(lua_State* L, void* ud) {
+    (void)L;
+    regex_destroy((LuaRegex*)ud);
+}
+
+// -- Regex __tostring --------------------------------------------------------
 
 static int regex_tostring(lua_State* L) {
     lua_pushstring(L, "Regex");
     return 1;
 }
 
-// ── Module-level functions ──────────────────────────────────────────────────
+// -- Module-level functions --------------------------------------------------
 
 // regex.new(pattern, flags?) -> Regex
 static int regex_new(lua_State* L) {
@@ -489,10 +470,8 @@ static int regex_new(lua_State* L) {
     uint32_t options = parse_flags(L, flags);
     pcre2_code* re = compile_pattern(L, pattern, patlen, options);
 
-    LuaRegex* ud = (LuaRegex*)lua_newuserdata(L, sizeof(LuaRegex));
+    LuaRegex* ud = (LuaRegex*)eryxUdata_pushudata(L, regexRef);
     ud->re = re;
-    luaL_getmetatable(L, MT_REGEX);
-    lua_setmetatable(L, -2);
     return 1;
 }
 
@@ -722,33 +701,39 @@ static int regex_escape(lua_State* L) {
     return 1;
 }
 
-// ── Module entry ────────────────────────────────────────────────────────────
+// -- Module entry ------------------------------------------------------------
+
+static luaL_Reg regexMethods[] = {
+    { "isMatch", regex_isMatch },
+    { "find", regex_find },
+    { "findAll", regex_findAll },
+    { "replace", regex_replace },
+    { "split", regex_split },
+    { "captureCount", regex_captureCount },
+    { "namedCaptures", regex_namedCaptures },
+    { nullptr, nullptr },
+};
+
+static luaL_Reg regexMetamethods[] = {
+    { "__tostring", regex_tostring },
+    { nullptr, nullptr },
+};
+
+static udataDef regexDef = {
+    .name = "Regex",
+    .size = sizeof(LuaRegex),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = regexMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = regexMethods,
+    .destructor = regex_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen_regex(lua_State* L) {
-    // -- Regex metatable --
-    luaL_newmetatable(L, MT_REGEX);
-    lua_pushcfunction(L, regex_index, "index");
-    lua_setfield(L, -2, "__index");
-    lua_pushcfunction(L, regex_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, regex_gc, "gc");
-    lua_setfield(L, -2, "__gc");
-
-    lua_pushcfunction(L, regex_isMatch, "isMatch");
-    lua_setfield(L, -2, "isMatch");
-    lua_pushcfunction(L, regex_find, "find");
-    lua_setfield(L, -2, "find");
-    lua_pushcfunction(L, regex_findAll, "findAll");
-    lua_setfield(L, -2, "findAll");
-    lua_pushcfunction(L, regex_replace, "replace");
-    lua_setfield(L, -2, "replace");
-    lua_pushcfunction(L, regex_split, "split");
-    lua_setfield(L, -2, "split");
-    lua_pushcfunction(L, regex_captureCount, "captureCount");
-    lua_setfield(L, -2, "captureCount");
-    lua_pushcfunction(L, regex_namedCaptures, "namedCaptures");
-    lua_setfield(L, -2, "namedCaptures");
-    lua_pop(L, 1);
+    regexRef = eryxUdata_registerudata(L, &regexDef);
 
     // -- Module table --
     lua_newtable(L);

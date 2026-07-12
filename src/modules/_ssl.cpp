@@ -83,8 +83,8 @@ static const LuauModuleInfo INFO = {
 };
 LUAU_MODULE_INFO()
 
-static const char* SSLCTX_METATABLE = "SSLContext";
-static const char* SSLSOCKET_METATABLE = "SSLSocket";
+udataRef* sslContextRef;
+udataRef* sslSocketRef;
 
 static constexpr int SSL_VERIFY_NONE_LUA = 0;
 static constexpr int SSL_VERIFY_REQUIRED_LUA = 2;
@@ -143,11 +143,11 @@ static std::unordered_map<EryxRuntime*, std::unordered_map<int, SSLPendingOp*>> 
 static std::unordered_set<EryxRuntime*> g_registeredSslRuntimes;
 
 static LuaSSLContext* check_sslctx(lua_State* L, int idx) {
-    return (LuaSSLContext*)luaL_checkudata(L, idx, SSLCTX_METATABLE);
+    return (LuaSSLContext*)eryxUdata_checkudata(L, sslContextRef, idx);
 }
 
 static LuaSSLSocket* check_sslsocket(lua_State* L, int idx) {
-    return (LuaSSLSocket*)luaL_checkudata(L, idx, SSLSOCKET_METATABLE);
+    return (LuaSSLSocket*)eryxUdata_checkudata(L, sslSocketRef, idx);
 }
 
 static const char* sslsock_check_bytes_arg(lua_State* L, int idx, size_t* len) {
@@ -156,8 +156,8 @@ static const char* sslsock_check_bytes_arg(lua_State* L, int idx, size_t* len) {
     return luaL_checklstring(L, idx, len);
 }
 
-static void sslctx_dtor(void* ud);
-static void sslsock_dtor(void* ud);
+static void sslctx_dtor(lua_State* L, void* ud);
+static void sslsock_dtor(lua_State* L, void* ud);
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -375,20 +375,17 @@ static void apply_ctx_verify_mode(LuaSSLContext* ctx) {
 }
 
 static LuaSSLContext* new_sslctx_userdata(lua_State* L) {
-    LuaSSLContext* ctx = (LuaSSLContext*)lua_newuserdatadtor(L, sizeof(LuaSSLContext), sslctx_dtor);
+    LuaSSLContext* ctx = (LuaSSLContext*)eryxUdata_pushudata(L, sslContextRef);
     new (ctx) LuaSSLContext();
     ctx->ctx = nullptr;
     ctx->use_system_verify = true;
     ctx->verify_mode = SSL_VERIFY_REQUIRED_LUA;
     ctx->is_server = false;
-
-    luaL_getmetatable(L, SSLCTX_METATABLE);
-    lua_setmetatable(L, -2);
     return ctx;
 }
 
 static LuaSSLSocket* new_sslsocket_userdata(lua_State* L) {
-    LuaSSLSocket* ss = (LuaSSLSocket*)lua_newuserdatadtor(L, sizeof(LuaSSLSocket), sslsock_dtor);
+    LuaSSLSocket* ss = (LuaSSLSocket*)eryxUdata_pushudata(L, sslSocketRef);
     new (ss) LuaSSLSocket();
     ss->ssl = nullptr;
     ss->fd = INVALID_SOCKET;
@@ -1029,9 +1026,6 @@ static void ssl_rearm_poll(SSLPendingOp* op, int events) {
                     op->ctx_ref = LUA_NOREF;
                     if (op->raw_socket_ud) *(SOCKET*)op->raw_socket_ud = INVALID_SOCKET;
 
-                    luaL_getmetatable(op->thread, SSLSOCKET_METATABLE);
-                    lua_setmetatable(op->thread, -2);
-
                     int ref = op->threadRef;
                     op->threadRef = LUA_NOREF;
                     eryx_push_thread(op->runtime, ref, 1, false);
@@ -1203,9 +1197,6 @@ static void push_wrapped_ssl_socket(lua_State* L, SSL* ssl, SOCKET fd, LuaSSLCon
     if (hostname) ss->hostname = hostname;
 
     if (raw_socket_ud) *(SOCKET*)raw_socket_ud = INVALID_SOCKET;
-
-    luaL_getmetatable(L, SSLSOCKET_METATABLE);
-    lua_setmetatable(L, -2);
 }
 
 static int ssl_do_handshake(lua_State* L, SSL* ssl) {
@@ -1396,7 +1387,7 @@ static int sslctx_tostring(lua_State* L) {
     return 1;
 }
 
-static void sslctx_dtor(void* ud) {
+static void sslctx_dtor(lua_State* L, void* ud) {
     LuaSSLContext* ctx = (LuaSSLContext*)ud;
     if (ctx->ctx) {
         SSL_CTX_free(ctx->ctx);
@@ -1622,7 +1613,7 @@ static int sslsock_tostring(lua_State* L) {
     return 1;
 }
 
-static void sslsock_dtor(void* ud) {
+static void sslsock_dtor(lua_State* L, void* ud) {
     LuaSSLSocket* ss = (LuaSSLSocket*)ud;
     sslsock_close_impl(ss);
     if (ss->ctx_ref != LUA_NOREF && ss->L) {
@@ -1948,101 +1939,98 @@ static int ssl_parse_certificate(lua_State* L) {
 // ---------------------------------------------------------------------------
 // Metatables / registration
 // ---------------------------------------------------------------------------
-static int sslsocket_index(lua_State* L) {
+static int sslsock_get_readable(lua_State* L) {
     LuaSSLSocket* ss = check_sslsocket(L, 1);
-    const char* key = luaL_checkstring(L, 2);
-
-    if (strcmp(key, "readable") == 0) {
-        lua_pushboolean(L, !ss->closed);
-        return 1;
-    }
-    if (strcmp(key, "writable") == 0) {
-        lua_pushboolean(L, !ss->closed);
-        return 1;
-    }
-    if (strcmp(key, "closed") == 0) {
-        lua_pushboolean(L, ss->closed);
-        return 1;
-    }
-
-    lua_pushvalue(L, 2);
-    lua_rawget(L, lua_upvalueindex(1));
+    lua_pushboolean(L, !ss->closed);
     return 1;
 }
 
-static void register_sslctx_metatable(lua_State* L) {
-    luaL_newmetatable(L, SSLCTX_METATABLE);
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-
-    lua_pushcfunction(L, sslctx_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-
-    lua_pushcfunction(L, sslctx_wrap_socket, "wrapSocket");
-    lua_setfield(L, -2, "wrapSocket");
-
-    lua_pushcfunction(L, sslctx_load_verify_locations, "loadVerifyLocations");
-    lua_setfield(L, -2, "loadVerifyLocations");
-
-    lua_pushcfunction(L, sslctx_set_verify, "setVerify");
-    lua_setfield(L, -2, "setVerify");
-
-    lua_pop(L, 1);
+static int sslsock_get_writable(lua_State* L) {
+    LuaSSLSocket* ss = check_sslsocket(L, 1);
+    lua_pushboolean(L, !ss->closed);
+    return 1;
 }
 
-static void register_sslsocket_metatable(lua_State* L) {
-    luaL_newmetatable(L, SSLSOCKET_METATABLE);
-
-    lua_newtable(L);
-    lua_pushcfunction(L, sslsock_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-    lua_pushcfunction(L, sslsock_send, "send");
-    lua_setfield(L, -2, "send");
-    lua_pushcfunction(L, sslsock_send, "write");
-    lua_setfield(L, -2, "write");
-    lua_pushcfunction(L, sslsock_send, "writeSync");
-    lua_setfield(L, -2, "writeSync");
-    lua_pushcfunction(L, sslsock_sendall, "sendAll");
-    lua_setfield(L, -2, "sendAll");
-    lua_pushcfunction(L, sslsock_sendall, "writeAll");
-    lua_setfield(L, -2, "writeAll");
-    lua_pushcfunction(L, sslsock_recv, "recv");
-    lua_setfield(L, -2, "recv");
-    lua_pushcfunction(L, sslsock_recv, "read");
-    lua_setfield(L, -2, "read");
-    lua_pushcfunction(L, sslsock_recv, "readSync");
-    lua_setfield(L, -2, "readSync");
-    lua_pushcfunction(L, sslsock_recv, "readBuffer");
-    lua_setfield(L, -2, "readBuffer");
-    lua_pushcfunction(L, sslsock_recv, "readBufferSync");
-    lua_setfield(L, -2, "readBufferSync");
-    lua_pushcfunction(L, sslsock_close, "close");
-    lua_setfield(L, -2, "close");
-    lua_pushcfunction(L, sslsock_close, "closeSync");
-    lua_setfield(L, -2, "closeSync");
-    lua_pushcfunction(L, sslsock_setblocking, "setBlocking");
-    lua_setfield(L, -2, "setBlocking");
-    lua_pushcfunction(L, sslsock_settimeout, "setTimeout");
-    lua_setfield(L, -2, "setTimeout");
-    lua_pushcfunction(L, sslsock_getpeername, "getPeerName");
-    lua_setfield(L, -2, "getPeerName");
-    lua_pushcfunction(L, sslsock_getsockname, "getSockName");
-    lua_setfield(L, -2, "getSockName");
-    lua_pushcfunction(L, sslsock_fileno, "fileNo");
-    lua_setfield(L, -2, "fileNo");
-
-    lua_pushcclosure(L, sslsocket_index, "__index", 1);
-    lua_setfield(L, -2, "__index");
-
-    lua_pushcfunction(L, sslsock_tostring, "tostring");
-    lua_setfield(L, -2, "__tostring");
-
-    lua_pop(L, 1);
+static int sslsock_get_closed(lua_State* L) {
+    LuaSSLSocket* ss = check_sslsocket(L, 1);
+    lua_pushboolean(L, ss->closed);
+    return 1;
 }
+
+udataField sslSocketFields[] = {
+    { "readable", sslsock_get_readable, nullptr },
+    { "writable", sslsock_get_writable, nullptr },
+    { "closed", sslsock_get_closed, nullptr },
+    { nullptr, nullptr, nullptr },
+};
+
+luaL_Reg sslContextMethods[] = {
+    { "wrapSocket", sslctx_wrap_socket },
+    { "loadVerifyLocations", sslctx_load_verify_locations },
+    { "setVerify", sslctx_set_verify },
+    { nullptr, nullptr },
+};
+
+luaL_Reg sslContextMetamethods[] = {
+    { "__tostring", sslctx_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef sslContextDef = {
+    .name = "SSLContext",
+    .size = sizeof(LuaSSLContext),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = sslContextMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = sslContextMethods,
+    .destructor = sslctx_dtor,
+};
+
+luaL_Reg sslSocketMethods[] = {
+    { "send", sslsock_send },
+    { "write", sslsock_send },
+    { "writeSync", sslsock_send },
+    { "sendAll", sslsock_sendall },
+    { "writeAll", sslsock_sendall },
+    { "recv", sslsock_recv },
+    { "read", sslsock_recv },
+    { "readSync", sslsock_recv },
+    { "readBuffer", sslsock_recv },
+    { "readBufferSync", sslsock_recv },
+    { "close", sslsock_close },
+    { "closeSync", sslsock_close },
+    { "setBlocking", sslsock_setblocking },
+    { "setTimeout", sslsock_settimeout },
+    { "getPeerName", sslsock_getpeername },
+    { "getSockName", sslsock_getsockname },
+    { "fileNo", sslsock_fileno },
+    { nullptr, nullptr },
+};
+
+luaL_Reg sslSocketMetamethods[] = {
+    { "__tostring", sslsock_tostring },
+    { nullptr, nullptr },
+};
+
+udataDef sslSocketDef = {
+    .name = "SSLSocket",
+    .size = sizeof(LuaSSLSocket),
+    .fields = sslSocketFields,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = sslSocketMetamethods,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = sslSocketMethods,
+    .destructor = sslsock_dtor,
+};
 
 LUAU_MODULE_EXPORT int luauopen__ssl(lua_State* L) {
-    register_sslctx_metatable(L);
-    register_sslsocket_metatable(L);
+    sslContextRef = eryxUdata_registerudata(L, &sslContextDef);
+    sslSocketRef = eryxUdata_registerudata(L, &sslSocketDef);
 
     lua_newtable(L);
 

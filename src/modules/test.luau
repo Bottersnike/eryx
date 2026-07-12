@@ -7,7 +7,7 @@ local stdio = require("@eryx/stdio")
 
 local test = {}
 
--- ── ANSI colour helpers ──────────────────────────────────────────────────────
+-- -- ANSI colour helpers ------------------------------------------------------
 
 local CLEAR_TO_EOL = "\27[K"
 local UP_ONE_LINE = "\27[A"
@@ -52,7 +52,7 @@ local function fmtErr(err: any): string
 	return exception.format(err :: exception.Exception, COLOR)
 end
 
--- ── Types ────────────────────────────────────────────────────────────────────
+-- -- Types --------------------------------------------------------------------
 
 type Test = {
 	name: string,
@@ -74,7 +74,7 @@ type RunTotals = { passed: number, failed: number, skipped: number }
 local SKIP_SENTINEL = newproxy(false)
 type SkipSignal = { __skip: typeof(SKIP_SENTINEL), reason: string? }
 
--- ── Suite ────────────────────────────────────────────────────────────────────
+-- -- Suite --------------------------------------------------------------------
 
 local Suite = {}
 Suite.__index = Suite
@@ -286,7 +286,7 @@ end
 
 test.Suite = Suite
 
--- ── Expecter ─────────────────────────────────────────────────────────────────
+-- -- Expecter -----------------------------------------------------------------
 
 local Expecter = {}
 Expecter.__index = Expecter
@@ -571,7 +571,7 @@ function test.skipIf(condition: any, reason: string?)
 	end
 end
 
--- ── File loading ─────────────────────────────────────────────────────────────
+-- -- File loading -------------------------------------------------------------
 
 -- Loads a .test.luau file and returns the Suite it returns, or errors.
 local function load_test_file(path: string): Suite?
@@ -587,7 +587,7 @@ local function load_test_file(path: string): Suite?
 	return suite :: Suite
 end
 
--- ── runOne ────────────────────────────────────────────────────────────────────
+-- -- runOne --------------------------------------------------------------------
 
 --[=[
 	Options for [[runOne]] and [[runAll]].
@@ -645,7 +645,7 @@ function test.runOne(path: string, options: RunOptions?): RunTotals
 	return totals
 end
 
--- ── runAll ───────────────────────────────────────────────────────────────────
+-- -- runAll -------------------------------------------------------------------
 
 --[=[
 	Run a single test-pass over one or more files and/or directories.
@@ -739,7 +739,7 @@ function test.runAll(paths: string | { string }, options: RunOptions?)
 		end
 	end
 
-	-- ── Summary ──────────────────────────────────────────────────────────────
+	-- -- Summary --------------------------------------------------------------
 	local elapsed = string.format("%.2fms", (os.clock() - t0) * 1000)
 	local total = totalPassed + totalFailed + totalSkipped
 	local sep = string.rep("-", 40)

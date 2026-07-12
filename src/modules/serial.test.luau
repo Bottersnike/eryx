@@ -46,7 +46,7 @@ local suite = test.Suite.new("serial")
 suite:test("list: returns a table of PortInfo", function()
 	local ports = serial.list()
 	test.expect(type(ports)):toBe("table")
-	for _, info in ipairs(ports) do
+	for _, info in ports do
 		test.expect(type(info.name)):toBe("string")
 		test.expect(#info.name):toBeGreaterThan(0)
 		if info.vid ~= nil then
@@ -61,7 +61,7 @@ end)
 suite:test("list: com0com ports appear in the list", function()
 	local ports = serial.list()
 	local names: { string } = {}
-	for _, info in ipairs(ports) do
+	for _, info in ports do
 		names[#names + 1] = info.name
 	end
 	local hasA = table.find(names, PORT_A) ~= nil

@@ -50,7 +50,7 @@ LUAU_MODULE_INFO()
 // ---------------------------------------------------------------------------
 // WatchHandle
 // ---------------------------------------------------------------------------
-static const char* WATCH_HANDLE_MT = "FsWatchHandle";
+udataRef* fsWatchHandleRef;
 
 struct NormalizedEvent {
     std::string kind;
@@ -86,6 +86,7 @@ struct WatchHandle {
     bool asyncInitialized = false;
     bool asyncClosed = false;
     bool refed = false;
+    bool refsReleased = false;
     std::unique_ptr<WatchBackend> backend;
     std::mutex eventMutex;
     std::vector<NormalizedEvent> pendingEvents;
@@ -370,28 +371,54 @@ class EfswBackend final : public WatchBackend, public efsw::FileWatchListener {
 // Close callback -- invoked after uv_close finishes. Safe to release refs now.
 static void on_async_close(uv_handle_t* handle) {
     auto* wh = (WatchHandle*)handle->data;
+    if (!wh) return;
     wh->asyncClosed = true;
 
-    if (wh->callbackRef != LUA_NOREF) {
-        lua_unref(wh->rt->GL, wh->callbackRef);
-        wh->callbackRef = LUA_NOREF;
+    if (wh->refsReleased) return;
+    wh->refsReleased = true;
+
+    lua_State* GL = wh->rt ? wh->rt->GL : nullptr;
+    if (GL) {
+        if (wh->callbackRef != LUA_NOREF) {
+            lua_unref(GL, wh->callbackRef);
+        }
+        if (wh->selfRef != LUA_NOREF) {
+            lua_unref(GL, wh->selfRef);
+        }
     }
-    if (wh->selfRef != LUA_NOREF) {
-        lua_unref(wh->rt->GL, wh->selfRef);
-        wh->selfRef = LUA_NOREF;
-    }
+
+    wh->callbackRef = LUA_NOREF;
+    wh->selfRef = LUA_NOREF;
 }
 
 static void release_lua_refs_now(WatchHandle* wh) {
-    lua_State* GL = wh->rt->GL;
-    if (wh->callbackRef != LUA_NOREF) {
-        lua_unref(GL, wh->callbackRef);
-        wh->callbackRef = LUA_NOREF;
+    if (wh->refsReleased) return;
+    wh->refsReleased = true;
+
+    lua_State* GL = wh->rt ? wh->rt->GL : nullptr;
+    if (GL) {
+        if (wh->callbackRef != LUA_NOREF) {
+            lua_unref(GL, wh->callbackRef);
+        }
+        if (wh->selfRef != LUA_NOREF) {
+            lua_unref(GL, wh->selfRef);
+        }
     }
-    if (wh->selfRef != LUA_NOREF) {
-        lua_unref(GL, wh->selfRef);
-        wh->selfRef = LUA_NOREF;
+
+    wh->callbackRef = LUA_NOREF;
+    wh->selfRef = LUA_NOREF;
+}
+
+static int ref_value_on_main(lua_State* L, lua_State* GL, int index) {
+    index = lua_absindex(L, index);
+    lua_pushvalue(L, index);
+    if (L != GL) {
+        lua_xmove(L, GL, 1);
     }
+
+    int ref = lua_ref(GL, -1);
+    lua_pop(GL, 1);
+    return ref;
 }
 
 static void stop_watcher(WatchHandle* wh) {
@@ -416,14 +443,14 @@ static void stop_watcher(WatchHandle* wh) {
 
 // WatchHandle:stop()
 static int watchhandle_stop(lua_State* L) {
-    auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
+    auto* wh = (WatchHandle*)eryxUdata_checkudata(L, fsWatchHandleRef, 1);
     stop_watcher(wh);
     return 0;
 }
 
 // WatchHandle:ref() - make this handle keep the event loop alive.
 static int watchhandle_ref(lua_State* L) {
-    auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
+    auto* wh = (WatchHandle*)eryxUdata_checkudata(L, fsWatchHandleRef, 1);
     if (wh->active.load() && wh->asyncInitialized && !wh->refed) {
         uv_ref((uv_handle_t*)&wh->async);
         wh->refed = true;
@@ -433,7 +460,7 @@ static int watchhandle_ref(lua_State* L) {
 
 // WatchHandle:unref() - allow the event loop to exit even if this handle is active.
 static int watchhandle_unref(lua_State* L) {
-    auto* wh = (WatchHandle*)luaL_checkudata(L, 1, WATCH_HANDLE_MT);
+    auto* wh = (WatchHandle*)eryxUdata_checkudata(L, fsWatchHandleRef, 1);
     if (wh->active.load() && wh->asyncInitialized && wh->refed) {
         uv_unref((uv_handle_t*)&wh->async);
         wh->refed = false;
@@ -441,8 +468,29 @@ static int watchhandle_unref(lua_State* L) {
     return 0;
 }
 
-// Destructor called by Luau GC (lua_newuserdatadtor).
-static void watchhandle_dtor(void* ud) {
+static void watchhandle_dtor(lua_State* L, void* ud);
+
+luaL_Reg fsWatchHandleMethods[] = {
+    { "stop", watchhandle_stop },
+    { "ref", watchhandle_ref },
+    { "unref", watchhandle_unref },
+    { nullptr, nullptr },
+};
+
+udataDef fsWatchHandleDef = {
+    .name = "FsWatchHandle",
+    .size = sizeof(WatchHandle),
+    .fields = nullptr,
+    .indexFallback = nullptr,
+    .newindexFallback = nullptr,
+    .metamethods = nullptr,
+    .dotcallMethods = nullptr,
+    .namecallMethods = nullptr,
+    .bothcallMethods = fsWatchHandleMethods,
+    .destructor = watchhandle_dtor,
+};
+
+static void watchhandle_dtor(lua_State* L, void* ud) {
     auto* wh = (WatchHandle*)ud;
 
     if (wh->active.exchange(false)) {
@@ -455,7 +503,6 @@ static void watchhandle_dtor(void* ud) {
         wh->pendingEvents.clear();
     }
 
-    release_lua_refs_now(wh);
     wh->~WatchHandle();
 }
 
@@ -467,13 +514,19 @@ static int fswatch_create(lua_State* L) {
     bool recursive = lua_toboolean(L, 2) != 0;
     luaL_checktype(L, 3, LUA_TFUNCTION);
 
+    std::filesystem::path requestedPath(path);
+    std::filesystem::path parentPath = requestedPath.parent_path();
+    if (!parentPath.empty()) {
+        std::error_code ec;
+        if (!std::filesystem::exists(parentPath, ec)) {
+            luaL_error(L, "Failed to watch '%s': parent directory does not exist", path.c_str());
+            return 0;
+        }
+    }
+
     auto* rt = eryx_get_runtime(L);
 
-    void* storage = lua_newuserdatadtor(L, sizeof(WatchHandle), watchhandle_dtor);
-    auto* wh = new (storage) WatchHandle();
-
-    luaL_getmetatable(L, WATCH_HANDLE_MT);
-    lua_setmetatable(L, -2);
+    auto* wh = new (eryxUdata_pushudata(L, fsWatchHandleRef)) WatchHandle();
 
     wh->rt = rt;
 
@@ -485,25 +538,26 @@ static int fswatch_create(lua_State* L) {
     wh->asyncInitialized = true;
     wh->async.data = wh;
 
-    lua_pushvalue(L, 3);
-    wh->callbackRef = lua_ref(L, -1);
-    lua_pop(L, 1);
+    wh->callbackRef = ref_value_on_main(L, rt->GL, 3);
 
-    lua_pushvalue(L, -1);
-    wh->selfRef = lua_ref(L, -1);
-    lua_pop(L, 1);
-
-    wh->backend = std::make_unique<EfswBackend>(wh, std::filesystem::path(path), recursive);
-    wh->active = true;
+    wh->backend = std::make_unique<EfswBackend>(wh, requestedPath, recursive);
 
     std::string error;
     if (!wh->backend->start(error)) {
-        wh->active = false;
         wh->backend.reset();
-        uv_close((uv_handle_t*)&wh->async, on_async_close);
+        if (wh->callbackRef != LUA_NOREF) {
+            lua_unref(wh->rt->GL, wh->callbackRef);
+            wh->callbackRef = LUA_NOREF;
+        }
+        uv_close((uv_handle_t*)&wh->async, nullptr);
+        uv_run(rt->loop, UV_RUN_NOWAIT);
         luaL_error(L, "Failed to watch '%s': %s", path.c_str(), error.c_str());
         return 0;
     }
+
+    wh->active = true;
+
+    wh->selfRef = ref_value_on_main(L, rt->GL, -1);
 
     uv_unref((uv_handle_t*)&wh->async);
     wh->refed = false;
@@ -515,23 +569,7 @@ static int fswatch_create(lua_State* L) {
 // Module entry
 // ---------------------------------------------------------------------------
 LUAU_MODULE_EXPORT int luauopen__fs_watch(lua_State* L) {
-    luaL_newmetatable(L, WATCH_HANDLE_MT);
-
-    lua_pushcfunction(L, watchhandle_stop, "stop");
-    lua_setfield(L, -2, "stop");
-
-    lua_pushcfunction(L, watchhandle_ref, "ref");
-    lua_setfield(L, -2, "ref");
-
-    lua_pushcfunction(L, watchhandle_unref, "unref");
-    lua_setfield(L, -2, "unref");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor.
-
-    lua_pushvalue(L, -1);
-    lua_setfield(L, -2, "__index");
-
-    lua_pop(L, 1);
+    fsWatchHandleRef = eryxUdata_registerudata(L, &fsWatchHandleDef);
 
     lua_newtable(L);
 

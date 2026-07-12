@@ -797,8 +797,6 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_lib_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
     lua_pushcfunction(L, ffi_lib_getFunction, "getFunction");
     lua_setfield(L, -2, "getFunction");
 
@@ -813,8 +811,6 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
     lua_pushcfunction(L, ffi_func_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
 
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
-
     lua_pushcfunction(L, ffi_func_call, "call");
     lua_setfield(L, -2, "__call");
 
@@ -828,8 +824,6 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
 
     lua_pushcfunction(L, ffi_type_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, ffi_type_call, "call");
     lua_setfield(L, -2, "__call");
@@ -847,8 +841,6 @@ LUAU_MODULE_EXPORT int luauopen__ffi(lua_State* L) {
 
     lua_pushcfunction(L, ffi_value_tostring, "tostring");
     lua_setfield(L, -2, "__tostring");
-
-    // Note: __gc is not supported in Luau; cleanup uses lua_newuserdatadtor
 
     lua_pushcfunction(L, ffi_value_pointer, "pointer");
     lua_setfield(L, -2, "pointer");

@@ -178,10 +178,7 @@ static std::string eryx_chunk_name_from_cache_key(const std::string& cacheKey) {
 
 static void eryx_push_module_arity_exception(lua_State* L, const std::string& chunkName,
                                              int returnedCount) {
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-    luaL_getmetatable(L, EXCEPTION_METATABLE);
-    lua_setmetatable(L, -2);
+    LuaException* exception = eryx_exception_push_userdata(L);
     exception->type = ETYPE_RUNTIME;
     exception->message = "Module " + chunkName + " must return a single value. Returned " +
                          std::to_string(returnedCount);
@@ -284,10 +281,7 @@ static void eryx_cache_registry_wake_waiters(lua_State* L, const char* cacheKey)
 static void eryx_require_push_exception_copy(lua_State* L, const LuaException* source) {
     lua_checkstack(L, 2);
 
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-    luaL_getmetatable(L, EXCEPTION_METATABLE);
-    lua_setmetatable(L, -2);
+    LuaException* exception = eryx_exception_push_userdata(L);
 
     exception->type = source->type;
     exception->message = source->message;
@@ -525,15 +519,6 @@ ErrorParts _extract_error_message(const std::string& err) {
     return parts;
 }
 
-static int lua_push_exception(lua_State* L, const char* message) {
-    LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-    new (exception) LuaException();
-
-    exception->message = message;
-
-    return 1;
-}
-
 static EryxRuntime* eryx_runtime_or_null(lua_State* L) {
     return (EryxRuntime*)lua_getthreaddata(lua_mainthread(L));
 }
@@ -569,10 +554,7 @@ ERYX_API bool eryx_load_and_prepare_bytecode(lua_State* L, const std::string& by
         const char* msg = lua_tostring(L, -1);
 
         // Create a new exception on the parent lua (L, not ML)
-        LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-        new (exception) LuaException();
-        luaL_getmetatable(L, EXCEPTION_METATABLE);
-        lua_setmetatable(L, -2);
+        LuaException* exception = eryx_exception_push_userdata(L);
 
         exception->type = ETYPE_SYNTAX;
         if (msg) {
@@ -765,10 +747,7 @@ ERYX_API int eryx_execute_module_bytecode(lua_State* L, const std::string& bytec
             lua_error(L);
         } else {
             // Create an exception, on the parent L stack (not ML!)
-            LuaException* exception = (LuaException*)lua_newuserdata(L, sizeof(LuaException));
-            new (exception) LuaException();
-            luaL_getmetatable(L, EXCEPTION_METATABLE);
-            lua_setmetatable(L, -2);
+            LuaException* exception = eryx_exception_push_userdata(L);
             exception->type = ETYPE_RUNTIME;
 
             std::string extractedMessage;
